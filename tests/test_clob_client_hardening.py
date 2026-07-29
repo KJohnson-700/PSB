@@ -342,6 +342,30 @@ async def test_place_order_quantizes_price_before_signing(monkeypatch):
     assert order.price == pytest.approx(0.42)
 
 
+@pytest.mark.asyncio
+async def test_place_order_accepts_camelcase_live_order_id(monkeypatch):
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
+    c = _client()
+    c.client = MagicMock()
+    c.client.create_market_order.return_value = "signed"
+    c.client.post_order.return_value = {"success": True, "orderID": "oid_live_camel"}
+    c.ensure_fresh_credentials = AsyncMock(return_value=True)
+    c.fetch_tick_size = AsyncMock(return_value="0.01")
+
+    order = await c.place_order(
+        token_id="tok",
+        side="BUY",
+        price=0.455,
+        size=15,
+        dry_run=False,
+        order_type="FAK",
+    )
+
+    assert order is not None
+    assert order.order_id == "oid_live_camel"
+    assert order.price == pytest.approx(0.46)
+
+
 class _PostErrorTradeClient:
     def create_order(self, order_args):
         return "signed"

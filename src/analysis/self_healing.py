@@ -70,9 +70,25 @@ def _cfg(config: Dict[str, Any]) -> Dict[str, Any]:
     return config.get("self_healing") or {}
 
 
+_jsonl_cache: Dict[str, Any] = {}
+
+
 def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
+    """2026-07-27 MEM-CHURN FIX: cache the parsed rows per-path keyed on file
+    identity (mtime+size). The cold-lane cadence re-read+re-parsed the whole
+    (growing) trades/decision logs every run — native-RSS churn. Same rows
+    returned in the same order; cache invalidates whenever the file changes."""
     if not path.exists():
-        return
+        return []
+    try:
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    prev = _jsonl_cache.get(str(path))
+    if prev is not None and prev[0] == key:
+        return prev[1]
+    rows: List[Dict[str, Any]] = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -84,9 +100,11 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
-                    yield obj
+                    rows.append(obj)
     except OSError:
-        return
+        return []
+    _jsonl_cache[str(path)] = (key, rows)
+    return rows
 
 
 def _parse_ts(raw: Any) -> Optional[datetime]:

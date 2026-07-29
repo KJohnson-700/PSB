@@ -78,6 +78,8 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
+from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.tape_freshness import compute_freshness_penalty
 from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
     get_loosen_min_edge_mult,
@@ -2340,6 +2342,210 @@ class BitcoinStrategy:
                         action=action,
                     )
                     confidence = quant.confidence
+                    if (
+                        action == "BUY_NO"
+                        and _updown_tf == "5m"
+                        and bool(self.config.get("btc_5m_short_require_quant_conviction", False))
+                        and direction_decision.quant_side is None
+                    ):
+                        _skip_reason = "btc_5m_short_quant_coinflip"
+                        _bump_skip(_skip_reason)
+                        _effective_min_edge = float(
+                            self._tf_cfg(
+                                _updown_tf,
+                                "min_edge",
+                                self.config.get("min_edge", 0.0) or 0.0,
+                            )
+                        )
+                        try:
+                            _quant_flip_thresh = float(
+                                self.config.get("quant_disagree_flip_thresh", 0.48)
+                            )
+                        except (TypeError, ValueError):
+                            _quant_flip_thresh = 0.48
+                        log_rejected_candidate(
+                            strategy="bitcoin",
+                            window="5m",
+                            side="SHORT",
+                            action=action,
+                            reason=_skip_reason,
+                            market=market,
+                            yes_price=yes_price,
+                            est_prob_up=raw_est_prob,
+                            htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source=side_source,
+                            resolver_path=direction_decision.resolver_path,
+                            context={
+                                "btc_1h_regime": btc_1h_regime if ta else None,
+                                "edge": round(float(edge), 6),
+                                "effective_min_edge": round(float(_effective_min_edge), 6),
+                                "raw_est_prob": round(float(raw_est_prob), 6),
+                                "estimated_prob": round(float(estimated_prob), 6),
+                                "quant_side": direction_decision.quant_side,
+                                "momentum_side": direction_decision.momentum_side,
+                                "conflict_type": direction_decision.conflict_type,
+                                "resolver_path": direction_decision.resolver_path,
+                                "quant_disagree_flip_thresh": round(float(_quant_flip_thresh), 6),
+                                "deadband_low": round(float(_quant_flip_thresh), 6),
+                                "deadband_high": round(float(1.0 - _quant_flip_thresh), 6),
+                                "m5_direction": m5_dir,
+                                "m5_move_pct": round(float(mom.m5_move_pct), 6),
+                                "m5_in_prediction_window": bool(mom.m5_in_prediction_window),
+                                "htf_boost": round(float(htf_boost), 6),
+                                "m5_adj": round(float(m5_adj), 6),
+                                **build_market_context(
+                                    asset_spot=ta.current_price,
+                                    btc_spot=ta.current_price,
+                                    rsi_14=ta.rsi_14,
+                                    atr_14=getattr(ta.trend_sabre, "atr", None),
+                                    macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
+                                ),
+                                **_btc_window_delta_ctx(ta, "5m", market),
+                            },
+                        )
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason=_skip_reason,
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=_effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            window_size=_updown_tf,
+                        )
+                        logger.info(
+                            "  BTC [5m] skip BUY_NO on '%s' — raw_est_prob %.3f inside quant deadband %.2f-%.2f",
+                            market.question[:40],
+                            float(raw_est_prob),
+                            _quant_flip_thresh,
+                            1.0 - _quant_flip_thresh,
+                        )
+                        continue
+                    _short_floor = self.config.get("btc_5m_short_max_raw_est_prob_up", None)
+                    if (
+                        action == "BUY_NO"
+                        and _updown_tf == "5m"
+                        and _short_floor is not None
+                        and raw_est_prob is not None
+                        and float(raw_est_prob) >= float(_short_floor)
+                    ):
+                        # Data justification: full record floor 0.47 removes n28/-$89.41
+                        # of losses, keeps n17/-$20.41/35%.
+                        _skip_reason = "btc_5m_short_weak_bearish_quant"
+                        _bump_skip(_skip_reason)
+                        _effective_min_edge = float(
+                            self._tf_cfg(
+                                _updown_tf,
+                                "min_edge",
+                                self.config.get("min_edge", 0.0) or 0.0,
+                            )
+                        )
+                        log_rejected_candidate(
+                            strategy="bitcoin",
+                            window="5m",
+                            side="SHORT",
+                            action=action,
+                            reason=_skip_reason,
+                            market=market,
+                            yes_price=yes_price,
+                            est_prob_up=raw_est_prob,
+                            htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source=side_source,
+                            resolver_path=direction_decision.resolver_path,
+                            context={
+                                "raw_est_prob": round(float(raw_est_prob), 6),
+                                "bearish_floor": round(float(_short_floor), 6),
+                                "m5_dir": m5_dir,
+                                "quant_side": direction_decision.quant_side,
+                                "edge": round(float(edge), 6),
+                            },
+                        )
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason=_skip_reason,
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=_effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            window_size=_updown_tf,
+                        )
+                        logger.info(
+                            "  BTC [5m] skip BUY_NO on '%s' — raw_est_prob %.3f >= bearish floor %.3f",
+                            market.question[:40],
+                            float(raw_est_prob),
+                            float(_short_floor),
+                        )
+                        continue
+                    if (
+                        action == "BUY_NO"
+                        and _updown_tf == "5m"
+                        and bool(self.config.get("btc_5m_short_require_down_tape", False))
+                        and m5_dir not in ("SPIKE_DOWN", "DRIFT_DOWN")
+                    ):
+                        # SPECULATIVE: cannot be validated from history because BTC exits
+                        # did not log m5_direction; prior never-green research found
+                        # counter-tape often won more, so this may be backwards. Default
+                        # off until the indicator_snapshot instrumentation below proves it.
+                        _skip_reason = "btc_5m_short_no_down_tape"
+                        _bump_skip(_skip_reason)
+                        _effective_min_edge = float(
+                            self._tf_cfg(
+                                _updown_tf,
+                                "min_edge",
+                                self.config.get("min_edge", 0.0) or 0.0,
+                            )
+                        )
+                        log_rejected_candidate(
+                            strategy="bitcoin",
+                            window="5m",
+                            side="SHORT",
+                            action=action,
+                            reason=_skip_reason,
+                            market=market,
+                            yes_price=yes_price,
+                            est_prob_up=raw_est_prob,
+                            htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source=side_source,
+                            resolver_path=direction_decision.resolver_path,
+                            context={
+                                "m5_dir": m5_dir,
+                                "raw_est_prob": (
+                                    round(float(raw_est_prob), 6)
+                                    if raw_est_prob is not None
+                                    else None
+                                ),
+                                "quant_side": direction_decision.quant_side,
+                                "edge": round(float(edge), 6),
+                            },
+                        )
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason=_skip_reason,
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=_effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            window_size=_updown_tf,
+                        )
+                        logger.info(
+                            "  BTC [5m] skip BUY_NO on '%s' — m5_direction %s is not bearish tape",
+                            market.question[:40],
+                            m5_dir,
+                        )
+                        continue
                     _direction_guard = self._btc_direction_guard_reason(
                         window_size=_updown_tf,
                         decision=direction_decision,
@@ -3132,6 +3338,50 @@ class BitcoinStrategy:
                 side=lane_side,
                 regime=htf_bias,
             )
+
+            # DYNAMIC ADMISSION (2026-07-26 operator GO) — tape-aware min_edge delta,
+            # same as the sol_macro/eth_macro path. LOOSEN a winning+green lane
+            # (frequency), TIGHTEN a losing never-green lane. Guarded; 0.0 when
+            # off/unknown/error.
+            try:
+                _tape_adm = get_tape_admission_delta(
+                    "bitcoin", _updown_tf if is_updown else "15m", lane_side
+                )
+                if _tape_adm:
+                    effective_min_edge = max(0.0, effective_min_edge + _tape_adm)
+                    reason_parts.append(f"tape_adm={_tape_adm:+.3f}")
+            except Exception:
+                pass
+
+            # 2026-07-26 (#3 candidate-time TAPE FRESHNESS — btc coverage). Graded
+            # edge+size penalty for a stale/exhausted entry (own-TF MACD rolled over
+            # against the side or RSI-exhausted). Never hard-blocks. size_mult carried
+            # to `size` below (applied after the conviction-ceiling downsize).
+            _freshness_size_mult = 1.0
+            try:
+                _fresh_tf = _updown_tf if is_updown else "15m"
+                _fresh_macd = (
+                    getattr(getattr(ta, "tf_5m", None), "macd", None) if _fresh_tf == "5m"
+                    else ta.macd_1h if _fresh_tf == "1h"
+                    else ta.macd_15m
+                )
+                _fresh = compute_freshness_penalty(
+                    action=action,
+                    own_macd=_fresh_macd,
+                    rsi=getattr(ta, "rsi_14", None),
+                    cfg=self.full_config.get("tape_freshness", {}),
+                )
+                if _fresh.get("edge_add"):
+                    effective_min_edge += float(_fresh["edge_add"])
+                _freshness_size_mult = float(_fresh.get("size_mult", 1.0) or 1.0)
+                if _fresh.get("staleness"):
+                    reason_parts.append(
+                        f"tape_fresh={_fresh['staleness']:.2f}"
+                        f"(e+{float(_fresh.get('edge_add', 0.0)):.3f},"
+                        f"x{_freshness_size_mult:.2f})"
+                    )
+            except Exception:
+                _freshness_size_mult = 1.0
 
             # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only.
             # Live realized 06-12..07-02: BUY_YES raw<0.60 = -$522 (chop era -$494)
@@ -4232,6 +4482,13 @@ class BitcoinStrategy:
                             action, market.question[:40], _l2_conv, _l2_ceiling, _l2_mult, size,
                         )
 
+            # #3 tape-freshness SIZE penalty (computed at the min_edge block above):
+            # de-size a stale/exhausted btc entry rather than block it. Applied last.
+            try:
+                size *= float(_freshness_size_mult)
+            except Exception:
+                pass
+
             if size <= 0:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -4334,6 +4591,7 @@ class BitcoinStrategy:
                         float((getattr(ta.trend_sabre, "atr", 0.0) or 0.0) / max(float(ta.current_price or 1.0), 1.0)),
                         6,
                     ),
+                    "m5_direction": getattr(mom, "m5_direction", None) if mom is not None else None,
                     # Raw atr/spot/rsi for replay + calibration vol-bucketing (audit
                     # only, not read by any decision path). Keys mirror the ghost-log
                     # context so trades.jsonl atr_bucket matches ghosts exactly.

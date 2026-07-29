@@ -27,6 +27,7 @@ try:
         AssetType,
         BalanceAllowanceParams,
         OrderArgs,
+        MarketOrderArgs,
         OrderType,
         OrderPayload,
         Side,
@@ -39,6 +40,7 @@ except ImportError:
     AssetType = None
     BalanceAllowanceParams = None
     OrderArgs = None
+    MarketOrderArgs = None
     OrderType = None
     OrderPayload = None
     Side = None
@@ -637,7 +639,9 @@ class CLOBClient:
 
         On Olympus this is the dashboard EQUITY figure, so the bot's bankroll
         matches what the user sees and stays accurate when positions are open.
-        Direct CLOB has no single equity endpoint, so it falls back to cash.
+        Direct CLOB has no single equity endpoint, so compose wallet cash plus
+        Data-API open-position mark value (so deployed capital is not counted as
+        a loss — P&L only moves on realized win/loss, not on capital deployment).
         """
         if self.using_olympus():
             try:
@@ -649,7 +653,70 @@ class CLOBClient:
             if equity is None:
                 logger.error("Could not parse Olympus equity payload: %s", portfolio)
             return equity
-        return await self.get_cash_balance()
+        cash = await self.get_cash_balance()
+        if cash is None:
+            return None
+        pos_value = await self.clob_open_position_value()
+        if pos_value is None:
+            logger.warning(
+                "Direct CLOB account value using cash-only fallback; open-position value unavailable."
+            )
+            return cash
+        return cash + pos_value
+
+    async def _clob_positions_data(self) -> Optional[List[Dict[str, Any]]]:
+        """Raw direct-CLOB positions from the public Data API.
+
+        Returns None on fetch/shape failure so callers fail SAFE. Read-only.
+        """
+        if self.using_olympus() or not self._funder_address:
+            return None
+        url = "https://data-api.polymarket.com/positions"
+        params = {"user": self._funder_address, "sizeThreshold": "1"}
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:  # noqa: BLE001 - fail SAFE on any error
+            logger.error("Error fetching CLOB positions from Data API: %s", exc)
+            return None
+        if not isinstance(data, list):
+            logger.warning(
+                "CLOB positions Data-API: unexpected shape %s",
+                type(data).__name__,
+            )
+            return None
+        return data
+
+    async def clob_open_position_value(self) -> Optional[float]:
+        """Current USDC mark value of direct-CLOB open positions.
+
+        Sums Data-API ``size * curPrice`` for live shares. Returns None on any
+        fetch/parse failure so account-value callers can fall back to cash only.
+        """
+        data = await self._clob_positions_data()
+        if data is None:
+            return None
+        total = 0.0
+        for p in data:
+            if not isinstance(p, dict):
+                continue
+            try:
+                size = float(p.get("size"))
+                cur_price = float(p.get("curPrice"))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "CLOB position value parse failed for condition=%s asset=%s",
+                    p.get("conditionId"),
+                    p.get("asset"),
+                )
+                return None
+            if size > 0:
+                total += size * cur_price
+        return total
 
     async def olympus_open_condition_ids(self) -> Optional[set]:
         """conditionIds of positions currently OPEN on Olympus, for journal
@@ -663,6 +730,31 @@ class CLOBClient:
             logger.error("Error fetching Olympus positions for reconcile: %s", exc)
             return None
         return self.olympus_client.open_condition_ids_from_portfolio(portfolio)
+
+    async def clob_open_condition_ids(self) -> Optional[set]:
+        """conditionIds the account currently HOLDS on Polymarket, for journal
+        reconciliation on the direct CLOB. Reads the public Data API
+        (GET data-api.polymarket.com/positions?user=<funder>) since py-clob-client-v2
+        dropped get_positions. Returns the set of lowercased conditionIds with a live
+        share balance, or None on ANY fetch/parse failure so callers fail SAFE (keep
+        all journal positions rather than wrongly abandon a real one). Read-only."""
+        if self.using_olympus() or not self._funder_address:
+            return None
+        data = await self._clob_positions_data()
+        if data is None:
+            return None
+        cids: set = set()
+        for p in data:
+            if not isinstance(p, dict):
+                continue
+            try:
+                sz = float(p.get("size") or 0)
+            except (TypeError, ValueError):
+                sz = 0.0
+            cid = str(p.get("conditionId") or "").lower()
+            if cid and sz > 0:
+                cids.add(cid)
+        return cids
 
     async def place_order(
         self,
@@ -821,12 +913,6 @@ class CLOBClient:
                 float(order_price),
             )
 
-        order_args = OrderArgs(
-            token_id=token_id,
-            side=side,
-            price=order_price,
-            size=size,
-        )
         # V2 create_order takes a PartialCreateOrderOptions carrying tick_size /
         # neg_risk. Pass the tick size we already fetched and quantized against so
         # the SDK doesn't re-round; leave neg_risk=None so it resolves per-market.
@@ -836,17 +922,63 @@ class CLOBClient:
             else None
         )
 
+        # 2026-07-27 (CLOB entry-outage fix): FAK/FOK are MARKET orders and Polymarket
+        # validates them as such — market-buy maker amount <=2 decimals (USDC), taker
+        # <=4 decimals (shares). The LIMIT path (create_order/get_order_amounts) builds a
+        # BUY as maker=size*price rounded to `amount`(=4) dec / taker=size to `size`(=2)
+        # dec — the precision is SWAPPED vs market validation, so every marketable order
+        # 400'd ("invalid amounts, market buy orders maker amount max 2 decimals"),
+        # blocking ALL entries (152 rejects / ~76 min outage). Route marketable orders
+        # through the SDK MARKET path (create_market_order/get_market_order_amounts),
+        # which rounds maker->2dec / taker->4dec correctly. MarketOrderArgs.amount =
+        # USDC for BUY (size*price budget), shares for SELL (size). GTC (resting limits)
+        # keep the create_order path unchanged.
+        _marketable = str(order_type).upper() in ("FAK", "FOK")
+        _use_market = _marketable and MarketOrderArgs is not None
+
         try:
             loop = asyncio.get_event_loop()
-            signed_order = await loop.run_in_executor(
-                None, lambda: self.client.create_order(order_args, create_opts)
-            )
+            if _use_market:
+                if str(side).upper() == "BUY":
+                    _mkt_amount = float(size) * float(order_price)  # USDC budget
+                else:
+                    _mkt_amount = float(size)  # shares to sell
+                market_args = MarketOrderArgs(
+                    token_id=token_id,
+                    amount=_mkt_amount,
+                    side=side,
+                    price=order_price,
+                    order_type=_ot,
+                )
+                signed_order = await loop.run_in_executor(
+                    None, lambda: self.client.create_market_order(market_args, create_opts)
+                )
+            else:
+                order_args = OrderArgs(
+                    token_id=token_id,
+                    side=side,
+                    price=order_price,
+                    size=size,
+                )
+                signed_order = await loop.run_in_executor(
+                    None, lambda: self.client.create_order(order_args, create_opts)
+                )
             resp = await loop.run_in_executor(
                 None, lambda: self.client.post_order(signed_order, _ot, post_only)
             )
+            if not isinstance(resp, dict):
+                raise RuntimeError(f"unexpected post_order response type: {type(resp).__name__}")
+            venue_order_id = (
+                resp.get("order_id")
+                or resp.get("orderID")
+                or resp.get("id")
+                or resp.get("orderId")
+            )
+            if not venue_order_id:
+                raise RuntimeError(f"post_order response missing order id keys: {sorted(resp.keys())}")
 
             order = Order(
-                order_id=resp["order_id"],
+                order_id=str(venue_order_id),
                 market_id=market_id or "",
                 token_id=token_id,
                 side=side,
@@ -1093,13 +1225,25 @@ class CLOBClient:
             # "lies by omission." Treating that empty response as PENDING would
             # strand a position that already filled, so fall back to trade history.
             status = order_data.get("status") if isinstance(order_data, dict) else None
-            if status == "filled":
+            # 2026-07-27 STATUS FIX: Polymarket returns statuses in mixed case + vocab —
+            # a filled order can read 'MATCHED'/'MINED'/'CONFIRMED' (uppercase). The old
+            # code only matched lowercase 'filled'/'cancelled' and treated every other
+            # non-empty status (incl. 'MATCHED') as PENDING, so an exit that ACTUALLY
+            # FILLED on-venue got stranded in a "still pending" loop and the position rode
+            # to resolution. Normalize case+vocab; for any other non-empty status fall
+            # through to trade-history reconciliation (returns FILLED iff a real matched
+            # trade exists, else PENDING) instead of blindly returning PENDING.
+            _st = str(status or "").strip().lower()
+            if _st in ("filled", "matched", "mined", "confirmed"):
                 return OrderStatus.FILLED
-            if status == "cancelled":
+            # failed/rejected/expired are TERMINAL non-fills → CANCELLED so the caller
+            # clears the pending order and re-arms a fresh exit instead of polling a dead
+            # order to resolution (Codex nit 2026-07-27).
+            if _st in ("cancelled", "canceled", "failed", "rejected", "expired"):
                 return OrderStatus.CANCELLED
-            if status:
-                return OrderStatus.PENDING
-            # Empty/omitted: reconcile against /data/trades by venue order id.
+            # Any other non-empty status (live/open/delayed/unmatched/...) OR empty:
+            # reconcile against /data/trades by venue order id — only a truly-open order
+            # with no matching trade rests as PENDING.
             return await self._recover_status_from_trades(order_id)
         except Exception as e:
             logger.error(f"Error getting order status for {order_id}: {e}")
@@ -1110,6 +1254,53 @@ class CLOBClient:
             except Exception as e2:
                 logger.error(f"Trade-history fallback failed for {order_id}: {e2}")
                 return None
+
+    async def debug_stuck_order(self, order_id: str) -> dict:
+        """READ-ONLY diagnostic for a stuck 'pending' exit order.
+
+        Returns the raw CLOB order record and whether trade history references the
+        order, so we can definitively tell a RESTING order (non-empty active record,
+        status like 'live'/'matched') from a KILLED FAK that is being MISREPORTED as
+        pending (empty record + no trade -> _recover_status_from_trades returns
+        PENDING at its tail, stranding the position). No side effects; never raises.
+        """
+        out: Dict[str, Any] = {"order_id": order_id}
+        if self.using_olympus() or not self.client:
+            out["note"] = "no clob client / olympus"
+            return out
+        loop = asyncio.get_event_loop()
+        try:
+            rec = await loop.run_in_executor(
+                None, lambda: self.client.get_order(order_id)
+            )
+            out["order_record_empty"] = not bool(rec)
+            if isinstance(rec, dict):
+                out["record_status"] = rec.get("status")
+                out["record_side"] = rec.get("side")
+                out["record_price"] = rec.get("price")
+                out["record_original_size"] = rec.get("original_size") or rec.get("size")
+                out["record_size_matched"] = rec.get("size_matched")
+                out["record_type"] = rec.get("order_type") or rec.get("type")
+            else:
+                out["order_record_repr"] = repr(rec)[:200]
+        except Exception as e:  # noqa: BLE001 - diagnostic must never raise
+            out["order_record_error"] = str(e)
+        try:
+            trades = await loop.run_in_executor(
+                None, lambda: self.client.get_trades()
+            )
+            id_keys = ("order_id", "maker_order_id", "taker_order_id")
+            matches = []
+            for t in trades or []:
+                if isinstance(t, dict) and any(t.get(k) == order_id for k in id_keys):
+                    matches.append(
+                        {k: t.get(k) for k in ("size", "price", "side", "status") if k in t}
+                    )
+            out["trade_matches"] = matches
+            out["trades_fetched"] = len(trades or [])
+        except Exception as e:  # noqa: BLE001
+            out["trades_error"] = str(e)
+        return out
 
     async def _recover_status_from_trades(
         self, order_id: str
@@ -1495,6 +1686,71 @@ class RiskManager:
         sz = float(getattr(p, "size", 0) or 0)
         return sz * entry_price
 
+    @staticmethod
+    def _topic_asset(strategy: Optional[str]) -> str:
+        raw = str(strategy or "unknown").strip().lower()
+        if raw == "bitcoin":
+            return "btc"
+        if raw.endswith("_macro"):
+            raw = raw[: -len("_macro")]
+        return raw or "unknown"
+
+    @staticmethod
+    def _topic_direction(
+        action: Optional[str] = None,
+        direction: Optional[str] = None,
+        entry_leg: Optional[str] = None,
+        outcome: Optional[str] = None,
+    ) -> str:
+        direction_u = str(direction or "").strip().upper()
+        if direction_u in {"LONG", "SHORT"}:
+            return direction_u
+        if direction_u == "UP":
+            return "LONG"
+        if direction_u == "DOWN":
+            return "SHORT"
+
+        action_u = str(action or "").strip().upper()
+        if action_u == "BUY_YES":
+            return "LONG"
+        if action_u in {"BUY_NO", "SELL_YES"}:
+            return "SHORT"
+
+        entry_leg_u = str(entry_leg or "").strip().upper()
+        outcome_u = str(outcome or "").strip().upper()
+        if entry_leg_u == "NO" or outcome_u == "NO":
+            return "SHORT"
+        if entry_leg_u == "YES" or outcome_u == "YES":
+            return "LONG"
+        return "UNKNOWN"
+
+    @classmethod
+    def topic_key_for_entry(
+        cls,
+        strategy: Optional[str],
+        action: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> str:
+        return f"{cls._topic_asset(strategy)}|{cls._topic_direction(action, direction)}"
+
+    @classmethod
+    def topic_key_for_position(cls, position: Any) -> str:
+        entry_signal = getattr(position, "entry_signal", {}) or {}
+        if not isinstance(entry_signal, dict):
+            entry_signal = {}
+        asset = cls._topic_asset(getattr(position, "strategy", None))
+        direction = cls._topic_direction(
+            action=entry_signal.get('action'),
+            direction=entry_signal.get('direction'),
+            entry_leg=getattr(position, 'entry_leg', None),
+            outcome=getattr(position, 'outcome', None),
+        )
+        return f"{asset}|{direction}"
+
+    def _max_topic_exposure(self) -> float:
+        trading_config = self.config.get("trading", {}) or {}
+        return float(trading_config.get("max_topic_exposure", self.config.get("max_topic_exposure", 0.20)) or 0.0)
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config  # Pass the full config
         risk_config = self.config.get("risk", {})
@@ -1579,6 +1835,9 @@ class RiskManager:
         bankroll: float,
         strategy: str = None,
         requested_size: float = 0.0,
+        market_id: Optional[str] = None,
+        action: Optional[str] = None,
+        direction: Optional[str] = None,
     ) -> tuple:
         """
         Final check before placing order.
@@ -1618,7 +1877,52 @@ class RiskManager:
         if final_size <= 0:
             return False, 0.0, "Entry size resolved to zero"
 
+        can_topic, topic_reason = self.check_topic_exposure(
+            bankroll=bankroll,
+            trade_size=final_size,
+            strategy=strategy,
+            action=action,
+            direction=direction,
+        )
+        if not can_topic:
+            logger.warning(
+                "RISK ALERT: topic exposure blocked market=%s strategy=%s action=%s reason=%s",
+                market_id,
+                strategy,
+                action,
+                topic_reason,
+            )
+            return False, 0.0, topic_reason
+
         return True, round(final_size, 2), "OK"
+
+    def check_topic_exposure(
+        self,
+        *,
+        bankroll: float,
+        trade_size: float,
+        strategy: Optional[str],
+        action: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> tuple:
+        max_topic_exposure = self._max_topic_exposure()
+        if max_topic_exposure <= 0 or bankroll <= 0:
+            return True, "OK"
+
+        topic = self.topic_key_for_entry(strategy, action=action, direction=direction)
+        current_exposure = sum(
+            self.position_entry_notional(p)
+            for p in self.active_positions.values()
+            if self.topic_key_for_position(p) == topic
+        )
+        cap = bankroll * max_topic_exposure
+        if (current_exposure + trade_size) > cap:
+            return (
+                False,
+                "topic_exposure_limit: "
+                f"{topic} {current_exposure + trade_size:.2f}/{cap:.2f}",
+            )
+        return True, "OK"
 
     def check_strategy_risk(
         self, strategy_name: str, trade_size: float, bankroll: float
@@ -1648,7 +1952,7 @@ class RiskManager:
         if market_id in self.active_positions:
             return False, "Already have position in this market"
         topic_exposure = current_positions.get(topic, 0.0)
-        max_topic_exposure = self.config.get("max_topic_exposure", 0.20)
+        max_topic_exposure = self._max_topic_exposure()
         if topic_exposure >= max_topic_exposure:
             return False, f"Topic exposure limit reached for {topic}"
         return True, "OK"

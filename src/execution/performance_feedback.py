@@ -67,7 +67,41 @@ def _canonicalize_lane_id(lane_id: str) -> str:
     return lane
 
 
+_overtight_cache: Dict[str, Any] = {}
+
+
 def check_overtight(
+    config: Dict[str, Any],
+    *,
+    settled_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Cached front door for the overtight scan.
+
+    2026-07-27 MEM-CHURN FIX: the settled log (rejected_candidates_settled.jsonl)
+    is ~1GB and, per ops policy, frozen. Re-reading + JSON-parsing it on every
+    feedback/self-heal cadence churned ~338GB/session and fragmented native RSS.
+    Cache the derived result keyed on file identity (mtime+size) + the config
+    knobs; recompute only when the file or config actually change. Behavior is
+    identical for a given (file, config)."""
+    pf = config.get("performance_feedback") or {}
+    path = Path(settled_path) if settled_path is not None else DEFAULT_SETTLED_LOG
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size, repr(sorted(pf.items())))
+    except OSError:
+        key = None
+    cached = _overtight_cache.get("entry")
+    if key is not None and cached is not None and cached[0] == key:
+        return cached[1]
+    value = _check_overtight_uncached(config, settled_path=settled_path)
+    if key is not None:
+        # single-assignment tuple: an atomic swap (CPython) so a concurrent reader
+        # never sees a new key paired with a stale/None value
+        _overtight_cache["entry"] = (key, value)
+    return value
+
+
+def _check_overtight_uncached(
     config: Dict[str, Any],
     *,
     settled_path: Optional[Path] = None,

@@ -50,7 +50,9 @@ def _config() -> dict:
 def test_iter_updown_1h_human_slugs_shape():
     # May 13, 09:44 UTC = May 13, 05:44 EDT → hour floor 5AM ET
     ref = datetime(2026, 5, 13, 9, 44, tzinfo=timezone.utc)
-    slugs = MarketScanner._iter_updown_1h_human_slugs(look_ahead=0, now_utc=ref)
+    # 2026-07-27: slug builders are now instance methods (adaptive ordering). Canonical
+    # order is preserved when adaptive is off / productivity empty, so shape is unchanged.
+    slugs = MarketScanner(_config())._iter_updown_1h_human_slugs(look_ahead=0, now_utc=ref)
     assert len(slugs) == 7
     assert "bitcoin-up-or-down-may-13-2026-5am-et" in slugs
     assert "ethereum-up-or-down-may-13-2026-5am-et" in slugs

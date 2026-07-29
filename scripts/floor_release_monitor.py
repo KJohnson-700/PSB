@@ -38,6 +38,8 @@ WATCH_FLOORS = [
     ("xrp_macro",  "5m", 45, "buy_no_5m_pocket_off"),
     ("doge_macro", "15m", 35, "buy_no_15m_pocket_off"),
     ("sol_macro",  "5m", 30, "buy_no_5m_pocket_off"),
+    ("eth_macro",  "15m", 55, "eth_buy_no_rsi_floor_off"),  # 2026-07-24: static eth short floor -> releasable
+    ("eth_macro",  "1h",  55, "eth_buy_no_rsi_floor_off"),
 ]
 RECENT_HOURS = 24.0     # rolling window — we want RECENT tape, not lifetime
 MIN_N = 8               # need enough settled blocked shorts to trust the read
@@ -126,7 +128,7 @@ def main():
             if key not in agg:
                 continue
             reason = str(d.get("reason") or d.get("skip_reason") or "")
-            if "pocket_off" not in reason:
+            if reason != agg[key]["reason"]:  # 2026-07-24: per-floor reason (was hardcoded pocket_off; enables eth)
                 continue
             if d.get("action") != "BUY_NO":
                 continue

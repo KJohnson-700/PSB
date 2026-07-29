@@ -110,14 +110,16 @@ def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
         }
     }
     mgr = ExposureManager(cfg, is_paper=True, lane_name="TEST")
+    # Per-lane kill switch (2026-07-25): pause/resume now via lane_paused(window, side).
+    # record_trade with no window → lane key "|"; drive resume on that same lane.
     mgr.record_trade(-1.0, strategy="bitcoin")
     chop = MarketConditions(volatility=0.001, volume_ratio=0.1, trend_strength=0.0)
 
-    first_tier, *_ = mgr.get_exposure(chop)
-    second_tier, *_ = mgr.get_exposure(chop)
+    first_paused, _ = mgr.lane_paused("", "", chop)
+    second_paused, _ = mgr.lane_paused("", "", chop)
 
-    assert first_tier == ExposureTier.PAUSED
-    assert second_tier != ExposureTier.PAUSED
+    assert first_paused is True
+    assert second_paused is False  # force-resumed after max_pause_cycles
 
 
 def test_loss_pause_auto_resumes_by_default_in_paper() -> None:
@@ -134,8 +136,9 @@ def test_loss_pause_auto_resumes_by_default_in_paper() -> None:
     mgr.record_trade(-1.0, strategy="bitcoin")
     ok = MarketConditions(volatility=0.02, volume_ratio=1.2, trend_strength=0.8)
 
-    tier, *_ = mgr.get_exposure(ok)
-    assert tier != ExposureTier.PAUSED
+    # Per-lane kill switch: good conditions auto-resume the paused lane ("|") by default.
+    paused, _ = mgr.lane_paused("", "", ok)
+    assert paused is False
 
 
 def test_loss_kill_trigger_records_latest_lane_context() -> None:
@@ -180,18 +183,19 @@ def test_pause_resume_requires_recovery_and_green_window() -> None:
 
     ok = MarketConditions(volatility=0.02, volume_ratio=1.2, trend_strength=0.8)
 
+    # Per-lane kill switch: resume gating (green window + recovery) now on lane "5m|".
     mgr.update_resume_window(green_window=False)
-    t1, *_ = mgr.get_exposure(ok)
-    assert t1 == ExposureTier.PAUSED
+    p1, _ = mgr.lane_paused("5m", "", ok)
+    assert p1 is True
 
     mgr.update_resume_window(green_window=True)
     mgr.update_portfolio_pnl(-5.0)  # recovered 5 < target 6
-    t3, *_ = mgr.get_exposure(ok)
-    assert t3 == ExposureTier.PAUSED
+    p3, _ = mgr.lane_paused("5m", "", ok)
+    assert p3 is True
 
     mgr.update_portfolio_pnl(-4.0)  # recovered 6 == target
-    t4, *_ = mgr.get_exposure(ok)
-    assert t4 != ExposureTier.PAUSED
+    p4, _ = mgr.lane_paused("5m", "", ok)
+    assert p4 is False
 
 
 def test_pause_recovery_anchor_uses_post_loss_portfolio_pnl() -> None:

@@ -162,6 +162,14 @@ class PositionExitManager:
         self.updown_high_entry_threshold = self._ude.updown_high_entry_threshold
         self.updown_in_profit_stop_trigger_pct = self._ude.updown_in_profit_stop_trigger_pct
         self.updown_in_profit_stop_tighten_to_pct = self._ude.updown_in_profit_stop_tighten_to_pct
+        # 2026-07-28 SEVERITY-GATED CUTS (real never-green fix). never_green_cut and
+        # updown_time_stop only fire when the position is ACTUALLY deeply negative, not
+        # merely never-green / adverse. Realized: cut-but-would-win median pnl_at_exit
+        # -3.5%; cut-and-would-lose-more -9.7%. Gating never_green_cut at pnl<=-8% saves
+        # +$33.61 with 0 false-cut winners (vs current +$18.24); time_stop at <=-20% saves
+        # +$19.62. 0.0 = OFF (fires exactly as before, backward-compatible).
+        self.never_green_cut_min_loss_pct = float(exit_cfg.get("never_green_cut_min_loss_pct", 0.0) or 0.0)
+        self.updown_time_stop_min_loss_pct = float(exit_cfg.get("updown_time_stop_min_loss_pct", 0.0) or 0.0)
         # Optional BUY_YES bid-depth deterioration exit (default OFF). See settings.yaml
         # trading.exit_rules.bid_depth_exit and _maybe_bid_depth_exit below.
         self._bid_depth_exit = exit_cfg.get("bid_depth_exit", {}) or {}
@@ -195,6 +203,13 @@ class PositionExitManager:
         # tick, legacy behavior).
         self._updown_stop_confirm_ticks = max(
             1, int(exit_cfg.get("updown_stop_confirm_ticks", 1) or 1)
+        )
+        # 2026-07-24 gap-through bypass (STAGED): fire the % stop on the FIRST
+        # triggering tick -- skipping the N-tick confirm -- when the FRESH mark is
+        # already this far past the stop (a real collapse, not the single-noisy-read
+        # the confirm guards). 0.0 = off. See the stop branch in check_exits.
+        self._updown_stop_gap_bypass_pct = float(
+            exit_cfg.get("updown_stop_gap_bypass_pct", 0.0) or 0.0
         )
         # Mechanism-agnostic phantom-exit guard: refuse the EARLY % stop/TP on an
         # up/down position held fewer than N seconds. The late-window cents/time
@@ -597,7 +612,28 @@ class PositionExitManager:
                     # book read can't cut a winner; reset the moment the mark recovers.
                     _confirm = int(getattr(pos, "_stop_confirm_count", 0)) + 1
                     setattr(pos, "_stop_confirm_count", _confirm)
-                    if _confirm >= self._updown_stop_confirm_ticks:
+                    # Gap-through bypass: a fresh mark already well past the stop is a
+                    # real collapse (median 16pt overshoot on tight books) -- do not wait
+                    # the 2nd confirm tick (~3s) and hand back another ~8-16pt. Near-stop
+                    # ticks (within the margin) still require the full N-tick confirm.
+                    # Codex 2026-07-24: bypass ONLY on a FRESH WS mark. A stale/junk/
+                    # midpoint print far past the stop must still take the N-tick confirm
+                    # (that is exactly the single-noisy-read the confirm guards). Session
+                    # data: 150/154 gap-throughs were mark_src=ws, age<=1500ms.
+                    _bypass_liq = (market_liquidity or {}).get(pos.market_id) or {}
+                    _bypass_mark_age = _bypass_liq.get("mark_age_ms")
+                    _bypass_mark_fresh = (
+                        _bypass_liq.get("mark_src") == "ws"
+                        and isinstance(_bypass_mark_age, (int, float))
+                        and float(_bypass_mark_age) <= 2000.0
+                    )
+                    _gap_bypass = (
+                        self._updown_stop_gap_bypass_pct > 0.0
+                        and _bypass_mark_fresh
+                        and stop_pnl_pct
+                        <= -(effective_stop_loss_pct + self._updown_stop_gap_bypass_pct)
+                    )
+                    if _confirm >= self._updown_stop_confirm_ticks or _gap_bypass:
                         reason = "updown_stop_loss"
                     else:
                         logger.debug(
@@ -649,7 +685,8 @@ class PositionExitManager:
                             entry_price=pos.entry_price,
                             up_stop_cents=up_stop_cents,
                         )
-                        if adverse:
+                        _ts_min = getattr(self, "updown_time_stop_min_loss_pct", 0.0)
+                        if adverse and (_ts_min <= 0.0 or pnl_pct <= -_ts_min):
                             reason = "updown_time_stop"
                     elif mins_remaining is None and hours_held >= resolved.updown_max_hold_mins / 60.0:
                         # Safety valve for journal-reloaded positions that have no
@@ -674,17 +711,41 @@ class PositionExitManager:
                     market_liquidity=market_liquidity,
                 )
 
+            # 2026-07-26 NEVER-GREEN CUT (graduated from shadow, 5m/15m only). main.py's
+            # _observe_never_green (which tracks the true per-position peak via the
+            # NeverGreenCut observer) passes the set of positions that stayed never-green
+            # past cut_after_secs — the dominant loss driver (77% of loss $, +$91.92 saved
+            # in shadow at 84% true-positive). Cut them here at the current price instead
+            # of riding to the stop. Only fires when nothing higher priority (TP / stop /
+            # time / bid-depth) already set a reason. 1h is deliberately EXCLUDED (main.py
+            # only adds 5m/15m ids) because 1h winners develop slowly and get false-cut.
+            _ngc_min = getattr(self, "never_green_cut_min_loss_pct", 0.0)
+            if (
+                reason is None
+                and pos_id in getattr(self, "_never_green_cut_ids", ())
+                and (_ngc_min <= 0.0 or pnl_pct <= -_ngc_min)
+            ):
+                reason = "never_green_cut"
+
             # Phantom-exit floor: suppress the EARLY % stop/TP until the position has
             # aged past the min-hold. Leaves the late-window cents/time/expiry stops
             # untouched (they only fire near resolution). Resets the stop-confirm
             # count so it re-confirms cleanly once the hold clears.
             _min_hold_floor = self._min_hold_floor_secs(pos)
             _held_eff_secs = hours_held * 3600.0 - self._preopen_lag_secs(pos)
+            # 2026-07-27 BLEED FIX: held_eff = now - (end_date - window_len) = now - window_open.
+            # A resumed position carries a serialized end_date (main.py:1906, never re-validated)
+            # whose derived window_open can be in the FUTURE -> held_eff goes hugely NEGATIVE
+            # (~-7.8h observed) -> this floor then suppressed EVERY stop/TP/never_green_cut and the
+            # loser rode to full resolution loss. A negative held_eff is definitionally a corrupt
+            # anchor (a real position's time-since-window-open is >= 0), and is exactly the case
+            # that MUST be allowed to cut. Require a real NON-NEGATIVE hold below the floor: fresh
+            # fills in [0, floor) stay protected; a bogus-negative anchor no longer suppresses.
             if (
                 is_updown
-                and reason in ("take_profit", "updown_stop_loss")
+                and reason in ("take_profit", "updown_stop_loss", "never_green_cut")
                 and _min_hold_floor > 0
-                and _held_eff_secs < _min_hold_floor
+                and 0.0 <= _held_eff_secs < _min_hold_floor
             ):
                 _fx_ms = getattr(self, "_min_hold_fresh_mark_exempt_ms", 0.0)
                 _liq = (market_liquidity or {}).get(pos.market_id) or {}
@@ -733,10 +794,18 @@ class PositionExitManager:
                 # and mark the close marketable so it is placed FAK (takes the bid now)
                 # rather than resting as a limit that may not fill.
                 exit_marketable = False
-                if reason == "updown_stop_loss" and exec_exit_price is not None:
-                    exit_price = exec_exit_price
-                    exit_marketable = True
-                elif reason in (
+                if reason in (
+                    # 2026-07-27 (ride-to-zero fix): updown_stop_loss was previously gated
+                    # `and exec_exit_price is not None`, so a stop firing into a thin/one-
+                    # sided book (no resolvable bid — exactly the ride-to-zero case) fell
+                    # through to marketable=False -> GTC resting limit -> rode 3 losing
+                    # binaries to $0 on the CLOB. INVERTED: the missing-price case is the
+                    # MOST urgent to cross NOW, not rest. Stop-loss now joins the other
+                    # loss-cutting/near-resolution exits as UNCONDITIONALLY marketable.
+                    "updown_stop_loss",
+                    "never_green_cut",  # 2026-07-26: take the bid NOW (FAK) — a stuck
+                    # never-green position must actually exit, not rest a limit that
+                    # won't fill; mirrors the stop/time-stop marketable behavior.
                     "updown_flatten_pre_resolution",
                     "updown_expired",
                     "updown_time_stop",
@@ -747,10 +816,10 @@ class PositionExitManager:
                     # away and where the previous 3 give-back attempts died.
                     "take_profit_late",
                 ):
-                    # Near/at resolution: take the bid NOW (FAK) rather than resting a
-                    # limit that won't fill into a one-sided book and lets the position
-                    # gap to a binary-zero resolution. exec_exit_price when available,
-                    # else the current exit-side mark.
+                    # Loss-cutting / near-resolution: take the bid NOW (FAK) rather than
+                    # resting a limit that won't fill into a one-sided book and lets the
+                    # position gap to a binary-zero resolution. exec_exit_price when
+                    # available, else the current exit-side mark.
                     if exec_exit_price is not None:
                         exit_price = exec_exit_price
                     exit_marketable = True

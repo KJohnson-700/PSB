@@ -67,30 +67,51 @@ def iter_exit_events(
         yield from iter_exit_events_from_file(path, session_id=session_dir.name)
 
 
+_exit_events_cache: Dict[str, Any] = {}
+
+
 def iter_exit_events_from_file(
     path: Path,
     *,
     session_id: str = "",
 ) -> Iterator[Dict[str, Any]]:
+    # 2026-07-27 MEM-CHURN FIX: cache the FILTERED exit rows per-path keyed on
+    # file identity (mtime+size). Callers on the learning cadence re-read+re-parsed
+    # the whole (growing) journal every time — native-RSS churn. Parse once per
+    # file version; the (cheap) session_id tag is still applied per-yield, so the
+    # yielded rows are identical to the streaming version.
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if row.get("event") != "EXIT":
-                    continue
-                if _phantom_exit(row):
-                    continue
-                if session_id:
-                    row = {**row, "_session_id": session_id}
-                yield row
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
     except OSError as e:
         logger.debug("journal_learning: skip %s: %s", path, e)
+        return
+    prev = _exit_events_cache.get(str(path))
+    if prev is not None and prev[0] == key:
+        rows = prev[1]
+    else:
+        rows = []
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if row.get("event") != "EXIT":
+                        continue
+                    if _phantom_exit(row):
+                        continue
+                    rows.append(row)
+        except OSError as e:
+            logger.debug("journal_learning: skip %s: %s", path, e)
+            return
+        _exit_events_cache[str(path)] = (key, rows)
+    for row in rows:
+        yield ({**row, "_session_id": session_id} if session_id else row)
 
 
 def _extra_blob(row: Dict[str, Any]) -> Dict[str, Any]:

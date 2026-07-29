@@ -2022,7 +2022,7 @@
         </div>
         <div class="status-hero" id="status-hero">
             <div class="hero-item" id="hero-card-bankroll" title="Current paper equity">
-                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll <span class="hero-trend flat" id="hero-bankroll-trend">—</span></div></div>
+                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-lbl">Bankroll <span class="hero-trend flat" id="hero-bankroll-trend">—</span></div><div class="hero-sub" id="hero-bankroll-sub"></div></div>
             <div class="hero-item has-spark" id="hero-card-pnl" title="Realized PnL this session">
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-sub" id="hero-pnl-sub"></div><div class="hero-lbl">Session P&L <span class="hero-trend flat" id="hero-pnl-trend">—</span></div><svg class="hero-spark" id="hero-spark-pnl" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
             <div class="hero-item" id="hero-card-positions" title="Currently open positions">
@@ -4429,7 +4429,12 @@ function dashUpdateHeroVisuals(values) {
 
     dashDrawHeroSpark('hero-spark-pnl', pnlSeries, values.pnl < 0 ? 'var(--re)' : 'var(--gr)');
 
-    dashSetHeroTrend('hero-bankroll-trend', bankSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(0); });
+    // Bankroll trend arrow suppressed (2026-07-27): the browser-side series was seeded
+    // by the pre-wallet-refresh $500 default before the live Olympus value ($126) landed,
+    // producing a phantom "-$374" drop on live starts that NEVER began at $500. Session
+    // P&L is the real change metric; the bankroll card stays a clean equity number.
+    var _brTrend = document.getElementById('hero-bankroll-trend');
+    if (_brTrend) { _brTrend.textContent = ''; _brTrend.className = 'hero-trend flat'; }
     dashSetHeroTrend('hero-pnl-trend', pnlSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(2); });
     dashSetHeroTrend('hero-positions-trend', posSeries, function(v) { return (v < 0 ? '-' : '') + Math.abs(v).toFixed(0); });
     dashSetHeroTrend('hero-trades-trend', tradeSeries, function(v) { return (v < 0 ? '-' : '') + Math.abs(v).toFixed(0); });
@@ -4554,10 +4559,20 @@ function applyHeroMetrics(d) {
     const _INITIAL_BANKROLL = 500; // paper session start; TODO surface from config in payload
     const _realizedForBankroll = (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '')
         ? Number(s.realized_pnl) : null;
-    const bankroll = (_realizedForBankroll !== null && Number.isFinite(_realizedForBankroll))
-        ? _INITIAL_BANKROLL + _realizedForBankroll
-        : ((d.cash_bankroll !== null && d.cash_bankroll !== undefined) ? Number(d.cash_bankroll)
-        : ((d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null));
+    // 2026-07-27 LIVE BANKROLL FIX: in LIVE mode the server resolves the REAL Olympus
+    // wallet equity and stamps bankroll_source='live_wallet' (both the in-process and
+    // disk/SSE payloads). That value IS the bankroll — the paper 500+realized formula
+    // below must NOT run in live, or the card shows a fake $500 regardless of the
+    // account balance. Paper (any other source) is completely untouched.
+    const _liveWallet = (d.bankroll_source === 'live_wallet'
+        && d.bankroll !== null && d.bankroll !== undefined && Number.isFinite(Number(d.bankroll)))
+        ? Number(d.bankroll) : null;
+    const bankroll = (_liveWallet !== null)
+        ? _liveWallet
+        : ((_realizedForBankroll !== null && Number.isFinite(_realizedForBankroll))
+            ? _INITIAL_BANKROLL + _realizedForBankroll
+            : ((d.cash_bankroll !== null && d.cash_bankroll !== undefined) ? Number(d.cash_bankroll)
+            : ((d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null)));
     const bankEl = document.getElementById('hero-bankroll');
     // 2026-07-20 BANKROLL FLASH FIX: the two poll channels report DIFFERENT bankrolls
     // (/api/status 509.78 vs /api/ops/summary 498.27, measured same instant), and BOTH
@@ -4611,9 +4626,16 @@ function applyHeroMetrics(d) {
         ? (totalPnlForSplit - realizedPnlRaw) : null;
     const brSub = document.getElementById('hero-bankroll-sub');
     if (brSub && _fullTick) {
-        brSub.textContent = (Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005)
-            ? ((unrealizedPnlRaw < 0 ? '-' : '+') + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' unrealized (open)')
-            : '';
+        // deployed capital = sum of open-position cost (shares * entry_price). Paper
+        // bankroll is equity (never debits share cost at open), so this surfaces how
+        // much is actually working — the buying-power view live mode shows natively.
+        // Operator wants ONLY the deployed amount here (2026-07-25) — dropped the
+        // "unrealized (open)" number that used to share this line; it was confusing.
+        let _deployed = 0;
+        if (Array.isArray(d.positions)) {
+            d.positions.forEach(function(p){ _deployed += Math.abs(Number(p.size)||0) * (Number(p.entry_price)||0); });
+        }
+        brSub.innerHTML = _deployed >= 0.5 ? ('Deployed = <span style="color:var(--gr)">$' + _deployed.toFixed(0) + '</span>') : '';
     }
 
     let sessionPnlRaw = null;
@@ -4660,9 +4682,18 @@ function applyHeroMetrics(d) {
         || (p && p.total_positions != null)
         || (s && s.open != null)
         || (lastStatusData && Array.isArray(lastStatusData.positions));
+    // 2026-07-28 FLICKER FIX (fills 1↔5, positions flip-to-0): the authoritative full
+    // tick (/api/status, carries positions[] → _fullTick) OWNS both hero numbers. The 4s
+    // light poll (/api/ops/summary) computes a DIFFERENT value (its fills falls back to
+    // closed_trades when total_entries is absent → 1 vs the real 5; its open count can lag)
+    // so once it and the full tick both keep writing, the number flip-flops every few s.
+    // Rule: full tick always writes and claims authority (cuFull); the light tick may paint
+    // ONLY before the first full tick lands (cold-start fast paint), never clobber after.
+    // The full tick is SSE-pushed on every fill + ~60s, so the numbers stay fresh.
     const posEl = document.getElementById('hero-positions');
     if (posEl) {
-        if (havePosData) { posEl.dataset.cuInit = '1'; posEl.textContent = openCount; }
+        if (_fullTick && havePosData) { posEl.dataset.cuFull = '1'; posEl.dataset.cuInit = '1'; posEl.textContent = openCount; }
+        else if (!posEl.dataset.cuFull && havePosData) { posEl.dataset.cuInit = '1'; posEl.textContent = openCount; }
         else if (!posEl.dataset.cuInit) { posEl.textContent = openCount; }
     }
 
@@ -4672,7 +4703,8 @@ function applyHeroMetrics(d) {
     const sessionFills = Number.isFinite(sessionFillsRaw) ? sessionFillsRaw : dailyTrades;
     const tradesEl = document.getElementById('hero-trades');
     if (tradesEl) {
-        if (haveFills) { tradesEl.dataset.cuInit = '1'; tradesEl.textContent = sessionFills; }
+        if (_fullTick && haveFills) { tradesEl.dataset.cuFull = '1'; tradesEl.dataset.cuInit = '1'; tradesEl.textContent = sessionFills; }
+        else if (!tradesEl.dataset.cuFull && haveFills) { tradesEl.dataset.cuInit = '1'; tradesEl.textContent = sessionFills; }
         else if (!tradesEl.dataset.cuInit) { tradesEl.textContent = sessionFills; }
     }
 
@@ -4680,7 +4712,8 @@ function applyHeroMetrics(d) {
     if (pnlSub && _fullTick) {
         if (Number.isFinite(realizedPnlRaw) && Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005) {
             const uSign = unrealizedPnlRaw < 0 ? '-' : '+';
-            pnlSub.textContent = '$' + realizedPnlRaw.toFixed(2) + ' realized · ' + uSign + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' open';
+            // Big number is already realized — don't repeat it; just show open under it.
+            pnlSub.textContent = uSign + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' open';
         } else if (Number.isFinite(sessionPnlRaw) && Number.isFinite(bankroll) && bankroll > 0) {
             pnlSub.textContent = ((sessionPnlRaw / bankroll) * 100).toFixed(2) + '% of bankroll';
         } else {
@@ -6553,9 +6586,13 @@ async function _seedCommandCenterPnlFromServer(sessionId) {
         // single early live sample permanently suppress the seed -> flat line).
         if (state.points.length > pts.length) { state.seededFor = sessionId; return; }
         state.sessionId = sessionId;
-        state.points = pts
+        // 2026-07-27 SCALE-GUARD: strip the paper-init (bankroll=500) head and any
+        // stale-scale points BEFORE deriving baselineEquity — otherwise baselineEquity
+        // gets poisoned to 500 and the live sampler then emits 500+realized samples on
+        // the wrong scale (the 533 tail spike). Cleaning here fixes both at the source.
+        state.points = _ccFilterScaleOutliers(pts
             .filter((p) => Number.isFinite(Number(p.t)) && Number.isFinite(Number(p.v)))
-            .map((p) => ({ t: Number(p.t), v: Number(p.v), v2: Number.isFinite(Number(p.v2)) ? Number(p.v2) : Number(p.v) }));
+            .map((p) => ({ t: Number(p.t), v: Number(p.v), v2: Number.isFinite(Number(p.v2)) ? Number(p.v2) : Number(p.v) })));
         if (state.points.length) {
             const last = state.points[state.points.length - 1];
             state.lastValue = last.v;
@@ -6622,7 +6659,17 @@ function _sampleCommandCenterPnl(d) {
         // $500 midline (below=down/red, above=up/green). _commandCenterEquity returned d.bankroll,
         // which drifts >500 via cross-session orphan-settle -> the line sat ABOVE the midline while
         // realized was negative. 500+realized matches the equity_history seed scale too (no seam).
-        const equity = 500 + (Number.isFinite(totalPnl) ? totalPnl : 0);
+        // 2026-07-27 LIVE-SCALE FIX: the hardcoded 500 base is the PAPER start. In live
+        // mode the seed (/api/session/equity_history) returns the real wallet equity
+        // (~$125.82), so plotting new samples at 500+realized put them on a DIFFERENT
+        // scale than the seed — the seam showed as a phantom dip/jump in the trace on a
+        // 0-trade session. Use the seeded session base when known, else derive it from the
+        // live equity (bankroll - realized). Paper is unchanged: bankroll-realized == 500.
+        const _ccReal2 = Number.isFinite(totalPnl) ? totalPnl : 0;
+        const _ccBase = Number.isFinite(state.baselineEquity)
+            ? state.baselineEquity
+            : (Number.isFinite(Number(d.bankroll)) ? Number(d.bankroll) - _ccReal2 : 500);
+        const equity = _ccBase + _ccReal2;
         // 2026-07-18 GHOST: total incl unrealized, plotted as a faint line behind the solid realized staircase.
         const _ccUnreal = Number.isFinite(Number(_ccS.unrealized_pnl)) ? Number(_ccS.unrealized_pnl) : 0;
         const equityTotal = Number.isFinite(equity) ? (equity + _ccUnreal) : NaN;
@@ -6644,24 +6691,28 @@ function _sampleCommandCenterPnl(d) {
             state.baselineEquity = null;
         }
         if (state.baselineEquity === null) {
-            state.baselineEquity = 500;  // 2026-07-20 paper start; seed overrides with points[0].v
+            // 2026-07-27: default the axis baseline to the SAME session base the samples
+            // plot against (_ccBase: live wallet ~$125.82, or 500 in paper) so the y-axis
+            // isn't centered on 500 while live points sit at 125. Seed overrides with points[0].v.
+            state.baselineEquity = _ccBase;
         }
         if (!state.points.length) {
             // Seed from inferred session starting bankroll/equity so the chart
             // begins at the session base (e.g. 500) instead of at the first sampled PnL.
             // 2026-07-16 FLATFIX: baseline(500) anchor removed - caused jump-then-flat on long sessions; history seed supplies the full curve
         }
-        const shouldPush =
+        // 2026-07-25 PNL-TRACE FIX (operator): step ONLY on a real realized-P&L change.
+        // The old `|| (now - state.lastTs) >= 15000` force-pushed a wall-clock point every
+        // 15s even during inactivity; those flat points flooded the 480 cap and the middle-
+        // decimation threw away the real trade steps -> the live trace decayed into one long
+        // flat line (a refresh reloaded the real staircase from history). Now it is an event-
+        // stepped P&L trace: append on a banked change; otherwise extend the last point to
+        // `now` IN PLACE so the line stays current as a single flat segment, never accumulating.
+        const _pnlChanged =
             state.lastValue === null
-            || Math.abs(equity - state.lastValue) >= 0.005
-            || (now - state.lastTs) >= 15000;
-        if (shouldPush) {
+            || Math.abs(equity - state.lastValue) >= 0.005;
+        if (_pnlChanged) {
             state.points.push({ t: now, v: equity, v2: Number.isFinite(equityTotal) ? equityTotal : equity });
-            // Keep the trace spanning session START->finish. Never drop index 0
-            // (the baseline/start anchor); on overflow, decimate the MIDDLE uniformly
-            // (keep first + last). The old slice(-240) sliced off the start after
-            // ~1h, so the chart lost its lower start point and stretched a recent-only
-            // window across the full canvas.
             const _CC_PNL_CAP = 480;
             if (state.points.length > _CC_PNL_CAP) {
                 const _first = state.points[0];
@@ -6670,6 +6721,11 @@ function _sampleCommandCenterPnl(d) {
                 state.points = [_first, ..._mid, _last];
             }
             state.lastValue = equity;
+            state.lastTs = now;
+        } else if (state.points.length) {
+            const _lp = state.points[state.points.length - 1];
+            _lp.t = now;
+            if (Number.isFinite(equityTotal)) _lp.v2 = equityTotal;
             state.lastTs = now;
         }
         renderCommandCenterPnlChart();
@@ -6694,6 +6750,25 @@ function clearCommandCenterPnlChart() {
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
+}
+
+// 2026-07-27 SCALE-GUARD: a session's snapshots can carry a paper-init artifact
+// (bankroll=500 written at session start before the live wallet equity loads) or a
+// stale-scale live sample (baseline+realized computed off a poisoned 500 base ->
+// e.g. 533 while the real wallet is ~140). A SINGLE such point explodes the y-domain
+// ~10x, crushing the real curve into a flat line and pushing the yellow baseline off
+// the top (operator: "the mid line is up top"). Drop points that deviate wildly from
+// the session median. Scale-agnostic: paper (all ~500 -> median 500) drops nothing;
+// live (~140 median) drops the 500/533 artifacts. Never trims below a 2-point segment.
+function _ccFilterScaleOutliers(pts) {
+    if (!Array.isArray(pts) || pts.length < 4) return pts;
+    const vs = pts.map((p) => Number(p.v)).filter(Number.isFinite).sort((a, b) => a - b);
+    if (!vs.length) return pts;
+    const med = vs[Math.floor(vs.length / 2)];
+    if (!(med > 0)) return pts;
+    const lo = med * 0.4, hi = med * 2.5;
+    const cleaned = pts.filter((p) => { const v = Number(p.v); return Number.isFinite(v) && v >= lo && v <= hi; });
+    return cleaned.length >= 2 ? cleaned : pts;
 }
 
 function _commandCenterPnlDomain(values, baseline, minimumVisualRange = 25) {
@@ -6728,16 +6803,26 @@ function renderCommandCenterPnlChart() {
             return;
         }
         section.style.display = 'block';
-        const values = state.points.map((p) => Number(p.v)).filter(Number.isFinite);
+        // 2026-07-27 SCALE-GUARD (defense): filter scale-outliers at render too so a
+        // poisoned point from the live sampler (500+realized before a refresh re-seeds)
+        // can never blow the y-domain. Derive values/ghostValues index-aligned from the
+        // same cleaned array.
+        const rawPts = state.points.filter((p) => Number.isFinite(Number(p.v)));
+        if (!rawPts.length) {
+            clearCommandCenterPnlChart();
+            return;
+        }
+        const pts = _ccFilterScaleOutliers(rawPts);
+        const values = pts.map((p) => Number(p.v));
         if (!values.length) {
             clearCommandCenterPnlChart();
             return;
         }
         // 2026-07-18 GHOST: faint total (realized+unrealized); falls back to realized if absent.
-        const ghostValues = state.points.map((p) => {
+        const ghostValues = pts.map((p) => {
             const g = Number(p.v2);
             return Number.isFinite(g) ? g : Number(p.v);
-        }).filter(Number.isFinite);
+        });
         const wrapW = canvas.offsetWidth || canvas.parentElement?.clientWidth || 0;
         if (!wrapW) return;
         const ctx = canvas.getContext('2d');
@@ -6749,7 +6834,12 @@ function renderCommandCenterPnlChart() {
         ctx.clearRect(0, 0, w, h);
 
         const last = values[values.length - 1];
-        const baseline = Number.isFinite(state.baselineEquity) ? Number(state.baselineEquity) : values[0];
+        let baseline = Number.isFinite(state.baselineEquity) ? Number(state.baselineEquity) : values[0];
+        // 2026-07-27 SCALE-GUARD: a poisoned baseline (500 seeded from the paper-init
+        // snapshot) would place the yellow zero-line off the top and skew the fill.
+        // Clamp it into the cleaned data's own range; fall back to the session start.
+        const _vMin = Math.min(...values), _vMax = Math.max(...values);
+        if (baseline < _vMin * 0.5 || baseline > _vMax * 1.5) baseline = values[0];
         const lastDelta = last - baseline;
         const domain = _commandCenterPnlDomain(values, baseline, 25);
         const min = domain.min;
@@ -6863,9 +6953,9 @@ async function updatePricingHealthTile() {
     _pricingHealthLastFetch = now;
     try {
         const r = await fetchT('/api/lane_health', 7000);
-        if (!r || !r.ok) return;
+        if (!r || !r.ok) { _setPricingBeacon('stopped', 'NO DATA', NaN, NaN, NaN); return; }
         const d = await r.json();
-        if (!d || d.available === false || !d.pricing) { if (tile) tile.style.display = 'none'; return; }
+        if (!d || d.available === false || !d.pricing) { if (tile) tile.style.display = 'none'; _setPricingBeacon('stopped', 'NO DATA', NaN, NaN, NaN); return; }
         const pz = d.pricing;
         const share = Number(pz.price_050_share);
         const distinct = Number(pz.distinct_prices_10m);

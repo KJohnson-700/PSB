@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import Counter, deque
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -214,19 +214,50 @@ def _coerce_nonnegative_int(v: Any) -> int:
         return 0
 
 
+def _tail_lines(path: Path, max_lines: int, max_bytes_cap: int = 33_000_000) -> list[str]:
+    """Return the last ``max_lines`` non-empty lines of ``path``, reading only from
+    the END of the file and growing the read until enough complete lines are found
+    (or the whole file / ``max_bytes_cap`` is read). The read size tracks the byte
+    span of the last ``max_lines`` lines — independent of total file size — so a
+    growing append-only log never forces a full-file scan."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            if size == 0:
+                return []
+            read_size = min(size, 262_144)
+            while True:
+                fh.seek(size - read_size)
+                chunk = fh.read(read_size)
+                parts = chunk.decode("utf-8", errors="replace").split("\n")
+                truncated = read_size < size
+                # drop the leading partial line when we didn't read from the start.
+                # when truncated with no newline in the chunk (a single line larger
+                # than the read) this yields [] -> the loop grows and re-reads, so an
+                # oversized final line is never returned truncated.
+                usable = parts[1:] if truncated else parts
+                lines = [p for p in (s.strip() for s in usable) if p]
+                if len(lines) >= max_lines or read_size >= size or read_size >= max_bytes_cap:
+                    return lines[-max_lines:] if len(lines) > max_lines else lines
+                read_size = min(size, read_size * 4, max_bytes_cap)
+    except Exception:
+        return []
+
+
 def _iter_recent_ops_pulses(limit: int = 120) -> list[Dict[str, Any]]:
-    """Read the last N structured ops pulses from disk, best-effort."""
+    """Read the last N structured ops pulses from disk, best-effort.
+
+    2026-07-27 MEM-CHURN FIX: previously read the ENTIRE ops_pulse.jsonl (~92MB
+    and growing all session) on EVERY cycle just to keep the last ``limit`` lines.
+    memray attributed ~500GB of allocation churn/session to this scan, which
+    fragmented native RSS (the balloon). Now reads only the bounded file tail —
+    identical result (same last ``limit`` structured pulses)."""
     if limit <= 0 or not OPS_PULSE_FILE.exists():
         return []
     try:
-        tail: deque[str] = deque(maxlen=limit)
-        with OPS_PULSE_FILE.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if line:
-                    tail.append(line)
         rows: list[Dict[str, Any]] = []
-        for line in tail:
+        for line in _tail_lines(OPS_PULSE_FILE, limit):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:

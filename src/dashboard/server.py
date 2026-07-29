@@ -504,12 +504,22 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z", "strategies": []}
     for strategy_id, label in _LANE_GATE_STRATEGIES:
         strategy_cfg = dict(strategies_cfg.get(strategy_id) or {})
+        # A strategy with master enabled:false never scans or trades — every lane
+        # is effectively closed regardless of per-window gate flags. Without this
+        # the card showed e.g. hype "active" while hype_macro was fully off.
+        strat_enabled = bool(strategy_cfg.get("enabled", True))
         windows: Dict[str, Any] = {}
         for window in _LANE_GATE_WINDOWS:
-            windows[window] = {
-                side: _resolve_lane_gate(strategy_cfg, window, side, strategy_id)
-                for side in _LANE_GATE_SIDES
-            }
+            if not strat_enabled:
+                windows[window] = {
+                    side: {"open": False, "kind": "strategy_disabled", "flag": "enabled"}
+                    for side in _LANE_GATE_SIDES
+                }
+            else:
+                windows[window] = {
+                    side: _resolve_lane_gate(strategy_cfg, window, side, strategy_id)
+                    for side in _LANE_GATE_SIDES
+                }
         closed_count = sum(1 for w in windows.values() for s in w.values() if not s["open"])
         out["strategies"].append(
             {
@@ -1988,16 +1998,31 @@ def _triggers_payload_sync():
         except Exception:
             return None
 
-    try:
-        cfg = _tj.load(open(DATA_ROOT / "dashboard" / "break_triggers.json"))
-    except Exception:
-        return {"triggers": [], "error": "no break_triggers.json"}
-    trigs = cfg.get("triggers") or []
-
     # 2026-07-20: canonical session resolution (was max-by-mtime = stale after restart)
     S = _current_session_dir_str()
     if not S:
         return {"triggers": [], "error": "no session"}
+    _curname = _to.path.basename(S)
+    _btpath = DATA_ROOT / "dashboard" / "break_triggers.json"
+    try:
+        cfg = _tj.load(open(_btpath))
+    except Exception:
+        cfg = None
+    # self-heal (2026-07-27): the definitions file has no external writer, so
+    # (re)generate it here whenever it is missing or pinned to a stale session.
+    # Cheap (one entries scan) and behind the 15s cache. Fixes the perma-blank card.
+    if cfg is None or cfg.get("session") != _curname:
+        try:
+            from src.analysis.break_trigger_board import build as _bt_build, write as _bt_write
+            # pass the server-resolved session so build() and the endpoint agree on
+            # 'current' — prevents the 15s self-heal thrash Codex flagged.
+            cfg = _bt_build(_load_yaml_config(), session_dir=S)
+            _bt_write(cfg)
+        except Exception:
+            pass
+    if not cfg:
+        return {"triggers": [], "error": "no break_triggers.json"}
+    trigs = cfg.get("triggers") or []
     byid = {}
     exits = []
     _epath = _to.path.join(S, "entries.jsonl")
@@ -2519,9 +2544,39 @@ def _get_status_payload_sync(_force: bool = False):
         ),
     )
 
+    # 2026-07-27 LIVE BANKROLL DISPLAY FIX: in LIVE mode this disk/split path was
+    # computing `initial_bankroll(500) + realized`, ignoring the real Olympus wallet
+    # balance the bot refreshes every cycle (bankroll_source live_wallet). That made
+    # a live run read the $500 paper default instead of the actual account value. The
+    # bot publishes the authoritative live bankroll to ops_pulse.jsonl each cycle —
+    # read the newest LIVE pulse and use it as the source of truth. Paper is untouched.
+    _live_pulse = None
+    if not dry_run:
+        try:
+            from src.ops_pulse import _iter_recent_ops_pulses
+
+            _lp_list = _iter_recent_ops_pulses(1)
+            _cand = _lp_list[-1] if _lp_list else None
+            if _cand and _cand.get("dry_run") is False:
+                _live_pulse = _cand
+                if _cand.get("bankroll") is not None:
+                    bankroll_payload = {
+                        "bankroll": round(float(_cand["bankroll"]), 2),
+                        "source": "live_wallet",
+                    }
+        except Exception:
+            _live_pulse = None
+
     open_disk = len(disk_positions)
     open_sum = int(summary.get("open_positions", 0) or 0)
     total_pos = open_disk if open_disk else open_sum
+    # LIVE: disk positions can include phantom/dry entries the bot already reconciled
+    # off Olympus; the live pulse carries the authoritative reconciled open count.
+    if _live_pulse is not None and _live_pulse.get("open_positions") is not None:
+        try:
+            total_pos = int(_live_pulse["open_positions"])
+        except (TypeError, ValueError):
+            pass
     portfolio_disk = {
         "total_positions": total_pos,
         "total_cost": float(summary.get("total_cost", 0) or 0),
@@ -4979,7 +5034,12 @@ def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = No
 def get_lane_health_file():
     """Serve the standalone lane-health detector output (pricing guardrail +
     per-lane loss-cause), written by scripts/psb_lane_health.py cron every 3 min."""
-    p = Path("/home/ubuntu/psb/data/calibration/lane_health.json")
+    # 2026-07-27: read the repo-local path first (was hard-coded to the VPS absolute
+    # path, so the orb/pricing-beacon was permanently dark on the local dashboard).
+    # Falls back to the legacy VPS path so this still works when run on the VPS.
+    p = DATA_ROOT / "calibration" / "lane_health.json"
+    if not p.exists():
+        p = Path("/home/ubuntu/psb/data/calibration/lane_health.json")
     if not p.exists():
         return {"available": False}
     try:
@@ -6004,6 +6064,110 @@ async def get_bnb_analysis():
         return {"error": str(e)}
 
 
+# ─── TAPE / REGIME MONITOR (display-only, best-effort) ───────────────
+# Unified per-asset tape state for the dashboard tape panel. Reads the
+# lightweight in-memory detector getters (asset_regime = ER chop/trend,
+# asset_regime_hmm = quiet/normal/turbulent) and falls back to the
+# transitions-only jsonl when this process has not fed a symbol (split
+# dashboard). Never triggers heavy TA. Direction = 5m drift sign (fast to
+# catch a tape flip); the 4H htf_bias is intentionally NOT used here.
+_TAPE_SYMBOLS = [
+    ("BTC", "BTCUSDT"), ("ETH", "ETHUSDT"), ("SOL", "SOLUSDT"),
+    ("XRP", "XRPUSDT"), ("HYPE", "HYPEUSDT"), ("DOGE", "DOGEUSDT"),
+    ("BNB", "BNBUSDT"),
+]
+
+
+def _tape_jsonl_last(path: Path, symbol: str):
+    """Newest record for `symbol` in a transitions-only jsonl. The state label
+    is current (as of the last transition); numeric fields are frozen there."""
+    try:
+        if not path.exists():
+            return None
+        found = None
+        with open(path, "r") as fh:
+            for line in fh:
+                if symbol not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("symbol") == symbol:
+                    found = rec
+        return found
+    except Exception:
+        return None
+
+
+def _tape_row(label: str, symbol: str) -> Dict[str, Any]:
+    reg_live = hmm_live = False
+    reg = hmm = None
+    try:
+        from src.analysis import asset_regime
+        reg = asset_regime.get_state(symbol)
+    except Exception:
+        reg = None
+    reg_live = reg is not None
+    if reg is None:
+        reg = _tape_jsonl_last(DATA_ROOT / "calibration" / "asset_regime.jsonl", symbol)
+    try:
+        from src.analysis import asset_regime_hmm
+        hmm = asset_regime_hmm.get_state(symbol)
+    except Exception:
+        hmm = None
+    hmm_live = hmm is not None
+    if hmm is None:
+        hmm = _tape_jsonl_last(DATA_ROOT / "calibration" / "asset_regime_hmm.jsonl", symbol)
+    reg = reg or {}
+    hmm = hmm or {}
+    structure = reg.get("state")          # trend / chop / dead
+    er = reg.get("er")
+    since_min = reg.get("since_min")
+    turbulence = hmm.get("state")         # quiet / normal / turbulent
+    drift = hmm.get("drift_5m")
+    probs = hmm.get("probs") or []
+    turb_p = probs[2] if isinstance(probs, list) and len(probs) >= 3 else None
+    try:
+        drift_f = float(drift) if drift is not None else None
+    except (TypeError, ValueError):
+        drift_f = None
+    if drift_f is None:
+        direction = "flat"
+    elif drift_f > 1e-6:
+        direction = "up"
+    elif drift_f < -1e-6:
+        direction = "down"
+    else:
+        direction = "flat"
+    dmap = {"up": "bull", "down": "bear", "flat": "neutral"}
+    d = dmap.get(direction, "neutral")
+    if structure in (None, "dead") or d == "neutral":
+        state = "neutral"
+    elif structure == "trend":
+        state = f"{d}-trend"
+    else:
+        state = f"{d}-chop"
+    return {
+        "label": label, "symbol": symbol, "state": state,
+        "structure": structure, "er": er, "since_min": since_min,
+        "turbulence": turbulence, "turb_p": turb_p, "drift_5m": drift_f,
+        "direction": direction, "stale": not (reg_live or hmm_live),
+    }
+
+
+@app.get("/api/tape")
+async def get_tape():
+    """Unified per-asset tape/regime state for the dashboard tape monitor.
+    Display-only; reads lightweight detector getters (no heavy TA)."""
+    try:
+        assets = [_tape_row(lbl, sym) for (lbl, sym) in _TAPE_SYMBOLS]
+        return {"assets": assets, "ts": int(_time_mod.time())}
+    except Exception as e:
+        logger.error(f"tape endpoint error: {e}", exc_info=True)
+        return {"assets": [], "error": str(e)}
+
+
 # ─── CROSS-ASSET MACRO ALIGNMENT ──────────────────────────────────
 
 _MACRO_ALIGN_ASSETS = [
@@ -6303,6 +6467,9 @@ class ConfigUpdates(BaseModel):
                     "max_exposure_per_trade",
                     "dry_run",
                     "exit_rules",
+                    # 2026-07-27: allow live slippage/depth guard tuning via POST /api/config
+                    # (applies to the running bot with no restart — matches hot-reload set).
+                    "slippage_guard",
                 },
             )
             exit_rules = self.trading.get("exit_rules")

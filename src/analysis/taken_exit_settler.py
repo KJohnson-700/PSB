@@ -48,7 +48,10 @@ EARLY_EXIT_REASONS = frozenset(
     # late-TP exits never enter trades_settled.jsonl and the forward test that
     # judges the change would have no data.
     {"updown_stop_loss", "stop_loss", "updown_time_stop", "take_profit", "updown_expired",
-     "take_profit_late"}
+     "take_profit_late",
+     # 2026-07-26: never_green_cut MUST settle to trades_settled so its hold-to-resolution
+     # counterfactual (winner-cut rate) is measured — it's the break-rule for the graduate.
+     "never_green_cut"}
 )
 
 

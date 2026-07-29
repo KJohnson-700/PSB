@@ -26,6 +26,24 @@ from src.market.microstructure import ob_imbalance, trade_flow_ratio
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
+# 2026-07-27 ADAPTIVE SCANNER: normalize every slug-prefix / strategy variant to one
+# canonical asset key so productivity (fed per-strategy from main.py) can order the
+# timestamp prefixes (btc/doge/...) AND the hourly prefixes (bitcoin/dogecoin/...).
+_SCANNER_ASSET_KEY = {
+    "btc": "btc", "bitcoin": "btc",
+    "sol": "sol", "solana": "sol", "sol_macro": "sol",
+    "eth": "eth", "ethereum": "eth", "eth_macro": "eth",
+    "xrp": "xrp", "xrp_macro": "xrp",
+    "hype": "hype", "hype_macro": "hype",
+    "doge": "doge", "dogecoin": "doge", "doge_macro": "doge",
+    "bnb": "bnb", "bnb_macro": "bnb",
+}
+
+
+def _asset_key(prefix: Any) -> str:
+    p = str(prefix or "").lower()
+    return _SCANNER_ASSET_KEY.get(p, p)
+
 @dataclass
 class Market:
     """Represents a Polymarket market"""
@@ -403,6 +421,12 @@ class MarketScanner:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self._reload_config_fields()
+        # 2026-07-27 ADAPTIVE SCANNER state: per-asset EMA of recent signal activity
+        # (fed by main.py) drives deeper-lookahead slug ORDERING so the inner-fetch
+        # timeout cuts unproductive tails, not producers. _scan_cycle_seq drives the
+        # periodic escape-hatch cycle. Empty/off => canonical order (no behavior change).
+        self._asset_productivity: Dict[str, float] = {}
+        self._scan_cycle_seq: int = 0
         self.session: Optional[aiohttp.ClientSession] = None
         self._sync_driver_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="scanner-driver"
@@ -556,6 +580,87 @@ class MarketScanner:
         except (TypeError, ValueError):
             return 3
 
+    def _resolve_slug_fetch_timeout(self) -> float:
+        """Inner per-window slug-fetch budget (2026-07-27 S2, Codex GO).
+
+        The inner as_completed over the shared slug pool had NO timeout, so one hung
+        slug held the whole window-fetch until the OUTER sync guillotine dropped the
+        ENTIRE window all-or-nothing (hype_alt / 1h windows getting 0 markets under
+        load). Bound the wait BELOW the outer timeout so we cut hung slugs first and
+        keep whatever completed (partial coverage >> a full-window zero). Tunable via
+        trading.scanner_slug_fetch_timeout_sec; default 25, capped at outer-3s.
+        """
+        try:
+            raw = float((self.config.get("trading", {}) or {}).get(
+                "scanner_slug_fetch_timeout_sec", 25.0))
+        except (TypeError, ValueError):
+            raw = 25.0
+        outer = float(getattr(self, "_scanner_sync_timeout", 35.0) or 35.0)
+        return max(5.0, min(raw, outer - 3.0))
+
+    def _adaptive_slug_order_enabled(self) -> bool:
+        return bool((self.config.get("trading", {}) or {}).get(
+            "scanner_adaptive_slug_order", False))
+
+    def _adaptive_escape_every_n(self) -> int:
+        try:
+            return int((self.config.get("trading", {}) or {}).get(
+                "scanner_adaptive_escape_every_n", 5))
+        except (TypeError, ValueError):
+            return 5
+
+    def update_asset_productivity(self, raw_signal_counts: Any) -> None:
+        """Feed per-strategy recent signal counts (called by main.py each scan). Keeps a
+        per-asset EMA (score = 0.8*prev + 0.2*current, Codex-scoped) on the canonical
+        asset key. Signals — NOT fills (fills are downstream of risk/sizing/execution).
+        """
+        if not isinstance(raw_signal_counts, dict):
+            return
+        alpha = 0.2
+        agg: Dict[str, float] = {}
+        for k, v in raw_signal_counts.items():
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv != fv or fv in (float("inf"), float("-inf")):  # NaN/inf guard (Codex nit)
+                continue
+            ak = _asset_key(k)
+            agg[ak] = agg.get(ak, 0.0) + fv
+        cur = self._asset_productivity
+        new = dict(cur)
+        for ak in set(cur) | set(agg):
+            prev = cur.get(ak, 0.0)
+            new[ak] = (1.0 - alpha) * prev + alpha * agg.get(ak, 0.0)
+        # 2026-07-27 atomic reference swap so a concurrent reader (_order_assets, called
+        # in a scanner worker thread) sees either the complete old or complete new map,
+        # never a half-updated dict (Codex concurrency nit).
+        self._asset_productivity = new
+
+    def _order_assets(self, assets: Tuple[str, ...], offset: int) -> List[str]:
+        """Two-phase adaptive ordering (Codex-scoped, guarded).
+
+        COVERAGE: the nearest window (offset 0) ALWAYS keeps canonical order, so every
+        enabled asset gets its most-tradeable window fetched first each cycle. PRIORITY:
+        deeper lookahead (offset>=1) is ordered by EMA productivity DESC (stable ties ->
+        canonical), so the inner-fetch timeout cuts unproductive deep-lookahead tails,
+        never a producer's near window. ESCAPE HATCH: every Nth cycle reverts to canonical
+        to avoid long-term bias. Off / empty productivity / cold-start => canonical
+        (byte-identical to today). This is priority BIAS, never asset suppression.
+        """
+        assets = list(assets)
+        if (
+            offset <= 0
+            or not self._adaptive_slug_order_enabled()
+            or not self._asset_productivity
+        ):
+            return assets
+        esc = self._adaptive_escape_every_n()
+        if esc > 0 and (self._scan_cycle_seq % esc) == 0:
+            return assets
+        prod = self._asset_productivity
+        return sorted(assets, key=lambda a: -float(prod.get(_asset_key(a), 0.0)))
+
     def _should_refresh_updown_1h(self, scan_call_count: int) -> bool:
         every_n = self._resolve_hourly_crypto_scan_every_n_cycles()
         call_n = max(1, int(scan_call_count or 1))
@@ -596,6 +701,7 @@ class MarketScanner:
         Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
         doesn't add to the wall-clock time of the other fetches.
         """
+        self._scan_cycle_seq += 1  # 2026-07-27 ADAPTIVE: drives escape-hatch cadence
         with self._slug_cache_lock:
             self._cycle_empty_event_slugs = set()
             self._slug_fetch_stats = {}
@@ -1500,9 +1606,8 @@ class MarketScanner:
         ampm = "am" if when_et.hour < 12 else "pm"
         return f"{asset_prefix}-up-or-down-{month}-{day}-{year}-{hour_12}{ampm}-et"
 
-    @classmethod
     def _iter_named_event_slugs(
-        cls,
+        self,
         *,
         prefixes: Tuple[str, ...],
         step_minutes: int,
@@ -1513,16 +1618,15 @@ class MarketScanner:
         seen: set[str] = set()
         for offset in range(0, look_ahead + 1):
             window_time = now + timedelta(minutes=offset * step_minutes)
-            for asset_prefix in prefixes:
-                slug = cls._build_human_updown_event_slug(asset_prefix, window_time)
+            for asset_prefix in self._order_assets(prefixes, offset):
+                slug = self._build_human_updown_event_slug(asset_prefix, window_time)
                 if slug in seen:
                     continue
                 seen.add(slug)
                 slugs.append(slug)
         return slugs
 
-    @classmethod
-    def _iter_updown_event_slugs(cls, *, step_minutes: int, look_ahead: int) -> List[str]:
+    def _iter_updown_event_slugs(self, *, step_minutes: int, look_ahead: int) -> List[str]:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         step_seconds = step_minutes * 60
         floor_ts = (now_ts // step_seconds) * step_seconds
@@ -1530,7 +1634,7 @@ class MarketScanner:
         slugs: List[str] = []
         for offset in range(0, look_ahead + 1):
             window_ts = floor_ts + offset * step_seconds
-            for asset_prefix in cls._TIMESTAMP_UPDOWN_PREFIXES:
+            for asset_prefix in self._order_assets(self._TIMESTAMP_UPDOWN_PREFIXES, offset):
                 slugs.append(f"{asset_prefix}-updown-{label}-{window_ts}")
         return slugs
 
@@ -1548,9 +1652,8 @@ class MarketScanner:
         "bnb",
     )
 
-    @classmethod
     def _iter_updown_1h_human_slugs(
-        cls, *, look_ahead: int, now_utc: Optional[datetime] = None
+        self, *, look_ahead: int, now_utc: Optional[datetime] = None
     ) -> List[str]:
         """Hourly Up/Down slugs in the live Polymarket shape.
 
@@ -1563,8 +1666,8 @@ class MarketScanner:
         seen: set[str] = set()
         for offset in range(0, max(0, int(look_ahead)) + 1):
             slot = now_et + timedelta(hours=offset)
-            for asset_w in cls._HOURLY_UPDOWN_ASSETS:
-                slug = cls._build_human_updown_event_slug(asset_w, slot.astimezone(timezone.utc))
+            for asset_w in self._order_assets(self._HOURLY_UPDOWN_ASSETS, offset):
+                slug = self._build_human_updown_event_slug(asset_w, slot.astimezone(timezone.utc))
                 if slug not in seen:
                     seen.add(slug)
                     out.append(slug)
@@ -1683,8 +1786,14 @@ class MarketScanner:
         hit_slugs = 0
         empty_slugs = 0
         future_to_slug = {self._slug_fetch_pool.submit(_fetch_one, slug): slug for slug in slugs}
+        # 2026-07-27 S2 (Codex GO): bound the inner wait so a hung slug can't hold the
+        # whole window until the OUTER sync guillotine drops it all-or-nothing. On inner
+        # timeout, keep the slugs that completed and cancel the rest (partial >> a full
+        # window of zero markets). Cancel only reaps QUEUED futures; a running HTTP call
+        # releases via its own 4/8s timeout — same as before.
+        _slug_timeout = self._resolve_slug_fetch_timeout()
         try:
-            for future in as_completed(future_to_slug):
+            for future in as_completed(future_to_slug, timeout=_slug_timeout):
                 parsed_batch = future.result()
                 if parsed_batch:
                     hit_slugs += 1
@@ -1699,6 +1808,13 @@ class MarketScanner:
                         break
                 if limit is not None and len(markets) >= limit:
                     break
+        except FuturesTimeoutError:
+            _done = sum(1 for f in future_to_slug if f.done())
+            logger.warning(
+                "Scanner: slug-fetch partial timeout %.1fs (%s) kept %d/%d slugs "
+                "(hung slugs cancelled; partial coverage this cycle)",
+                _slug_timeout, stats_key or "?", _done, len(slugs),
+            )
         finally:
             for future in future_to_slug:
                 if not future.done():

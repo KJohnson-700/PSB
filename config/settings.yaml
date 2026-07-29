@@ -7,14 +7,18 @@ polymarket:
   min_liquidity: 10000
   max_spread: 0.05
   scanner_sync_timeout_sec: 35
-  fetch_hype_alt_markets: true
+  # 2026-07-28 OFF (operator): HYPE lane is disabled (hype_macro.enabled=false, 0 fills),
+  # so fetching HYPE-alt markets every cycle was pure wasted scan load (~5-11 slugs/cycle
+  # through the shared slug pool). Was forced true, overriding the code's default (which
+  # already follows hype_macro.enabled). Re-enable together with the HYPE lane if restored.
+  fetch_hype_alt_markets: false
   gamma_http_max_retries: 3
   gamma_http_retry_backoff_base_sec: 0.5
   creds_max_age_hours: 144
   auto_rederive_credentials: true
   rederive_credentials_on_start: true
-  signature_type: 1
-  funder_address: '0x932845f226ffb93ec14d37add977446cf0d8a6eb'
+  signature_type: 3
+  funder_address: '0x7d81246BbE1e91f84f5A791D56fb1865545D78A9'
 hyperliquid:
   request_timeout_sec: 8
   range_request_timeout_sec: 12
@@ -31,40 +35,13 @@ final_window_topup:
   max_topup_price: 0.99
   sampler_enabled: true
   sampler_window_mins: 1.5
-# Spot-reversal bank — SHADOW instrumentation for the exit gap-through leak (2026-07-22).
-# Flags when an in-profit hold-to-resolution position's UNDERLYING spot reverses before the
-# CLOB book gaps through the trail floor. mode: off | shadow | live. SHADOW logs
-# SPOT_REVERSAL_SHADOW would-bank events only (never exits) so Hermes can forward-measure
-# whether banking-at-reversal beats the actual realized exit before it is ever flipped live.
-spot_reversal_bank:
-  mode: shadow
-  arm_pct: 0.12      # only consider positions whose peak pnl cleared this (matches trail arm)
-  reversal_pct: 0.003  # underlying spot reversal from favorable extreme to flag (0.3%)
-# Never-green fast-cut — SHADOW instrumentation for the DOMINANT exit leak (2026-07-22).
-# A position whose peak pnl never clears green_threshold_pct within cut_after_secs was
-# (session 043413) 0% WR / −$98 / rides to −36% avg — separable from winners by MFE-timing.
-# mode: off | shadow | live. SHADOW logs NEVER_GREEN_SHADOW would-cut events only (never
-# exits) so Hermes can forward-measure would-save (rode further down) vs false-cut
-# (recovered) before it is ever flipped live.
-never_green_cut:
-  mode: shadow
-  green_threshold_pct: 0.02  # peak pnl below this == "never went green"
-  cut_after_secs: 60         # fallback threshold if a window is absent from the map below
-  # 2026-07-23 per-window thresholds: 1h lanes develop slower than 5m (winners can go
-  # green at 3-5min), so a single 60s threshold false-cuts slow 1h winners. Measures each
-  # timeframe at a fit threshold — the global 1h never-green drag (-$38, holds 40-234min)
-  # needs ~300s, not 60s. SHADOW only; logs would_cut per window, never exits.
-  cut_after_secs_by_window:
-    5m: 60
-    15m: 120
-    1h: 300
 trading:
   persistent_session: false
   cycle_interval_sec: 60
   exit_check_interval_sec: 3
   ws_candle_feed:
     enabled: true
-  execution_provider: olympus
+  execution_provider: clob
   entry_mode: marketable
   entry_maker_wait_sec: 8
   entry_hybrid_windows:
@@ -72,24 +49,50 @@ trading:
   - 1h
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
-  crypto_hourly_scan_every_n_cycles: 1
+  # 2026-07-28 THROTTLE 1->3 (operator GO, Codex scanner audit): 1h markets were re-fetched
+  # EVERY 60s cycle (~35 slugs) through the shared 8-worker pool though 1h barely moves;
+  # 3 = every 3rd cycle. Frees ~35/123 slugs/cycle to relieve the slug-pool race/starvation
+  # (code default is already 3). Restart-class (scanner reads at init/cycle).
+  crypto_hourly_scan_every_n_cycles: 3
   overrun_recovery_sleep_sec: 5
   dry_run: true
+  # 2026-07-29: opt-in (default false). When true + live, the reconciler ADOPTS
+  # unmanaged venue positions (fresh-restart orphans) so the bot manages/exits +
+  # displays them instead of stranding them. Adopt CODE staged separately; keep false
+  # until that lands. See LIVE-LAUNCH note.
+  adopt_unmanaged_positions: false
   slippage_guard:
     enabled: true
     mode: enforce
+    # 2026-07-29 edge-preserving guard: blocks an entry only when the fresh-book move
+    # has eroded the signal's edge below this floor (residual_edge = signal.edge - slip).
+    # 0.0 = allow while any edge survives; raise (e.g. 0.02) to require residual edge.
+    min_residual_edge: 0.0
     max_slippage_cents: 0.02
-    max_spread_cents: 0.03
-    require_full_depth: true
-    depth_price_ceiling_cents: 0.0
+    # 2026-07-28: calibrated for real Polymarket crypto up/down books (were starving
+    # LIVE entries — every signal killed by depth/spread while paper filled them). 3c
+    # spread cap was tighter than normal 2-4c books; depth ceiling 0.0 measured depth
+    # at the (unreachable) bid instead of the ask you actually pay. Keeps enforce +
+    # slippage protection; blocks only genuinely bad books (zero real depth, >5c spread).
+    max_spread_cents: 0.05
+    # 2026-07-29 (operator GO): false — marketable FAK entries fill partial against
+    # available depth; requiring the FULL requested size at the limit blocked orders
+    # only ~10% too big for thin Polymarket books (depth_at_limit 16.44 < requested 18.39).
+    require_full_depth: false
+    depth_price_ceiling_cents: 0.02
   clob_ws:
     enabled: true
-    ws_app_ping_sec: 0  # 2026-07-12 keepalive DISABLED: PING got 0 PONG from Polymarket market channel; server resets faster than 10s cycle = server/network-side churn, not client-fixable
+    ws_app_ping_sec: 0
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
     drive_scanner_prices: true
-    price_max_age_sec: 45
+    # 2026-07-29: RESTORED to 8 (last-working-live value; the 869-revert had loosened it
+    # to 45). At 45 the scanner served marks up to 45s old → stale signal price (17s mark
+    # ages observed) = the live staleness the operator flagged. 8 = aggressive refetch,
+    # fresh signals. NOTE: a 07-28 good-session analysis argued 45 was a sweet spot (age8
+    # cuts some EV) — but live experience ran clean at 8; revisit at lane review. RESTART-class.
+    price_max_age_sec: 8
     subscribe_universe: true
     universe_subscribe_cap: 400
   default_position_size: 6
@@ -97,7 +100,11 @@ trading:
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
-  max_topic_exposure: 0.2
+  # 2026-07-28 INERT (5.0=never triggers). Codex "fixed" the previously-dead topic cap this
+  # session, but operator did not want a new untested gate on live — kept inert so a fresh
+  # live launch behaves EXACTLY like the tested paper bot (no drift). Set to ~0.20 later to
+  # ACTIVATE concentration protection (eth-ladder), but validate in paper first.
+  max_topic_exposure: 5.0
   daily_loss_limit: 0.15
   kelly_fraction: 0.37
   regime:
@@ -107,6 +114,20 @@ trading:
   regime_feed:
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
+  # 2026-07-28 ENTRY-TAPE SHADOW (never-green research): logs the fill-instant sub-30s
+  # spot micro-move per entry to data/calibration/tape_entry_shadow.jsonl (join to EXIT
+  # mfe/pnl on trade_id). SHADOW ONLY — never affects entries/size/exits. Tests whether
+  # never-green losers are momentum CHASERS (H_exhaust) vs counter-tape (H_align).
+  entry_tape_shadow:
+    enabled: true
+    mode: shadow
+    lookbacks_sec: [10, 20, 30]
+  # 2026-07-28 PER-ASSET entry-freshness cap (seconds). XRP's edge dies past ~20s price-
+  # age (good sessions n1197: xrp 20s+ = -$16.6, but +$146/+$91 at 3-8s/8-20s); ETH/BNB/
+  # BTC/SOL stay +EV out to 45s so they get NO cap (global price_max_age=45 governs).
+  # Unset strategy = no cap. Skip reason: entry_price_too_stale.
+  entry_freshness_caps:
+    xrp_macro: 20
   exit_rules:
     enabled: true
     take_profit_pct: 0.3
@@ -117,22 +138,21 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.15
     updown_hold_winners_to_resolution: false
+    # 2026-07-28 SEVERITY-GATED CUTS (real never-green fix): only cut when actually deep
+    # in loss, so shallow never-green/adverse positions ride to recovery. Realized: gating
+    # never_green_cut at pnl<=-8% saves +$33.61 (0 false-cut winners); time_stop at <=-20%
+    # saves +$19.62 (time_stop was net-harmful). 0.0 = off. Restart-class (live_testing.py).
+    # 2026-07-28 CHERRY-PICK REVERT (Codex audit + operator GO): severity cuts held
+    # never-green losers to -8/-13% in live (biggest loss bucket, 19% WR session). Back
+    # to baseline early-cut behavior for live safety. 0.0 = off (original never_green_cut).
+    never_green_cut_min_loss_pct: 0.0
+    updown_time_stop_min_loss_pct: 0.0
     stop_use_executable_price: true
     stop_dual_confirm_midpoint: true
     stop_spread_guard_max: 0.1
     realistic_paper_fills: false
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.3
-    # 2026-07-21 wide-book STOP-THROUGH (default OFF; requires restart — main.py loop).
-    # When a two-sided book is wider than exit_max_book_spread the exit eval is SKIPPED
-    # entirely (phantom-stop guard, 2026-07-11 fix-a) — which let collapsing positions
-    # ride PAST their stop to ~0 near resolution (doge 1h|up -$10.47 0.53->0.16, 07-21;
-    # 4/5 doge losses gapped the 0.30 stop on NORMAL latency = stop never evaluated).
-    # true => still evaluate the exit on the SANE /midpoint (confirm-ticks + executable
-    # price guard phantoms; a /midpoint above stop leaves winners uncut). Break: revert
-    # false if it cuts a two-sided winner in a thin patch over the next ~15-20 closes.
-    wide_book_stop_through_enabled: true  # 2026-07-21 operator ORDER: ENABLE. Caps the stop-gap-throughs that ate the winners (xrp 5m up lost ~$53 to 10 gaps; doge 13 gaps). Winner-guard in live_testing.py requires /midpoint to confirm before the executable stop fires on a wide book. Needs the restart to take effect. Break: revert false if it cuts a two-sided winner in a thin patch over ~15-20 closes.
-    wide_book_hold_to_resolution_secs: 120  # 2026-07-21 operator GO: when an updown book is WIDE (>exit_max_book_spread) AND <=this many secs to resolution, HOLD to settle instead of exiting on the junk wide-book mark. Root: bnb 5m -$12.47 (mkt 3006688) — book swung ~70% on a FLAT underlying (BNB $572.43->572.44), aligned short marked at -51% into a 0.32-0.49 spread. Near resolution the true 0/1 settle beats a wide-book mark. Takes precedence over wide_book_stop_through when close; far-from-resolution collapses still hit stop-through. 0=off. Needs restart (main.py). Break: raise/lower secs or set 0 if it rides real losers to full loss over ~15-20 closes.
     exit_mark_use_clob_midpoint: true
     updown_stop_confirm_ticks: 2
     updown_min_hold_anchor_window_open: true
@@ -181,51 +201,19 @@ trading:
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
-              updown_stop_loss_pct: 0.3  # 2026-07-13 starve-4 Codex condition: reopened bearish shorts must not be stopless binary rides; hold stays
+              updown_stop_loss_pct: 0.3
               updown_trail_arm_pct: 0.0
-              updown_hold_winners_to_resolution: false  # 2026-07-14 E-2 btc15 carrier: TP0.5 banks 7 round-trip losers (-$31.5); hold->false required for TP. Break: 15+ closed, revert if underperforms no-TP by $15 or 2+ peak>=+40% still red
-              take_profit_pct: 0.5  # 2026-07-14 E-2 operator+Codex GO: TP banks gap-through round-trips. counterfactual +$39 btc15. probationary.
-              # 2026-07-20 LEVER 1 (operator GO, Codex GO — "deploy this first"): time-gated
-              # late-TP. Sim over 07-13+ measuring BOTH sides (recovered from green-stopped
-              # losers MINUS clipped from winners): TP0.15 +21.68 | 0.20 +31.38 | 0.25 +35.40
-              # | 0.30 +47.30 | 0.40 +25.16 -> 0.30 is the peak and the curve is positive at
-              # EVERY threshold, so this lane is robust to the exact value. n=21 green-stopped,
-              # mfe p25=21% med=36%. 0.30 < this lane's take_profit_pct 0.5, and the late-TP
-              # branch is evaluated BEFORE normal TP, so it is NOT shadowed.
-              # GATE CAVEAT: the sim was UNGATED (no time-of-peak data available). 5.0 min on a
-              # 15m window (~1/3) is a judgement call, not a measured value; it makes the TP fire
-              # LESS often than simulated, so realized gain will be below +47.30.
-              # BREAK: set both keys to 0 if this lane goes net <= -$15 over the next 15 closed,
-              # or if >=3 trades fire late-TP and would have resolved better held.
-              take_profit_late_pct: 0.30
-              take_profit_late_gate_mins: 5.0
+              updown_hold_winners_to_resolution: false
+              take_profit_pct: 0.5
           1h:
             up:
               updown_stop_loss_pct: 0.3
               updown_hold_winners_to_resolution: true
-              updown_trail_gap_pct: 0.10  # 2026-07-08 D3 (Codex GO): global gap 0.15 left +10-15% peaks unbanked (audited 23:03 loss: peak +12.3% -> stopped -2.8%). With arm 0.10 = gap, floor = peak-0.10 >= 0 whenever armed: pure positive-floor banker, never tightens reds
-              updown_trail_arm_pct: 0.0  # 2026-07-13 operator GO (PURE HOLD): trail OFF — P1 arm 0.25 intercepted all 9 winners today at peak-0.10 ($1-3 each) before resolution (~$17/win at $20 floor); hold+stop 0.3 only, parity w/ btc 15m hold lanes
-              # 2026-07-20 LEVER 1 (operator GO, Codex GO). This lane is the single biggest
-              # give-back on the board: 45 of 105 trades peaked >=10% and still closed RED,
-              # $526 handed back, avg peak +36.8%, 71% stop share. hold_winners=true means
-              # normal TP is DISABLED here, so late-TP is the ONLY take-profit -> not shadowed.
-              # Sim over 07-13+ counting BOTH sides (recovered from losers MINUS clipped from
-              # winners): TP0.15 +39.64 | 0.20 +28.40 | 0.25 +30.75 | 0.30 +20.32 | 0.40 -5.92.
-              # 0.15 is the peak. NOTE the old 0.40 spec is NET NEGATIVE — confirming the
-              # earlier finding that 0.4 was the wrong value for this lane.
-              # THIN MARGIN: at 0.15 the gross split is +345.17 recovered vs -305.52 clipped,
-              # so the net is only ~11% of the gross. This lane is genuinely close to a
-              # coin-flip on whether to bank or hold — treat it as probationary.
-              # GATE CAVEAT: sim was UNGATED (no time-of-peak data). 20.0 min on a 60m window
-              # (~1/3) is a judgement call; it makes the TP fire less often than simulated.
-              # BREAK: set both keys to 0 if net <= -$15 over the next 15 closed, or if >=3
-              # late-TP fires would have resolved better held (this lane's edge is resolution
-              # wins — an over-eager TP amputates the runners, which failed 07-13 and 07-16).
-              take_profit_late_pct: 0.15
-              take_profit_late_gate_mins: 20.0
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0
             down:
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 parity (operator GO)
-              updown_trail_gap_pct: 0.10
+              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.1
           5m:
             up:
               updown_in_profit_stop_trigger_pct: 0.04
@@ -239,15 +227,15 @@ trading:
               updown_stop_cents: 0.015
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_stop_loss_pct: 0.15  # 2026-07-15 BNB-LONGS-REVIVE operator GO (T-1/E-1 pattern): bnb 5m up was naked (161/272 bnb-long losers had mfe<0.05 = ride-to-zero drainers); stop cuts them. Break: 10 closed, re-disable longs if net<=-$20/WR<38%  # 2026-07-15 BNB-5M-UP MODIFY (operator+Codex GO): 0.70 too wide to catch binary collapse (-$12.67 ride0 despite stop); 0.15 + flatten window below. Break: 10cl, disable_buy_yes if net<=-$20 or WR<38%
-              dynamic_stop_enabled: false  # 2026-07-15 BNB-LONGS-REVIVE: pin -0.70
+              updown_stop_loss_pct: 0.15
+              dynamic_stop_enabled: false
               updown_hold_winners_to_resolution: false
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_hold_winners_to_resolution: false
-              updown_stop_loss_pct: 0.70  # 2026-07-14 BNB-REVIVE operator GO (T-1/E-1 pattern): bnb 5m NO re-enabled WITH this stop so it cuts the -60/-82% whipsaw drainer instead of riding to zero. Break: 10 closed, re-disable if net<=-$15 or WR<35%
-              dynamic_stop_enabled: false  # 2026-07-14 BNB-REVIVE: pin -0.70 (parity w/ E-1/T-1)
+              updown_stop_loss_pct: 0.7
+              dynamic_stop_enabled: false
           15m:
             up:
               updown_stop_loss_pct: 0.15
@@ -256,15 +244,17 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: false
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              # 2026-07-28 HOLD-TO-RESOLUTION REVERTED (cherry-pick, Codex audit): capital
+              # lockup risk too high pre-live; unexercised. Back to normal exits.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
       eth_macro:
         updown_stop_cents: 0.02
@@ -272,14 +262,24 @@ trading:
         window_lane_overrides:
           1h:
             up:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: false
-              take_profit_pct: 0.22  # 2026-07-21 per-lane TP (operator GO, Codex GO): +869 winner +$22/n22, MFE p50 29% -> global 0.30 barely caught it = give-back. TP 0.22 banks the median peak. hold=false so normal TP fires.
+              # 2026-07-28 SWITCH TO HOLD-TO-RESOLUTION (settler: held 59% vs real 32%,
+              # +$59 gap n=22). Same Codex-traced full exit-path disable as xrp 1h down;
+              # 1h is exempt from never_green_cut (main.py:3753); hold params side-agnostic.
+              # Forward-test only.
+              updown_hold_winners_to_resolution: true
+              updown_stop_loss_pct: 0.0
+              updown_trail_arm_pct: 0.0
+              updown_trail_gap_pct: 0.0
+              updown_exit_window_mins: 0.0
+              updown_flatten_before_resolution_sec: 0.0
+              updown_stop_cents: 1.0
+              updown_stop_cents_high_entry: 1.0
+              updown_max_hold_mins: 75.0
+              take_profit_late_pct: 0.0
+              take_profit_late_gate_mins: 0.0
             down:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
           5m:
             down:
@@ -301,7 +301,6 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: false
-              take_profit_pct: 0.15  # 2026-07-21 per-lane TP (operator GO, Codex GO): +869 marginal -$9.78/n49, MFE p50 22.6% -> never reached global 0.30 = 100% give-back. TP 0.15 salvages the small peaks. hold=false.
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.02
@@ -320,13 +319,13 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              updown_stop_loss_pct: 0.0  # 2026-07-13 T1 operator GO (Codex GO): xrp-engine exit shape; 10 hard-stops -$6.68 avg ate the lane; break <=-$20/10 closes or 2 full-ride losses -> 0.15
-              updown_hold_winners_to_resolution: true  # T1: xrp shape — winners run to resolution, trail banks
-              updown_trail_arm_pct: 0.1  # T1: xrp shape
-              updown_trail_gap_pct: 0.1  # T1: xrp shape
+              updown_stop_loss_pct: 0.0
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.1
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
-              updown_exit_window_max_fraction: 0.45  # 2026-07-17 operator GO: REVERT my 07-16 widen (0.45->0.55). Codex pre-warned '0.55 may realize more late losers' and it materialized: lane ran +$91.02/WR70% on 0.45 (prior 50h) then -$31.19/WR36% w/ 5 ride0 in 15h on 0.55 (3 late flattens exiting 0.04-0.15 + time_stop rides to 0.01 of -$14.69/-$15.00). This lane has updown_stop_loss_pct 0.0 (no price stop, by design) so the flatten IS the loss-cutter - delaying it removed the only cut. Restores the winning window's exact exit config.
+              updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
@@ -351,12 +350,12 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
             down:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
       hype_macro:
         window_lane_overrides:
@@ -388,9 +387,8 @@ trading:
               updown_stop_loss_pct: 0.15
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_trail_arm_pct: 0.10   # 2026-07-15 HYPE-15M-EXIT-LEAK (operator+Codex GO): explicit, = global
-              updown_trail_gap_pct: 0.10   # 2026-07-15 HYPE-15M-EXIT-LEAK: was global 0.15 -> +20% peaks floored at +5.8% & gapped through to stops (9/16 stops green, ~-$8). Gap 0.10 floors reversers ~+10%, runners uncapped. Break: 10 closed hype 15m up, revert 0.15 if net<=-$8 or WR<35%
-              take_profit_pct: 0.15  # 2026-07-21 per-lane TP (operator GO, Codex GO probationary): +869 +$3.62/n30, MFE p50 17.7% -> global 0.30 unreachable. TP 0.15 banks the median (preempts trail on >15% runners; monitored). hold inherits global false.
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.1
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.02
@@ -403,12 +401,12 @@ trading:
               updown_hold_winners_to_resolution: true
           1h:
             up:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
             down:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
       xrp_macro:
         updown_stop_cents: 0.03
@@ -417,32 +415,30 @@ trading:
           1h:
             up:
               updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: false  # 2026-07-17 operator+Codex GO: xrp 1h|up was 1 of only TWO xrp lanes with NO per-lane exit tuning (2 keys vs 5-13 on every sibling) and they are the only two bleeding. hold=true GATES BOTH exits (live_testing.py:528): take_profit never fires and green positions can't flatten => 0 TP exits across 54 trades, while the hold=false DOWN siblings on the SAME asset bank 12 (15m) and 3 (1h) TPs and are green. Worst losses were all GREEN FIRST: 15m|up -$11.58 (+21% mfe -> 0.12); 1h|up -$5.06 (+44% -> 0.00), -$5.05 (+17% -> 0.00) = -$21.69 over 3 trades vs -$10.82 combined net. xrp 1h|up reaches resolution only 3/37 so hold_winners harvests ~no resolution edge here, unlike btc/doge 1h|up (mfe p50 +29.8%, +$16.62) whose give-back is NOT trail-fixable (07-13, 07-16 Prop-A) — and this is a TP, not a trail. CALIBRATION not proven-optimization (Codex). xrp 5m + asset-level UNTOUCHED (5m|up inherits asset-level stop_cents; 5m carries ~$300). Break: revert true if positive-MFE-to-stop failures don't drop over 15-20 new closes.
-              take_profit_pct: 0.35  # 2026-07-21 per-lane (operator GO, Codex GO): 0.4 never fired (+869 MFE p50 13% << 0.4). Kept HIGH (0.35) as a spike backstop only — the real banker is the trail below. Codex: a low hard TP (0.18) would amputate the p90=67% runners.
-              updown_trail_arm_pct: 0.12  # 2026-07-21 (Codex): bimodal lane — trail banks the 13% median while letting the 67% p90 runners ride. arm at +12%.
-              updown_trail_gap_pct: 0.10  # 2026-07-21 (Codex): floor = peak-10%, runner-preserving
+              updown_hold_winners_to_resolution: false
+              take_profit_pct: 0.4
             down:
-              take_profit_pct: 0.4  # 2026-07-13 operator GO: winner lane (56%WR +$5.33 today); 0.3 TP capped best wins; trail arm0.25/gap0.10 stays as backstop
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              # 2026-07-28 HOLD-TO-RESOLUTION REVERTED (cherry-pick, Codex audit): capital
+              # lockup / worst-case risk too high pre-live; unexercised. Back to normal exits.
+              take_profit_pct: 0.4
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: false
           5m:
             up:
-              updown_stop_loss_pct: 0.70  # 2026-07-14 T-1 operator GO (mirrors E-1): was 0.0 naked positive-floor banker — 6 time_stops rode red to near-zero (mfe=0, mae -53..-97%) = -$35.12; lane net +$23.50 dragged by tail. Stop fires independent of hold=true so winners still bank. Break: 10 closed, revert 0.0 if net-neg AND >=2 stopped-then-would-win
-              dynamic_stop_enabled: false  # 2026-07-14 T-1: pin exact -0.70 (parity w/ E-1)
-              take_profit_late_pct: 0.25  # 2026-07-21 per-lane give-back (operator GO, Codex GO): the engine — +869 +$79/n128, MFE p50 37%. hold=true DISABLES normal TP, so late-TP (ungated by hold) is the only way to bank the give-back. Fires after 1.5m if up>=25%. Keeps stop 0.70 winning shape.
-              take_profit_late_gate_mins: 1.5
-              updown_trail_arm_pct: 0.10
-              updown_trail_gap_pct: 0.10
+              updown_stop_loss_pct: 0.7
+              dynamic_stop_enabled: false
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.1
               updown_hold_winners_to_resolution: true
-              updown_exit_window_mins: 1.5  # 2026-07-16 AUDIT-1 operator GO (Codex): flatten lock-in. Lane +$85.74 WR61% but payoff 0.91 w/ ride0=5 (hold+0.70 stop -> gap-through to binary 0). Mirror the xrp 5m|down sibling flatten; fires only near resolution on deep-red, keeps winners. Break: revert if net drops or winners cut /10cl
-              updown_exit_window_max_fraction: 0.45  # 2026-07-16 AUDIT-1: paired flatten fraction (= sibling)
+              updown_exit_window_mins: 1.5
+              updown_exit_window_max_fraction: 0.45
             down:
-              updown_stop_loss_pct: 0.70  # 2026-07-14 E-1 operator+Codex GO: was 0.0 (D1 red-rides-to-resolution) — naked loss-side rode fades to zero (0/3 -$25). Counterfactual -0.70: WIN sess +$8.03, NOW +$1.40, 0 winners cut (worst reversion mae -0.66). Break: 10 closed, revert if net-neg AND >=2 stopped-then-would-win
-              dynamic_stop_enabled: false  # 2026-07-14 E-1: pin exact -0.70 (global dynamic mult would shave razor-thin winner margin)
-              updown_trail_arm_pct: 0.10  # 2026-07-08 D1 (Codex GO): positive-floor-only banker - with stop 0.0 the trail can ONLY fire above breakeven (max(-0.0, peak-gap)); red positions still hold to resolution. Fixes whipsaw give-back (07-06+ WR 17-22%, loser peaks avg +54% all returned)
-              updown_trail_gap_pct: 0.10  # 2026-07-08 D1: gap 0.10 not 0.15 per Codex (0.15 recreates a 10-15% peak dead zone)
+              updown_stop_loss_pct: 0.7
+              dynamic_stop_enabled: false
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.1
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -450,12 +446,12 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_hold_winners_to_resolution: false  # 2026-07-14 E-2 xrp5m engine: TP1.0 banks mean-reversion peaks before roundtrip (0.5 cuts too early); hold->false. Break: 20+ closed, revert if <actual by $15 or cuts +100% winners
-              take_profit_pct: 1.0  # 2026-07-14 E-2 operator+Codex GO: TP banks gap-through round-trips. counterfactual +$21 xrp5m. probationary.
+              updown_hold_winners_to_resolution: false
+              take_profit_pct: 1.0
           15m:
             up:
               updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: false  # 2026-07-17 operator+Codex GO: xrp 15m|up was 1 of only TWO xrp lanes with NO per-lane exit tuning (2 keys vs 5-13 on every sibling) and they are the only two bleeding. hold=true GATES BOTH exits (live_testing.py:528): take_profit never fires and green positions can't flatten => 0 TP exits across 54 trades, while the hold=false DOWN siblings on the SAME asset bank 12 (15m) and 3 (1h) TPs and are green. Worst losses were all GREEN FIRST: 15m|up -$11.58 (+21% mfe -> 0.12); 1h|up -$5.06 (+44% -> 0.00), -$5.05 (+17% -> 0.00) = -$21.69 over 3 trades vs -$10.82 combined net. xrp 1h|up reaches resolution only 3/37 so hold_winners harvests ~no resolution edge here, unlike btc/doge 1h|up (mfe p50 +29.8%, +$16.62) whose give-back is NOT trail-fixable (07-13, 07-16 Prop-A) — and this is a TP, not a trail. CALIBRATION not proven-optimization (Codex). xrp 5m + asset-level UNTOUCHED (5m|up inherits asset-level stop_cents; 5m carries ~$300). Break: revert true if positive-MFE-to-stop failures don't drop over 15-20 new closes.
+              updown_hold_winners_to_resolution: false
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.02
@@ -470,18 +466,18 @@ trading:
         window_lane_overrides:
           5m:
             down:
-              updown_exit_window_mins: 1.5  # 2026-07-16 DOGE-5M-DOWN RIDE0 FIX (operator+Codex GO, flatten-only): sibling flatten cuts the ride0 tail (was 16 ride0). Keep hold:true+stop0.70 winner. Promote to xrp-mirror if flatten still leaks.
+              updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_hold_winners_to_resolution: true  # 2026-07-13 T2: xrp-engine exit shape from first fill (packaged experiment per Codex)
-              updown_stop_loss_pct: 0.70  # 2026-07-14 T-1 operator GO (mirrors E-1): was 0.0 naked — 6 time_stops rode red to near-zero (mfe=0, mae -69..-94%) = -$33.13; lane net +$5.35 nearly cancelled by tail. Stop fires independent of hold. Break: 10 closed, revert 0.0 if net-neg AND >=2 stopped-then-would-win
-              dynamic_stop_enabled: false  # 2026-07-14 T-1: pin exact -0.70 (parity w/ E-1)
-              updown_trail_arm_pct: 0.1  # T2: xrp shape
-              updown_trail_gap_pct: 0.1  # T2: xrp shape
-              updown_stop_cents: 0.015  # T2: xrp shape
-              updown_in_profit_stop_trigger_pct: 0.04  # T2: xrp shape
-              updown_in_profit_stop_tighten_to_pct: 0.08  # T2: xrp shape
+              updown_hold_winners_to_resolution: true
+              updown_stop_loss_pct: 0.7
+              dynamic_stop_enabled: false
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.1
+              updown_stop_cents: 0.015
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             up:
               updown_hold_winners_to_resolution: false
               updown_stop_loss_pct: 0.15
@@ -493,20 +489,27 @@ trading:
               updown_stop_loss_pct: 0.15
           1h:
             up:
-              updown_stop_loss_pct: 0.30  # 2026-07-14 D-1h operator+Codex GO (probationary): was 0.0 naked — 2 losers rode 0.55->0.0 (-$15)+0.54->0.01 (-$4.95). btc 1h parity. Break: 6 closed, revert if stop-exits dominate + net<=-$15
+              updown_stop_loss_pct: 0.3
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
-              updown_trail_gap_pct: 0.10  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
-              updown_trail_arm_pct: 0.25  # 2026-07-13 P1 operator GO: 1h peaks are small; global arm0.10/gap0.15 scalped winners to cents (xrp 1h +$0.83 off +24% peak). Arm later, keep more.
+              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
     updown_flatten_before_resolution_sec: 60
-    updown_time_stop_respect_hold_lanes: []  # 2026-07-08 D2 DISARMED (Codex NO-GO): +$32/12 evidence was trend-era; holding mild-adverse to resolution IS the whipsaw failure mode. Re-evaluate post-D1-trail with fresh realized exits
+    updown_time_stop_respect_hold_lanes: []
     updown_time_stop_hold_severe_pct: 0.5
     updown_time_stop_hold_min_excursion: 0.04
   execution_fees:
     enabled: false
     crypto_updown_15m_taker_fee_rate: 0.072
+  warmup:
+    enabled: true
+    ready_cycles: 3
+    min_ws_coverage: 0.8
+    min_universe: 10
+    max_sync_ms: 8000
+    max_warmup_sec: 180
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -552,7 +555,7 @@ regime_fade:
   raise_bar_min_edge_bonus: 0.08
   cache_ttl_sec: 60
 lane_calibration:
-  ghost_weight: 0.0  # 2026-07-13 operator order: ghosts must not feed live posteriors
+  ghost_weight: 0.0
   enabled: true
   shadow_mode: false
   paper_shadow_mode: false
@@ -568,7 +571,7 @@ lane_calibration:
   beta_blend_min_bias: 0.05
   per_lane_thresholds:
     enabled: true
-    recompute_on_settle: false  # 2026-07-13 ghost-derived; frozen per operator
+    recompute_on_settle: false
     recompute_min_new_settles: 25
     min_bucket_n: 50
     wr_veto_threshold: 0.4
@@ -592,44 +595,39 @@ entry_policy:
     size_multiplier: 1.0
 strategies:
   bitcoin:
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    buy_no_min_no_price_5m: 0.49  # 2026-07-16 STAGED (operator GO, restart-only w/ code port): mirror eth 5m short cap yes<=0.51; stops shorting into up-lean. 5m-ONLY so 15m|down winner untouched. Break: revert if 5m|down net<=-$8/10cl post-restart
-    buy_yes_lane_repair:  # 2026-07-16 ENTRY-FAMILY GATE (operator GO, probationary): btc 1h up trend-chase longs
+    buy_no_min_no_price_5m: 0.49
+    buy_yes_lane_repair:
       enabled: true
       rules:
-      - name: btc_1h_up_drift_trendchase_cut_20260716  # 'drift' family = trend-chase longs, -$21.84/30%WR/n10 (peak-then-reverse). min_edge_add gates; keeps htf_bearish_side_long (+$24). Break: revert if btc 1h up net drops OR kept families turn neg over next ~10 fills
+      - name: btc_1h_up_drift_trendchase_cut_20260716
         window: 1h
         entry_family: drift
-        min_edge_add: 0.30
+        min_edge_add: 0.3
         probability_haircut: 0.0
-      - name: btc_1h_up_htf_bullish_trendchase_cut_20260716  # 'htf_bullish_side_long' = trend-follow longs, -$14.85/25%WR/n12
+      - name: btc_1h_up_htf_bullish_trendchase_cut_20260716
         window: 1h
         entry_family: htf_bullish_side_long
-        min_edge_add: 0.30
+        min_edge_add: 0.3
         probability_haircut: 0.0
-    # 2026-07-20 SIZING REVERSAL (operator GO, Codex GO). The 07-13 winner-lift below was
-    # correct WHEN MADE, but this lane has since INVERTED and is now the worst bleeder on the
-    # board: aggregate 07-13+ n=105 WR36.2% -$35.27, last 3 days -$86.33, current session
-    # 0W/1 -$6.36 (confirmed by aggregate AND live session, per the cross-check rule).
-    # Worse, it was the ONLY lane whose floor ignored the MINIMAL loss-streak brake — i.e. it
-    # was forced to keep betting ~$20 exactly when the bot was trying to de-risk. Armor off,
-    # forced floor removed, cap cut. BREAK (Codex-tightened): restore the $20 floor and cap 25
-    # ONLY if the next 15 closed are net >= +$15 AND WR >= 45%. Do NOT auto-restore
-    # ignores_minimal — re-arm that only after a SECOND confirmed positive sample.
-    lane_min_notional_ignores_minimal_1h_up: false  # 2026-07-20: brake must apply to this lane
-    lane_max_notional_1h_up: 25  # 2026-07-20 EVE: RESTORE baseline 25 (operator: size winners up) — lane now 3W/0L +$8.40 via late-TP, only ~$6/win throttled at 10; the 07-20 inversion reversed. Codex GO.
-    btc_5m_long_sitout_on_1h_hist_rising: false  # 2026-07-08 operator REMOVE: gated btc 5m LONG (+$77 live winner); locked off (was auto-off by default, now explicit)
+    lane_min_notional_ignores_minimal_1h_up: true
+    lane_min_notional_1h_up: 20
+    lane_max_notional_1h_up: 25
+    btc_5m_long_sitout_on_1h_hist_rising: false
+    # 2026-07-28 BTC 5m SHORT selection fix (operator GO + Codex). BTC 5m short = only
+    # 5m-short lane negative in good sessions (-$58.90/30% good, -$109.82/29% full n45);
+    # 100% htf-bias-driven, no 5m-native confirm, 37% never-green. LONG side healthy
+    # (+$108/52%) — untouched. Gates side-isolated to 5m BUY_NO.
+    #  - quant_conviction: skip coin-flip shorts (quant_side None, raw in [0.48,0.52]) = -$70.69/20% n10.
+    #  - max_raw_est_prob_up 0.47: bearish FLOOR — cutting raw>=0.47 removes n28/-$89.41, keeps n17/-$20.41/35%
+    #    (subsumes the coin-flip band; both on = clean telemetry).
+    #  - require_down_tape: SPECULATIVE, kept OFF — m5_direction now instrumented on exits to validate
+    #    before enforcing (prior never-green research: counter-tape often won MORE, may be backwards).
+    btc_5m_short_require_quant_conviction: true
+    btc_5m_short_max_raw_est_prob_up: 0.47
+    btc_5m_short_require_down_tape: false
     window_delta_est_weight_15m: 0.5
     window_delta_est_weight_1h: 0.5
     min_est_prob_conviction_buy_yes: 0
-    # 2026-07-20 LEVER 2 (operator GO, Codex GO): btc conviction CEILING — downsize
-    # entries whose RAW directional conviction >= 0.60, where btc is anti-predictive
-    # (conv>=0.60: n=26 -$90.67, loss deepens with confidence; <0.60 +$119). Downsize
-    # x0.33, do NOT skip. Code default OFF (0.0); these keys arm it. Rides next restart
-    # (bitcoin.py loaded in process). BREAK: set ceiling 0 if conv>=0.60 turns net-positive
-    # over next 20 closed or downsizes more winners than losers.
-    btc_max_est_prob_conviction: 0.60
-    btc_max_est_prob_conviction_size_mult: 0.33
     disable_buy_no_5m: false
     enabled: true
     use_ai: true
@@ -651,6 +649,9 @@ strategies:
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 59.0
+        # 2026-07-28 conviction floor REVERTED (cherry-pick, Codex audit): 354 skips live,
+        # unproven it helps (may choke winners). Off for live; revisit with skipped-would-lose data.
+        min_est_prob_conviction_buy_yes: 0.0
     min_edge_15m_neutral: 0.12
     neutral_15m_min_quant_confidence: 0.0
     neutral_15m_requires_shadow_portfolio: true
@@ -658,7 +659,7 @@ strategies:
     neutral_rsi_min: 45.0
     neutral_rsi_max: 55.0
     neutral_rsi_extra_min_edge: 0.02
-    buy_yes_overbought_rsi_1h: 65.0  # 2026-07-14 BTC-OB operator GO: block 1h BUY_YES when RSI>=65 - live RSI>=67 longs 0/4 -$44.48 (top-buys), RSI<=44 +$16.44. Turns 1h YES -$28->+$16. Break: 10 closed, revert 0 if >=2 skipped-then-would-win or lane net-neg
+    buy_yes_overbought_rsi_1h: 65.0
     min_4h_hist_magnitude: 35
     max_edge_updown: 0.12
     max_edge_updown_15m_short: 0.18
@@ -669,17 +670,17 @@ strategies:
     btc_ai_claim_pending_decisions: true
     max_ai_calls_per_scan: 5
     ai_call_timeout_sec: 15
-    ai_decision_timeout_sec: 40  # 2026-07-08 P2: parity with alts (90 hid broker degradation; real AI ~2.5s)
+    ai_decision_timeout_sec: 40
     use_ai_updown_5m: false
-    btc_marginal_failopen_on_ai_timeout: false  # 2026-07-08 P2 (Codex GO): fail-CLOSED marginal - AI timeout must SKIP, not fall-through-admit (restores 07-04-era FIX2)
-    use_ai_updown: true  # 2026-07-08 P2 (Codex GO): restore btc 15m/1h updown AI (was false = whole block off + disagree-override loophole admitted sub-floor entries w/ zero AI review). 5m stays off via use_ai_updown_5m
+    btc_marginal_failopen_on_ai_timeout: false
+    use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
     bitcoin_1h_simple_long:
       enabled: true
       entry_min: 0.5
       entry_max: 0.85
-      sizing_edge: 0.06  # 2026-07-13 S4 operator GO (Codex: distortion fix not winner-shave): fake edge fed Kelly double-inflation above the $20 floor; floor untouched
+      sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 18.0
     entry_timing_window_5m_min: 0.5
@@ -756,7 +757,7 @@ strategies:
     prediction_window_bonus_5m: 0.0
     disable_buy_yes: false
     disable_buy_no_counter_trend: true
-    disable_buy_no_15m_when_bearish: false  # 2026-07-13 starve-4; 07-14 operator SWAP: break = lane NET <= -$15 (NOT WR — payoff-asym lane: n=8 WR25% but +$4.09, resolution wins pay 2-3x)
+    disable_buy_no_15m_when_bearish: false
     window_delta_confirm_enabled: true
     window_delta_flip_margin: 0.05
     entry_admission_calibration_shrink: 0.28
@@ -764,25 +765,8 @@ strategies:
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
     btc_htf_boost_weak_15m: 0.06
-    # 2026-07-20 B1 (operator GO, Codex-reviewed): btc 5m HTF boost was HARDCODED 0.04/0.02
-    # in compute_btc_5m_quant — 4.5x weaker than this same lane family's 1h 0.18. A full 4H+
-    # sabre bull only lifted est to ~0.62, BELOW the bull-priced YES, so the 5m lane bought
-    # the cheap NO and faded every rally (live: 1/7 win, -$13.36, all BUY_NO at est_up 0.54-0.64).
-    # These keys are read at bitcoin.py:2258 via self.config.get(...) -> hot-reloads, no restart.
-    # SCOPE: feeds compute_btc_5m_quant ONLY, so 5m-window-only (cannot touch 15m/1h). The boost
-    # is SIGNED, so it is symmetric across up/down (operator OK'd both sides; side-split needs code).
-    # BREAK: revert both to 0.04/0.02 if btc 5m goes net <= -$10 over the next 10 closed, or if
-    # it flips to over-buying expensive YES (entry yes_price >= 0.60 on >=3 of 5 consecutive longs).
-    # 2026-07-20 B1 REVERTED (operator GO) — break condition hit: btc 5m|up went -$14.54
-    # over 2 closed (worse than the -$10 break bar), both BUY_YES longs stopped into a
-    # FALLING tape (mae -48%/-62%). B1's htf-boost long-biased btc 5m exactly when the
-    # tape turned bearish; pre-B1 the lane would have faded the rally (bought NO) and won.
-    # Back to the hardcoded-default 0.04/0.02. Re-enable (0.18/0.09) only in a confirmed
-    # BULL tape where btc 5m is demonstrably fading rallies with cheap NO again.
-    btc_5m_htf_full_boost: 0.18  # 2026-07-21 B1 ARMED (operator ORDER: un-starve btc 5m — "was doing well, now doesn't"). Was 0.04 = 4.5x weaker than same family's 1h (0.18) -> btc 5m bull LONGS couldn't clear lane_min_edge (4162 rejects) + hist_gate_5m_long_reject (1603) = 0 fills this session. Restore parity 0.04->0.18. Safety = the now-LIVE tape-arbitration gate (catches longs into a falling 5m tape). Break: revert 0.04 if btc 5m bleeds in a turn the gate doesn't catch.
-    btc_5m_htf_partial_boost: 0.09  # 2026-07-21 B1 ARMED: partial-boost parity 0.02->0.09 (half of full, mirrors 1h 0.18/0.09).
     btc_5m_buy_yes_bullish_floor_bump: 0.0
-    btc_15m_buy_yes_bullish_floor_bump: 0.0  # 2026-07-08 P3: operator 07-02 ruling was ALL bumps 0.0; the 07-07 restore of 0.26 was a discrepancy. Judge lane on live realized only
+    btc_15m_buy_yes_bullish_floor_bump: 0.0
     btc_1h_buy_yes_bullish_floor_bump: 0.0
     btc_1h_buy_yes_floor_price_min: 0.5
     btc_1h_buy_yes_floor_price_max: 0.6
@@ -790,16 +774,16 @@ strategies:
     btc_15m_buy_yes_floor_price_min: 0.49
     quant_disagree_flip_thresh: 0.48
     allow_quant_disagree_flip_buy_no: false
-    bull_regime_buy_no_max_yes_price: 1.0  # 2026-07-08 operator DISABLE bull-regime short-block (blocked 154 +edge btc shorts that are +$19 live)
-    bull_regime_buy_no_max_yes_price_5m: 1.0  # 2026-07-08 disabled
-    bull_regime_buy_no_max_yes_price_15m: 1.0  # 2026-07-08 disabled
-    bull_regime_buy_no_min_mins_left: 0.0  # 2026-07-08 disabled
-    bull_regime_buy_no_min_mins_left_15m: 0.0  # 2026-07-08 disabled
+    bull_regime_buy_no_max_yes_price: 1.0
+    bull_regime_buy_no_max_yes_price_5m: 1.0
+    bull_regime_buy_no_max_yes_price_15m: 1.0
+    bull_regime_buy_no_min_mins_left: 0.0
+    bull_regime_buy_no_min_mins_left_15m: 0.0
     bias_quant_disagree_override_enabled: true
     bias_quant_disagree_aligned_max_gap_non5m: 0.3
     bias_quant_disagree_aligned_min_edge_non5m: -0.4
     bias_quant_disagree_size_multiplier: 0.33
-    bias_quant_disagree_size_multiplier_1h_up: 1.0  # 2026-07-13 P2a operator GO: dampened btc 1h longs are consistent winners (July WR58%); full size on this lane only
+    bias_quant_disagree_size_multiplier_1h_up: 1.0
     hist_gate_5m_short_hard_reject: false
     hist_gate_1h_long_hard_reject: false
     hist_gate_15m_long_hard_reject: false
@@ -851,45 +835,48 @@ strategies:
       datetime_utc: '2026-12-10T13:30:00Z'
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
-    disable_buy_no_5m_when_bearish: true  # 2026-07-13 operator CUT (session risk): 17 trades 29%WR -$18.83 tonight, stuck-BEARISH shorts into bounce = the documented 26%WR cohort; REVIEW at next check-in
-    tape_veto_60s_enabled: true  # 2026-07-13 P2 operator GO (Codex GO): btc port of alt-family veto — never-green counter-move entries (-$8.54 1h long tonight)
-    tape_veto_60s_bps: 25  # 2026-07-13 P2: BTC lower vol than alts; Codex — no tighter without btc-specific evidence
+    disable_buy_no_5m_when_bearish: true
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 25
     overconfidence_sitout:
       enabled: true
       band: 0.01
       min_edge: 0.12
   sol_macro:
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["15m"]  # 2026-07-21 operator GO: pull 5m off sol's tape-gate — mirrors the bnb 5m un-gate. This gate (added 07-20, NOT in the +$869 config) blocked sol 5m SHORTS 32x this session; the +869 winner traded 5m/15m shorts freely for 48h with NO tape-gate. Un-choke the engine short lane; navigate-the-tape belongs in an adaptive signal, not a veto. Reversible: restore ["5m","15m"] if sol 5m bleeds wrong-direction.
-    lane_max_notional_15m_down: 5  # 2026-07-16 operator GO: sol 15m|down still bleeding -$25.61/n55/WR33% at $8 (gap-through/bad-entry). Downsize loser $8->$5 (~37% less bleed); DO-NOT-CUT lane so cap-not-cut. Break: revert 8 if net turns positive over next 15 or WR>45%
-    fresh_cross_override: false  # 2026-07-17 operator conditional GO + Codex GO: TEMPORARY CALIBRATION SAFETY EDIT (reversible, pending realized data - not a final strategy verdict). sol 1h's first fill in 65h (03:16, post-fade-fix) was a LONG into 100% BEARISH htf via side_source sol_1h_native+fresh_15m_cross_flip, and on sol 1h the flip is NOT the 'protective SHORT->LONG' of F6 design intent: alt_1h_simple_long (band 0.50-0.85) sets effective_min_edge=0 + floors edge to 0.06 (sol_macro.py:5685), so a flip-long bypasses lane_min_edge entirely = side override + edge-gate bypass, ungated flip quality. Realized against-htf flip closes = n=0 (thin - Codex ruled the PROVEN LIVE MECHANISM + bypass justifies a reversible risk edit); only sol fill ever sourced from fresh_cross this session is that one open long => observed cost of disabling is nil; sol native paths unaffected. IF WRONG (short-jam: sol 1h all-short with poor-MFE native shorts in a fast reversal): do NOT just restore true - the right fix is a restart-only scoped gate (allow SHORT->LONG only when htf not fully bearish, or require real edge >= lane min on sol 1h). Watch: native sol 1h short MFE + rejected long-like candidates.
-    tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
-    tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
-    lane_max_notional_5m_down: 15  # 2026-07-13 operator GO (action 2): HARD CAP — lane swung +/-$11/trade at $20-24 kelly; cap not cut
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
+    lane_max_notional_15m_down: 5
+    fresh_cross_override: false
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 20
+    lane_max_notional_5m_down: 15
+    ai_updown_observe_only: true
     window_delta_est_weight_5m: 0.5
     window_delta_est_weight_15m: 0.5
     buy_yes_5m_skip_mins_lo: 3.75
     buy_yes_5m_skip_mins_hi: 5.01
     entry_admission_calibration_shrink: 0.28
-    min_est_prob_conviction_buy_yes: 0.52  # 2026-07-13 operator GO (B, Codex GO): un-starve sol fade-longs (15m/1h YES); matches eth/hype; break: sol YES WR<40% n>=10 -> 0.6
+    min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
-    fade_regime_windows: []  # 2026-07-17 operator+Codex GO: SOL 1h ZERO-FILL ROOT. sol_macro was the LAST strategy with a live fade (eth/hype/bnb all emptied 07-15 for the SAME bug class: fade flips the SIDE not the EST -> fade-longs die downstream; bnb fade:[] first fill +$4.19). Evidence: all 187 sol 1h candidates were side_source=sol_1h_fade_native with side INVERTED vs bias (BULLISH->SHORT 104, BEARISH->LONG 83); since 07-16 sol htf is BEARISH so the fade manufactured LONGs and 69/83 (83%) died on tape_veto_60s => 0 fills/65h BOTH sides. Shorts NOT disabled (disable_buy_no_1h=False; buy_no_1h_disabled_lane rejects stopped 07-15T23:23). The 07-15 edit dropped '15m' and KEPT '1h' by omission - its deep-dive evidence was all about 15m; sol 1h fade was never evidenced and has 0 live fills. 06-27 'xrp/hype 1h +EV' comment is ghost-era (BARRED). []=no fade any window; sol listed ONLY '1h' so 5m/15m unaffected. NOT None (=legacy fade-ALL). tape_veto_60s deliberately NOT touched (no stacking; guards the 5m engines) - if native shorts still die on tape_veto, THAT is the real limiter and the next lever. Break: revert ['1h'] if >=10 closed AND (net<=-$8 OR WR<35%).
+    fade_regime_windows: []
     disable_buy_yes_5m: true
     disable_buy_no_5m: false
-    disable_buy_no_15m: false  # 2026-07-13 operator GO (A, Codex GO): undated legacy disable; operator 07-03 said sol 15m WORKING do-not-cut; reopens WITH 0.15 stop+in-profit tighten; break: sol 15m NO WR<35% n>=8 -> true
-    disable_buy_no_1h: false  # 2026-07-16 operator GO (Codex COND-GO): re-enable sol 1h SHORTS as break-triggered collection lane (bare-disabled, 0 live data). Break: re-disable if net<=-$8/10cl OR WR<35%
+    disable_buy_no_15m: false
+    disable_buy_no_1h: false
     buy_no_1h_allow_postflip: true
     est_prob:
       atr_low_pct: 0.004
       atr_high_pct: 0.0064
     buy_no_5m_flip_to_yes: false
+    # 2026-07-28 REVERTED buy_no_5m_pocket_rsi_max/buy_no_min_no_price_5m — they were fit
+    # to a 13-trade RECENT slice (<28 wins) but the 106-trade base is OPPOSITE: sol 5m
+    # short <28 LOSES -$47, 28-40 WINS +$126 (n119 all-sess). The RSI<=28 cap blocked the
+    # winning zone = harmful. sol 5m short is net +$106 all-time; only <28 is adverse, so
+    # if gated it should be a MIN floor (short RSI>=28), presented separately — not applied.
+    # 2026-07-28 veto entries whose side disagrees with quant_side (est_prob-implied):
+    # sol+bnb non-flip disagree = -$100.90/34%WR n103 vs agree +$416.53/48% n765. Exempts
+    # window_delta_flip + simple_band (deliberate est_prob-ignoring paths).
+    require_quant_side_agreement: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
-    window_delta_flip_to_long_enabled: false  # 2026-07-23 operator GO: mirror doge/xrp — was UNSET=default TRUE, flipping correct bearish shorts into fake-edge longs (Codex-GO 07-12 fix missed eth+sol; ETH-port gap). 8 eth 15m longs this session were bearish-native SHORT flipped ->BUY_YES. Inherited _window_delta_flip (sol_macro:2034) reads this. Break: revert true if native shorts starve or flip-longs prove +EV
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
@@ -904,7 +891,7 @@ strategies:
       buy_yes: []
       buy_no:
       - 1h
-      - 15m  # 2026-07-16 operator+Codex GO: sol 15m|down was -$27.40/n58/WR31%/payoff1.4 = -EV (0.31*1.4-0.69=-0.26/trade), bleed_hunter low mfe - ENTRY direction. sol required MACD confirm on 1h shorts but NEVER 15m -> raw native bearish 15m fired unconfirmed. NOT a cut (DONT-CUT sol 15m): lane keeps trading CONFIRMED shorts only. Break: revert if WR<40% OR fill-drought over next 10 closed
+      - 15m
     min_liquidity: 750
     min_liquidity_buy_no: 300
     min_liquidity_buy_yes: 300
@@ -926,7 +913,7 @@ strategies:
         min_edge: 0.06
         min_edge_buy_no: 0.06
         entry_window_min: 1.0
-        entry_window_max: 135  # 2026-07-14 U4: same legacy wall as hype/eth/xrp (all ported to 135, sol never was) — 7/8 post-U1 sol 15m NO candidates died here arriving early. Break: same as U1 lane triggers
+        entry_window_max: 135
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
@@ -949,9 +936,9 @@ strategies:
     buy_no_4h_hist_override_enabled: true
     buy_yes_4h_hist_override_enabled: true
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -966,6 +953,9 @@ strategies:
       entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
+      # 2026-07-28 veto sol 1h simple-band longs (n63 30%WR -$79.64, no +EV subset;
+      # est_prob-blind so quant-gate can't catch it). Skip+ghost-log, sol-only.
+      quality_veto_enabled: true
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -983,7 +973,6 @@ strategies:
     alt_1h_hard_block_5m_longs: false
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
-    buy_no_5m_pocket_rsi_min: 30.0   # 2026-07-24 operator GO + Codex (30 not 35): sol 5m SHORT workhorse. RSI<30 = -$34.82 (bleed), 30-35 = +$23.59 WINNER (keep!), 35+ = +$100. 35 would cut a winner. break: raise to 35 if 30-35 turns -EV.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
@@ -1006,13 +995,13 @@ strategies:
     flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
-    iql_15m_enabled: false  # 2026-07-14 U1 operator ORDER (Codex GO): 556 kills/2h starved sol 15m NO; SIBLING PARITY (all 4 alts false). Break: first 3 closed sol 15m NO 0/3 or <=-$10 -> true
+    iql_15m_enabled: false
     iql_15m_hist_floor: 0.06
     iql_15m_hist_floor_aligned_short: 0.0
     sol_15m_buy_no_max_yes_price_bull_1h: 0.48
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 3->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -1040,10 +1029,12 @@ strategies:
             entry_window_max: 4.0
           down:
             min_edge: 0.085
-            entry_price_min: 0.61  # 2026-07-14 S1 operator GO (Codex GO): BUY_NO band — admits NO<=0.39 only; 7d: NO .30-.39 +$11.71/22 WR50 vs .40-.49 -$26.70/20; break net<=-$10 n>=6 -> 0.42
+            entry_price_min: 0.61
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 4.0
+            # 2026-07-28 downsize REVERTED (cherry-pick, Codex audit): sol 5m short is +EV
+            # full-record (+$106); downsizing a +EV lane degrades baseline. Restored to full.
         15m:
           up:
             min_edge: 0.09
@@ -1052,15 +1043,15 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.12  # 2026-07-17 operator GO: sol 15m|down ENTRY-DIRECTION fix (tighten, operator-approved). MFE of all 44 losing shorts: 35/44 NEVER green >2% (most stopped after 1 tick = instantly offside); only 6/44 stop-cut-winner; the 20 wins ran median MFE +28% max +72% => exits CLEAN, entries wrong. WR31% @ payoff 1.44 needs ~41% to break even; last 15h WR17%. alt_momentum_confirm 15m (07-16) passed on losses that still died. Raising admission bar THIS SIDE ONLY (wso wins over by_tf 0.06 and the 0.09 ltf-unconfirmed bump). Long side (n=3) + all other sol lanes untouched; DON'T-CUT honored (lane open, higher bar). Break: revert 0.06 if >24h zero-fill (starved); re-review if WR<35% over next 10 admits.
+            min_edge: 0.12
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=48 WR40% -$5.96 vs PRE n=17 WR6% -$24.47 (pre wins 1 of 17). 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            entry_window_max: 15
         1h:
           up:
-            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): sol 1h up = -$25.46 pooled good-config (43%WR n14), ALL lo-edge, ZERO +band; 0 fills this session. NOTE side-isolated: sol 1h DOWN (+$23) + sol 5m (winner) UNTOUCHED. Prohibitive 0.07->0.30 = effective CUT, instantly revertible.
+            min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1086,59 +1077,55 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
     overconfidence_sitout:
-      enabled: false  # 2026-07-08 Fix A OFF for this WINNING lane (postdates its winning run; per-lane, not global)
+      enabled: false
       band: 0.01
       min_edge: 0.12
   eth_macro:
-    apply_calibration_correction: true  # 2026-07-22 operator GO — calibration correction LIVE. Shrinks eth|15m|up win_prob by its realized-vs-predicted gap before sizing (est overconfident: predicts 58% WR, realizes 27% -> delta 0.093 downsize). SIZING-ONLY (never re-gates admission), reads data/calibration/est_prob_correction_map.json, fail-safe delta=0 on miss. Shadow earned apply-gate (84 settled: WR +3.3%, PnL +$11 vs raw, xrp5m-up untouched). ONLY validated lanes enabled; other alts false until their lanes validate. Revert: false.
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["5m", "15m"]
-    lane_max_notional_1h_down: 8  # 2026-07-20 EVE phase-2 (size losers down, operator GO): eth 1h|down 0W/3L -$9.26 worst non-xrp, full-size ~$15. Probationary throttle $8 (Codex conditional GO). REVIEW n>=8-10; lift if net turns positive.
-    lane_max_notional_15m_up: 6  # 2026-07-20 ARMED AUTO-EDIT FIRED: eth 15m|up closed a loss, lane now 2/7 (29% WR) -$3.36 this session (hist -$13.61 WR51% coin-flip). Cap ~25->6. Break: revert/lift if net>=+$10 over next 15 closed.
-    fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
-    eth_pocket_allow_15m_buy_yes_fade: true  # 2026-07-13 operator GO: pocket predates fade; only fade-sourced 15m longs pass (code-gated)
-    buy_no_min_no_price_5m: 0.49  # 2026-07-16 eth 5m|down TIGHTEN (operator+Codex GO): shorts lose at high yes (0.525-0.535, shorting into up-lean); cap yes<=0.51. Removes ~$12 of $16 losses; eth 5m|up +$52 untouched (BUY_YES). Break: revert/cut if still net<=-$8 over next 10 closed.
-    eth_pocket_allow_buy_yes_1h: true  # 2026-07-13 E2b: restores operator 07-04 reopen ruling
-    eth_pocket_allow_5m_buy_no: true  # 2026-07-13 E2a operator GO: eth 5m collection lane reopened (shorts)
-    alt_neutral_htf_aligned_carry: false  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO: carry made eth borrow SIDE from bullish HTF when 15m/5m NEUTRAL -> side flip-flop LONG<->SHORT (rollup 51/3), dead candidates, re-intro of decouple-violation. Native side or clean sit-out. Break: revert true only if eth fill freq DROPS to prior 0
-    alt_neutral_htf_carry_penalty: 0.05  # confidence penalty on htf-carry entries
-    eth_pocket_allow_5m_buy_yes: true  # 2026-07-14 eth-long-unlock A operator GO: bull tape = native LONG 600:28 since 10:31, ALL killed by pocket (no 5m BUY_YES allowance). Quality bar in code: RSI<=eth_buy_yes_rsi_max OR macd_5m rising. Break: 10 closed eth 5m YES, revert false if net-neg or WR<=35%
-    eth_pocket_allow_15m_buy_yes_native: true  # 2026-07-14 eth-long-unlock B operator GO: 3571 native 15m longs pocket-blocked (only fade-sourced passed). Bar: RSI<=eth_buy_yes_rsi_max OR macd_15m rising. Break: 10 closed, revert false if net-neg or WR<=35%
-    eth_buy_yes_rsi_max: 58.0  # 2026-07-15 E-C operator GO (Codex): 45->58 — eth RSI floor 51 today (p50 62.8), the 45 pullback branch was DEAD; 58 admits mild-pullback longs (still below the 60-66 extended zone). Break: 10 closed eth YES, revert 45 if net-neg/WR<=35%
-    eth_buy_yes_rsi_momentum_max: 68.0  # 2026-07-15 E-C operator GO (Codex): 60->68 — eth RSI floor 51 this tape (never <=45), so momentum-rising longs need headroom; 45->58 on rsi_max below. Break: 10 closed eth YES, revert 60/45 if net-neg or WR<=35%
-    min_edge_when_ltf_unconfirmed_15m: 0.06  # 2026-07-15 E-B operator GO (Codex): eth 15m SHORT eff was 0.14 = LTF-unconfirmed floor 0.10 (5m/15m always neutral in this tape) + ramp 0.03, NOT base 0.05. Override floor to 0.06 -> eff 0.09 admits 15m fade shorts (edge 0.114 was blocked). Break: 10 closed 15m NO, revert 0.10 if net<=-$12 or WR<35%
-    fade_regime_windows: []  # 2026-07-15 ETH-FADE-OFF operator GO (bnb-proven): was [15m,1h] - fade flipped bearish eth -> LONG but est stayed bearish => edge=est(<0.5)-yes(~0.5)<0 => ALL fade-longs nonpositive_edge, 0 fills. Empty = bearish resolves NATIVE SHORT (edge=yes-est>0) -> fills -> generates CLEAN live data (old -$60 was ghost-poison, BARRED). Break: 15 closed for DATA (not profit-gate given poison); revert [15m,1h] only if operator says
-    fade_regime: true  # 2026-07-13 E1 operator GO: promote eth fade from shadow, 1h only (only green eth lane July)
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
-    buy_yes_5m_skip_mins_lo: null  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (5m long-only deadzone off)
-    buy_yes_5m_skip_mins_hi: null  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (5m long-only deadzone off)
-    entry_admission_calibration_shrink: 1.0  # 2026-07-15 ETH-SHRINK-FIX operator GO + Codex GO: was 0.28 (2026-07-03 ghost-era ETH port = barred), compressed eth raw est 0.417->0.477 = edge 0.088->0.028 = 0-fill BOTH directions. 1.0 matches xrp (top engine, no shrink). Per-lane, NOT global mechanism. Break: revert 0.28 if eth >8 closed AND net<=-$12 or WR<35%
-    min_est_prob_conviction_buy_yes: 0.0  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was 0.52 = eth est~0.44 could NEVER clear = blocked ALL longs). Break: revert 0.52 if longs fire net<=-$12/WR<35% n>=8
-    disable_buy_no_1h: false
+    fresh_cross_override: true
+    eth_pocket_allow_15m_buy_yes_fade: true
+    buy_no_min_no_price_5m: 0.49
+    eth_pocket_allow_buy_yes_1h: true
+    eth_pocket_allow_5m_buy_no: true
+    alt_neutral_htf_aligned_carry: false
+    alt_neutral_htf_carry_penalty: 0.05
+    eth_pocket_allow_5m_buy_yes: true
+    eth_pocket_allow_15m_buy_yes_native: true
+    eth_buy_yes_rsi_max: 58.0
+    eth_buy_yes_rsi_momentum_max: 68.0
+    min_edge_when_ltf_unconfirmed_15m: 0.06
+    fade_regime_windows: []
+    fade_regime: true
+    ai_updown_observe_only: true
+    buy_yes_5m_skip_mins_lo: null
+    buy_yes_5m_skip_mins_hi: null
+    entry_admission_calibration_shrink: 1.0
+    min_est_prob_conviction_buy_yes: 0.0
+    # 2026-07-28 PAUSE WHOLE ETH 1h TIMEFRAME (operator-directed, live capital efficiency).
+    # Full record eth 1h ALL = -$72.88/36% n160, avg 103min lockup (p90 3.5h, max 4.1h).
+    # Good sessions eth 1h UP hold = only +$15.37/54% n26 (~$0.59/trade) vs hours of capital
+    # tie-up. Net loser + capital hog -> paused BOTH sides for the live session. INTENTIONAL
+    # lane-off (do NOT revert on baseline restore). The UP hold-to-resolution override at
+    # updown_overrides.eth_macro.1h.up is now dead code while disabled (left in place).
+    disable_buy_no_1h: true
     disable_buy_no_15m: false
     disable_buy_no_5m: false
-    disable_buy_yes_1h: false
+    disable_buy_yes_1h: true
     disable_buy_yes_15m: false
     disable_buy_yes_5m: false
-    eth_pocket_only: false  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was true = RSI-gated pocket layer both sides). Off = trade any lane/dir clearing symmetric min_edge. Break: revert true if firehose/net<=-$15
-    eth_buy_no_rsi_min: 35.0  # 2026-07-14 E1 operator GO (Codex GO): RSI never exceeded 39.6 all session (p50=28, n=1509) — 50/45/40 admit 0%; 35 admits 19% = bounce-fade shorts; break: eth 15m NO net<=-$12 or WR<30% n>=8 -> 50. NOTE 2026-07-24: INERT (only used inside eth_pocket_only block, which is off). Superseded by eth_buy_no_rsi_min_floor below.
-    eth_buy_no_rsi_min_floor: 55.0  # 2026-07-24 operator GO (A) + Codex: ALWAYS-ON eth BUY_NO RSI floor (eth_macro.py post-flip gate), independent of eth_pocket_only. Live realized: eth shorts -EV below RSI ~55 (15m<50 -$47, 1h<60 -$23), +EV above (15m>=60 +$61, 1h>=60 +$14). Low-RSI regimes -> few/zero eth shorts = INTENDED (those lose). break: revert (remove key) if eth 15m/1h NO 0-fill 24h AND no high-RSI window occurred.
+    eth_pocket_only: false
+    eth_buy_no_rsi_min: 35.0
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
-    window_delta_flip_to_long_enabled: false  # 2026-07-23 operator GO: mirror doge/xrp — was UNSET=default TRUE, flipping correct bearish shorts into fake-edge longs (Codex-GO 07-12 fix missed eth+sol; ETH-port gap). 8 eth 15m longs this session were bearish-native SHORT flipped ->BUY_YES. Inherited _window_delta_flip (sol_macro:2034) reads this. Break: revert true if native shorts starve or flip-longs prove +EV
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
-    low_atr_only_lanes: []  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was ['15m:LONG'] = blocked 15m longs outside low-ATR)
+    low_atr_only_lanes: []
     disable_buy_no_5m_native: true
     eth_5m_buy_no_flip_to_yes: false
     enabled: true
     use_ai: true
     eth_momentum_confirm:
-      buy_yes: []  # 2026-07-13 operator GO: was ['1h'] — structural contradiction with fade (fade-longs fire in bearish tape where 1h MACD is bearish; 205/205 kills since 06:00). All 4 siblings run buy_yes: []. Shadow list unchanged.
-      buy_no: []  # 2026-07-14 E5 operator GO (Codex GO): parity w/ 07-13 buy_yes:[] fix. eth 1h shorts emit+pass pocket but died 100% at momentum-confirm (16/40min) — trend/fade resolver picks SHORT while macd_1h unconfirmed + htf_bias!=BEARISH. shadow.buy_no unchanged. break: >=8 settled eth 1h NO admitted-only-by-this -> revert if WR<=37.5%&net-neg OR 3 consec unconfirmed-macd losers.
+      buy_yes: []
+      buy_no: []
       shadow:
         buy_yes:
         - 5m
@@ -1160,15 +1147,22 @@ strategies:
         min_edge: 0.1
         entry_window_min: 0.5
         entry_window_max: 4.0
+        # 2026-07-28 conviction floor REVERTED (cherry-pick, Codex audit): off for live.
+        min_est_prob_conviction_buy_yes: 0.0
       15m:
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 120.0
+        # 2026-07-28 RE-INSTATED eth 15m ONLY (operator GO + Codex, DATA-justified — targeted,
+        # does NOT undo the cherry-pick). eth 15m longs: est<0.60 net -$51.61 (n124 LOSE),
+        # est 0.60-0.65 net +$50.79 (n81 WIN). Floor cuts the losing thin-conviction band +
+        # stops the 5-long coin-flip ladder (all at est 0.568). Enforced eth_macro.py:2122.
+        min_est_prob_conviction_buy_yes: 0.60
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 360
-    min_edge_15m_when_ltf_unconfirmed: 0.06  # 2026-07-15 E-B(fix) operator GO: the BINDING 15m-SHORT floor (init-cached; per-tf override didnt take). 0.10+ramp0.03=eff0.14 blocked edge-0.11 shorts. 0.06 -> eff 0.09. Break: 10 closed 15m NO, revert 0.10 if net<=-$12/WR<35%
+    min_edge_15m_when_ltf_unconfirmed: 0.06
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
     updown_macro_leg_min_for_long: 0.0
@@ -1187,23 +1181,23 @@ strategies:
     signal_15m_short_threshold: 0.45
     signal_4h_long_threshold: 0.7
     signal_4h_short_threshold: 0.3
-    enforce_alt_1h_alignment: false  # 2026-07-15 ETH-ALIGN-RELAX operator GO + Codex GO: was true = est dampening (+0.04/0.05/0.06 SHORT vs bullish 1h) shrank eth native shorts below bar in bull tape = part of 2-day 0-fill. Off = native 15m/5m shorts fire vs non-bearish 1h (calibration; hype already false). Edge/shrink=1.0 backstops. Break: eth >8 closed AND net<=-$12 or WR<35% -> revert true
+    enforce_alt_1h_alignment: false
     alt_1h_hard_block_5m_longs: false
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
     center_price_band: 0.02
-    min_edge_when_centered: 0.025  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO (Codex tweak): eth yes always 0.495-0.505 = centered every scan; 0.12 re-blocked via centered_price_edge_below_min. Match calibration bar. Break: with ramp/wso reverts
+    min_edge_when_centered: 0.025
     center_price_requires_catalyst: true
     require_btc_catalyst_15m_when_unconfirmed: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
-    updown_allow_exchange_when_oracle_missing: true  # 2026-07-14 E4 operator GO (Codex GO): eth Chainlink fields ABSENT on 28% of candidates — designed fallback passes on valid exchange spot ONLY when oracle fields missing (bad basis still blocks); fills tagged oracle_exchange_only; break: 3 consecutive tagged losses -> false
+    updown_allow_exchange_when_oracle_missing: true
     oracle_max_age_sec: 180
     ai_hold_veto_ttl_sec: 0
     entry_timing_window_15m_min: 2.0
@@ -1219,7 +1213,7 @@ strategies:
     rsi_sell_block_below: 40.0
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
-    rsi_soft_penalty_buy_yes: 0.0  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was 0.04 vs buy_no 0.0 = asymmetric long penalty)
+    rsi_soft_penalty_buy_yes: 0.0
     rsi_soft_penalty_buy_no: 0.0
     btc_follow_1h_hist_min: 6.0
     btc_follow_1h_required: false
@@ -1236,13 +1230,13 @@ strategies:
     eth_follow_15m_hist_min: 0.02
     eth_follow_15m_min_adj: 0.04
     eth_follow_15m_min_adj_short: 0.03
-    eth_follow_1h_min_adj: -0.05  # 2026-07-14 U2 operator ORDER (Codex GO): hard skip->soft (adj already penalizes est_prob; min_edge 0.09 gates). 298 kills/2h, eth 0 fills 21h. Break: 3 closed eth 1h NO 0/3 or 5 net<=-$12 -> remove key
+    eth_follow_1h_min_adj: -0.05
     eth_15m_weak_confirm_hard_gate_enabled: false
     eth_1h_weak_confirm_skip_longs: false
     eth_5m_buy_no_max_yes_price_bull_1h: 0.68
     eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral: 68.0
     buy_yes_lane_repair:
-      enabled: false  # 2026-07-15 ETH-SYMM-RESET: buy_yes_lane_repair-only long haircut off for unbiased calibration
+      enabled: false
       rules:
       - name: eth_5m_native_overconfidence_20260601
         window: 5m
@@ -1271,13 +1265,13 @@ strategies:
         min_edge_add: 0.025
         oracle_basis_abs_bps_min: 15.0
         oracle_basis_min_edge_add: 0.01
-    require_macd_for_bearish_bias: false  # 2026-07-15 ETH-MACD-UNBLOCK operator GO: THE eth-starvation root cause. eth was NEUTRAL 15m 96%/1h 80% (vs sol 1h-BULL 91%, xrp/doge 15m-BEAR 77%/49% in SAME tape) = 0 fills while siblings trade. This gate (eth-ONLY, added 05-23 on ghost 44.7%WR) blocked BEARISH calls unless MACD confirmed; siblings dont have it. false = eth classifies like siblings -> resolves sides -> trades. Break: 20 closed eth, revert true if net<=-$20 or WR<35%
+    require_macd_for_bearish_bias: false
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 3->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -1292,50 +1286,53 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.03  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared
+            min_edge: 0.03
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.5
             entry_window_max: 4.0
-            size_multiplier: 0.25  # 2026-07-14 eth-long-unlock A operator GO: new lane, sized down from 0.4
+            size_multiplier: 0.25
           down:
-            min_edge: 0.03  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO: was 0.08; same shrink squeeze. Break: 10 closed 5m NO, revert 0.08 if net<=-$12/WR<35%
+            min_edge: 0.03
             entry_price_min: 0.47
             entry_price_max: 0.55
             entry_window_min: 0.5
-            entry_window_max: 6.0  # 2026-07-14 eth5-win operator+Codex GO: was 4.0 — +EV eth 5m short (edge +0.145) missed window by 3sec (eval 4.05); candidates arrive 4-8min. Collection lane. Break: 10 closed eth 5m NO, revert 4.0 if net-neg or WR<=35%
+            entry_window_max: 6.0
             size_multiplier: 0.25
         15m:
           up:
-            min_edge: 0.025  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared
+            min_edge: 0.025
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 1.0
-            entry_window_max: 15  # 2026-07-23 operator GO: was 120 = admitted eth 15m longs up to ~2h PRE-WINDOW (7 open positions held 40-119min, capital-locked). Pre-window 15m is a coin-flip LOSER (IN n=4 WR75% +$24.76 vs PRE n=13 WR31% -$35.22; task#29 -$13.61). Cap to in-window only (15=15m span). This is the task#29 intent that was reverted/never-applied. wso.15m.up binds. Break: revert 120 if eth 15m up starves >24h or IN-window WR<pre-window blended
-            size_multiplier: 0.25  # 2026-07-14 eth-long-unlock B operator GO: new native-long lane, sized down
+            # 2026-07-28 120->45 (operator GO): tames the pre-window ladder — keeps the near
+            # rungs (winners) but cuts the far-future tail (MTE 90-120 ran -$13.37 w/ stale
+            # quotes). eth 15m is the session's carry; middle value protects the winner.
+            entry_window_max: 45
+            size_multiplier: 0.25
           down:
-            min_edge: 0.025  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO: was 0.05; post-shrink native BUY_NO edge ~0.03 < 0.05. Calibration frequency. Break: 10 closed 15m NO, revert 0.05 if net<=-$12/WR<35%
+            min_edge: 0.025
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=10 WR90% +$39.80 vs PRE n=72 WR35% -$47.88 (biggest pool; 55pt WR gap). 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            entry_window_max: 15
         1h:
           up:
-            min_edge: 0.06  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360
             size_multiplier: 0.3
           down:
-            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): eth 1h down = -$23.49 pooled good-config (32%WR n38), 97% lo-edge (-$25.9/n37), only +band is n=1 -> nothing to floor-salvage; this session -$15 too (cross-check). Prohibitive 0.06->0.30 = effective CUT, instantly revertible. Prior: E-A fade-short admit 0.06.
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360
             size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
-    updown_min_edge_mins_left_ramp_max_add: 0.0  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO: ramp +0.03 pushed eth eff bar past its ~0.03 native edge. Calibration: collect data. Break: 10 closed, revert 0.03 if net<=-$15/WR<35%
+    updown_min_edge_mins_left_ramp_max_add: 0.0
     updown_min_edge_mins_left_ramp_span_min: 24.0
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1369,29 +1366,22 @@ strategies:
       band: 0.01
       min_edge: 0.12
   hype_macro:
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["5m", "15m"]
-    fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
-    tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
-    tape_veto_60s_bps: 20  # 2026-07-13 operator GO (break-trigger response): 25 let never-green shorts slip (21:16 -5.93, 21:47 -5.77 mfe~0); match alt family
-    alt_1h_hard_block_5m_longs: false  # 2026-07-13 operator GO (macro completeness audit): key was MISSING -> code default TRUE hard-blocked hype 5m fade-longs in bearish 1h — the only long path this asset has; all 4 siblings run false
-    disable_buy_no_1h: false  # 2026-07-17 STAGED operator+Codex GO (restart-only, frozen self.config): THE real hype 1h fix. Reject log: 912/912 candidates are SHORT, 100% BEARISH htf, 100% blocked here — lane wants to short, shorts hard-disabled (07-13 'unacceptable math', 0 live data since). Controlled re-test, not a proven unlock. Break: re-disable if net<=-$8/10cl OR WR<35%
-    oracle_ref_use_exchange_spot: true  # 2026-07-13 A operator GO: HL-mid oracle ref (Chainlink 42-50min stale on Arbitrum); re-applies lost 07-01 fix
-    disable_buy_yes_5m_native: false    # 2026-07-24 operator GO(sharp)+Codex GO: RE-ENABLE hype 5m up on PROBATION (0.3x). Disable was 07-13 on GHOST/momentum-subset (-$114 ghost); live realized JUN +$209/n234/51% vs JUL n=1 -> same stale-ghost disable as doge5m up. Break: revert true if next 10 closed 5m up net<=-$8 OR WR<40%.
-    disable_buy_yes_15m_native: false  # 2026-07-15 HYPE-15M-LONG-REVIVE operator+Codex GO: native-both-ways (fade off); disable LEAKED via macd5m_flip anyway + those oversold-flip longs (entry~0.43) WIN (+6.88/+1.76) while top-buy momentum longs lost. trail_gap 0.10 banks give-backs. Break: 10 closed hype 15m up, re-disable true if net<=-$10 or WR<40%. Was HYPE-MIX operator GO (Codex): suppress aligned-bull 15m native momentum-longs (-$22.82/45t/33% loser); keep 15m fade (chop) + 1h BUY_YES winner (+$18/64%) for long. Break: 10 closed, revert false if suppressed cohort net-positive
-    buy_yes_15m_pocket_rsi_max: 55  # 2026-07-22 operator GO: hype 15m|up surgical entry fix (improve-not-cut, supersedes the disable break-rule). Admit longs ONLY when hype RSI<55 (oversold/pullback = the proven winners per disable_buy_yes_15m_native comment) OR htf BEARISH (contrarian pocket). Session test_20260722_043413: rejects the 3 top-buy chasers (RSI 60/61/65, NEUTRAL htf, entry~0.44, ALL never-green, -$7.43) while keeping the oversold long (RSI 41). Reuses the 06-16 pocket gate (sol_macro:3468, inherited — no ETH port); include_bearish default true. Ghost-logs rejects as buy_yes_15m_pocket_off. Break: revert if hype 15m|up >=10 closed AND (net<=-$8 OR WR<40%)
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
+    fresh_cross_override: true
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 20
+    alt_1h_hard_block_5m_longs: false
+    disable_buy_no_1h: false
+    oracle_ref_use_exchange_spot: true
+    disable_buy_yes_5m_native: true
+    disable_buy_yes_15m_native: false
+    ai_updown_observe_only: true
     oracle_stale_spot_is_settlement: true
     oracle_stale_spot_settlement_max_basis_bps: 500.0
-    # 2026-07-08 R2: hype 5m timing deadzone REMOVED (post-baseline gate, 95 rejects/day, keys were buy_yes_5m_skip_mins_lo/hi 3.75/5.01). 15m deadzone KEPT (baseline-era, documented -EV band). Live trades in the freed band are the evidence now
     entry_admission_calibration_shrink: 0.28
-    min_est_prob_conviction_buy_yes: 0.52  # 2026-07-13 operator GO (unlock 1): 0.6 was containment-era; with 0.28 shrink needed raw est>=0.857 = starved the July-proven fade-long path (7 skips/pulse). 0.52 matches bnb precedent.
+    min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
-    fade_regime_windows: []  # 2026-07-15 HYPE-FADE-OFF operator GO + Codex GO: was ['15m']. Live: hype flagship 06-18 (+$362, +$89, 57%WR) PLAIN NATIVE; fade (06-21)=killer 58->33% (this session 20 closed 6W/14L -$6.74=33%). Kill 15m fade -> native both ways (15m short=July +$13 engine). Mirrors proven bnb fade-off. Keep disable_buy_yes_5m_native. Break: 10 closed 15m, revert ['15m'] if net<=-$12 or WR<35%
-    disable_buy_no_5m: false  # 2026-07-15 HYPE-5M-SHORT-UNSTARVE operator+Codex GO: undocumented blanket-off, 0 data=starved (5m LONGS stay off, momentum -114). 5m down 0.15 stop, band 0.46-0.58. Break: >=10 closed AND (net<=-8 OR WR<40)
+    fade_regime_windows: []
+    disable_buy_no_5m: false
     buy_yes_15m_skip_mins_lo: 5.0
     buy_yes_15m_skip_mins_hi: 12.0
     est_prob:
@@ -1401,7 +1391,7 @@ strategies:
       rsi_adj_up_overbought_mild: 0.0
       rsi_adj_up_oversold_bounce: -0.05
     buy_no_5m_flip_to_yes: false
-    window_delta_flip_to_long_enabled: false  # 2026-07-15 HYPE-5M-SHORT-UNSTARVE (Codex COND): block window-delta flip-to-long so reopened 5m shorts cannot flip into disabled 5m longs
+    window_delta_flip_to_long_enabled: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1417,7 +1407,7 @@ strategies:
     - 15m:SHORT
     weak_5m_signal_soft_penalty_short: true
     disable_buy_no_5m_native: false
-    enabled: true
+    enabled: false
     updown_5m_slower_tfs:
     - 1h
     use_ai: true
@@ -1427,11 +1417,11 @@ strategies:
       - 1h
     min_liquidity: 100
     min_liquidity_buy_no: 300
-    min_liquidity_15m_buy_no: 100  # 2026-07-17 operator+Codex GO: UN-STARVE hype 15m shorts. 273/658 bearish short candidates died on 'liquidity' resolving to base 300 (no per-window key). Resolver _{win}_{side} wins => targets ONLY hype 15m BUY_NO; hype 15m|up (+$7.96 winner) untouched. Break: revert 300 if 15m|down net<=-$8/10cl (Codex: watch thin-book execution)
+    min_liquidity_15m_buy_no: 100
     min_liquidity_buy_yes: 300
-    min_liquidity_1h: 100  # 2026-07-17 REVERTED my 07-16 wrong-side loosening: hype 1h is 100% SHORT/bearish + disabled, so this never applied. Restored 100 so re-enabled shorts get a sane floor on thin ($65-171) books
-    min_liquidity_1h_buy_no: 45  # 2026-07-17 operator GO PROBATIONARY: hype 1h shorts are ALREADY unblocked (disable_buy_no_1h hot-reloaded 00:28; buy_no_1h_disabled_lane 1088->0) and the ONLY remaining blocker is REAL book depth: 0/106 candidates reach the 100 floor. Actual books $2.05-$63.65 p50=$45.70 (vs hype 5m/15m books $205-$294 = this lane is structurally 4-5x thinner). 45 ~= p50 -> admits ~50%. Side-isolated: this key outranks min_liquidity_1h(100) for BUY_NO only; 1h BUY_YES keeps its 200 floor. Execution safe w/o a notional cap: 1h size_multiplier 0.15 x max_position_size 25 = ~$3.75 fill = ~8% of a $45 book. BREAK: revert 100 if >=10 closed AND (net<=-$8 OR WR<35%), or if fills show slippage/adverse execution on thin books.
-    min_liquidity_1h_buy_yes: 200  # 2026-07-17 REVERTED (see min_edge note): long-side floor was useless (hype 1h has ~no long candidates)
+    min_liquidity_1h: 100
+    min_liquidity_1h_buy_no: 45
+    min_liquidity_1h_buy_yes: 200
     min_edge: 0.09
     min_edge_buy_no: 0.08
     defaults:
@@ -1473,9 +1463,9 @@ strategies:
     center_price_requires_catalyst: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -1494,8 +1484,8 @@ strategies:
     entry_timing_window_5m_min: 0.5
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.24
-    buy_no_min_no_price: 0.50  # 2026-07-14 Y1 operator GO (Codex COND-GO): INVERTED band — hype 15m NO wins on expensive NO>=0.50 (+$12.49/5 WR60), bleeds on cheap (-$35.74/35); effectively 15m-only while 5m/1h NO disabled — REVISIT if those reopen; break: 0/4 after band -> 0.20
-    lane_max_notional_15m_down: 8  # 2026-07-13 S1 operator GO (Codex GO): n=10 WR30% -$17.41; veto=entry lever, this=size lever; review +5 fills
+    buy_no_min_no_price: 0.5
+    lane_max_notional_15m_down: 8
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_lag_magnitude_pct: 0.4
@@ -1507,7 +1497,7 @@ strategies:
     low_corr_suppresses_entries: false
     hourly_buy_yes_native_bonus_1h: 0.03
     hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
-    5m_buy_yes_bullish_floor_bump: 0.09  # 2026-07-08 R3 (Codex GO-cond): half-step not full drop - lifetime winner (+$116) vs recent live-losing; kill-line = live realized
+    5m_buy_yes_bullish_floor_bump: 0.09
     15m_buy_yes_bullish_floor_bump: 0.1
     buy_yes_lane_repair:
       enabled: true
@@ -1522,7 +1512,7 @@ strategies:
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 3->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -1542,39 +1532,36 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 5.5
-            size_multiplier: 0.3  # 2026-07-24 probation size (mirror doge5m up 0.3x)
           down:
-            min_edge: 0.05  # 2026-07-16 operator GO (Codex GO): un-starve hype 5m SHORT, parity w/ 15m-down engine; lane_min_edge was the gate (55 rejects post-un-starve). Break: revert 0.08 if net<=-$8/10cl OR WR<40%
+            min_edge: 0.05
             entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 11.0
         15m:
           up:
-            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): hype 15m up = -$29.09 pooled good-config (18%WR n11), ALL lo-edge, ZERO +band -> nothing to floor-salvage; this session -$8 too (cross-check). Prohibitive 0.03->0.30 = effective CUT (near-zero fills), instantly revertible. Prior: p90 edge 0.010 max 0.045.
+            min_edge: 0.03
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135.0 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=13 WR46% +$7.04 vs PRE n=16 WR31% -$2.42. 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135.0 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
-            enabled: false        # 2026-07-24 operator GO(sharp)+Codex GO: DISABLE hype 15m up (loser both eras: JUN -$116/n147/41%, JUL -$6.46/n24/29%). enabled:false = hard kill before edge logic (honored sol_macro:5436). Revert true to restore.
+            entry_window_max: 15
           down:
-            min_edge: 0.05  # 2026-07-15 HYPE-UNSTARVE operator+Codex GO: was 0.06 -> starved the +$13 July 15m short-engine (signals arrive ~0.05, 0 fills/session). Keep NO>=0.50 price band. Break: 10 closed, revert 0.06 if net<=-$8 or WR<40%
+            min_edge: 0.05
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 135  # 2026-07-14 operator GO ("fix hype"): legacy 36min cap ate 315/459 rejects arriving ~44min lead — SAME defect fixed on xrp starve-1 (135), never ported; unblocks Y1 band + H1 fade
+            entry_window_max: 135
         1h:
           up:
-            min_edge: 0.06  # 2026-07-17 REVERTED my 07-16 wrong-side change (operator+Codex GO): I loosened this for hype 1h LONGS, but reject log shows hype 1h = 912/912 SHORT candidates, 100% BEARISH, 100% blocked by buy_no_1h_disabled_lane (disable fires BEFORE min_edge) => change was dead. Restored so the staged short re-enable is the ONLY variable
+            min_edge: 0.06
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 360
             size_multiplier: 0.15
-            enabled: false  # 2026-07-24 operator GO(sharp)+Codex GO: DISABLE hype 1h up (FLIPPED: JUN +$49/62% -> JUL -$19.70/n9/33%). enabled:false hard kill. Revert true to restore.
           down:
             min_edge: 0.06
             entry_price_min: 0.42
@@ -1622,21 +1609,24 @@ strategies:
       band: 0.01
       min_edge: 0.12
   xrp_macro:
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["15m"]  # 2026-07-21 operator GO: pull 5m off xrp's tape-gate — mirrors the bnb 5m un-gate. Gate added 07-20 (NOT in the +$869 config) blocked xrp 5m 14x this session; the +869 winner traded these shorts freely 48h with no tape-gate. Un-choke the engine short lane. Reversible: restore ["5m","15m"] if xrp 5m bleeds wrong-direction.
-    lane_max_notional_15m_down: 8  # 2026-07-14 S5 operator GO (Codex GO): n=21 WR42% -$15.92 still filling $15 — mirror hype S1 cap; caps bind live (proof: hype $8.00 fill). Break: revisit after 10 capped fills or +$10 net.
-    fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
-    tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
-    tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
-    disable_buy_no_1h: false  # 2026-07-14 X1 operator GO (Codex COND-GO): reopened WITH price band — 7d banded: NO<=0.49 +$17.99/21, NO>=0.50 -$10.70/13 (the 07-13 disable killed a lane whose cheap half is +EV); break: net<=-$10 n>=6 -> true
-    lane_min_notional_5m_down: 6  # 2026-07-21 DE-ENGINE the NO side (now the LOSER this session -$33.37 / 16% WR / n6). Engine floor moved to the UP winner. Floor 18->6 (default) so a losing NO side is NOT sized up in loss streaks. Break: restore 18 if NO turns winner again (WR>55% net>+15 n>=15).
-    lane_min_notional_ignores_minimal_5m_down: false  # 2026-07-21 de-protect the LOSING NO side: let MINIMAL loss-streak tiers shrink it (was true=kept it big while losing).
-    lane_max_notional_5m_down: 15  # 2026-07-21 size the LOSING NO side DOWN below the UP winner (25). NO now -$33.37/16%WR/n6 this session (tape flipped from 07-20 when NO was +winner). 25->15. Break: restore 25 if NO turns winner again.
-    window_delta_flip_to_long_enabled: false  # 2026-07-12 restore: flip-to-long fake-edge fix (wiped by +70 revert)
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
+    # 2026-07-29 (operator GO): xrp 5m native LONG bled live 0-for-2 (-$4.15) — both
+    # collapsed into drops (one -82% MAE), never-green. Disabled (native family flag is
+    # the one code reads, sol_macro.py:3609). Re-enable at lane review with a near-expiry guard.
+    disable_buy_yes_5m_native: true
+    # 2026-07-29 (operator GO): extend the sol/bnb quant-side-disagree gate to xrp — trade
+    # #1 was htf_long/quant_short (-$1.80). Veto entries whose side != quant_side (exempt
+    # flip/simple_band, same as sol/bnb). sol_macro.py:6686.
+    require_quant_side_agreement: true
+    lane_max_notional_15m_down: 8
+    fresh_cross_override: true
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 20
+    disable_buy_no_1h: false
+    lane_min_notional_5m_down: 15
+    lane_min_notional_ignores_minimal_5m_down: true
+    lane_max_notional_5m_down: 40
+    window_delta_flip_to_long_enabled: false
+    ai_updown_observe_only: true
     entry_admission_calibration_shrink: 1.0
     min_est_prob_conviction_buy_yes: 0
     fade_regime: false
@@ -1659,7 +1649,6 @@ strategies:
     admit_marginal_on_quant_sides: both
     marginal_ev_admit_lanes:
     - 1h:SHORT
-    # 2026-07-09 B1 (operator+Codex): dropped the 15m:LONG AI-precedence override (added 07-08) — it let overconfident 15m LONGs (est 0.60-0.73, 20%WR, -$17/sess) bypass fail-closed AI veto. Now back under AI.
     disable_buy_no_5m_native: false
     enabled: true
     use_ai: true
@@ -1697,9 +1686,9 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: false
@@ -1716,12 +1705,8 @@ strategies:
     entry_timing_window_5m_min: 0.5
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27
-    lane_max_notional_15m_up: 10  # 2026-07-16 AUDIT-2 operator GO (Codex): downsize loser xrp 15m|up -$10.46 WR41% payoff1.07 n17 (no cap, used tier ~25). Cap 10 halves bleed, keeps lane collecting. Break: lift/remove if net turns positive over next 15 or WR>50
-    lane_max_notional_5m_up: 25  # 2026-07-21 operator ORDER (match the +800 engine sizing on the WINNING side): xrp 5m UP is now THE engine this session +$44.89 / 59% WR / n32 but was CAP-BOUND at 15 (avg fill $12.9, maxed $15.2). Tape flipped since 07-20 (then NO was winner). Move the engine treatment (high cap + floor + ignores_minimal) to the UP side. 15->25 (asset max_position_size). Break: revert if UP net<=+0 or WR<50% over next 15.
-    lane_min_notional_5m_up: 18  # 2026-07-21 engine floor on the WINNING side (was on NO): keep the winner sized up through MINIMAL loss-streak tiers.
-    lane_min_notional_ignores_minimal_5m_up: true  # 2026-07-21 engine protection moved to UP (the current winner) — keep sizing the winner during loss-streak tiers.
-    require_rising_momentum_confirm_5m: false  # 2026-07-21 operator GO — REVERTED (was true, added 07-22 tonight). This gate blocked xrp 5m 220x with 0 fills = engine starvation, the exact "add a restrictive gate, starve the winner" trap. The +$869 winner made +$800/48h with NO rising-confirm. Removing to restore engine frequency; "navigate the tape" = an adaptive signal for the quant, NOT a veto. Code stays flag-gated; re-enable ONLY if whipsaw returns AND a non-starving (adaptive, not blocking) form is designed.
-    rising_momentum_min_abs_hist_5m: 0.0005  # magnitude floor so near-zero-momentum chop entries (e.g. the 01:26 short at hist=-0.0003) are blocked, not just wrong-sign ones. xrp MACD hist scale ~0.001; 0.0005 blocks flat, allows real momentum. Tune up if starving / down if whipsaws still slip.
+    lane_max_notional_15m_up: 10
+    lane_max_notional_5m_up: 8
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -1748,7 +1733,6 @@ strategies:
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
-    buy_no_5m_pocket_rsi_min: 45.0   # 2026-07-24 operator GO + Codex: xrp 5m SHORT oversold-fault. Live RSI<45 = -$103 (58t ~35%WR), RSI>=45 = +$119 (34t 65%). Gate=sol_macro:3496.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
@@ -1803,7 +1787,7 @@ strategies:
         oracle_basis_min_edge_add: 0.01
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 2->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
@@ -1818,14 +1802,14 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.04  # 2026-07-08 RESTORE operator 07-04 freq-unlock trim (was 0.04->raised to 0.06 by my wholesale revert; this lane won +$ in 07-04/05)
+            min_edge: 0.04
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.13  # 2026-07-23 BITE-VERIFY RAISE 0.10->0.13 (operator GO). The 0.10 floor BIT but was too low: pooled good-config (n=35) shows the killer band is edge [0.10-0.13) = 17% WR / -$34.47 (-$5.74/t), which 0.10 let straight through. [0.13-0.15) 60%WR breakeven, [0.18+] 54%WR +. Floor 0.13 cuts the -$63 sub-floor loss cluster -> lane breakeven (was -$37/9-stops this session, all losers entered 0.10-0.14). This IS xrp's binding wso block (verified: safe_load + ruamel resolve here; strict dup-key scan clean; the line ~712 block is a DIFFERENT strategy, not a conflict). wso.5m.down OVERRIDES by_tf/defaults. 5m down only; up stays 0.04. Break: revert 0.10 if xrp 5m down >=10cl AND (net<=-$8 OR WR<40%) or starves >24h
+            min_edge: 0.04
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1837,24 +1821,24 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135.0 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=4 WR75% +$24.76 vs PRE n=13 WR31% -$35.22. 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135.0 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            entry_window_max: 15
           down:
-            entry_price_min: 0.53  # 2026-07-14 X2+X3 operator GO: 0.51 leaked band-edge fills (band checks MID, fill pays ASK — NO landed 0.50-0.51, the losing zone); 0.53 = filled NO <=0.49 after ~2c spread
-            min_edge: 0.10  # 2026-07-13 operator GO (starve-1, Codex GO): reopens baseline 0.5-disable; break <=-$15 n>=8 -> 0.5
+            entry_price_min: 0.53
+            min_edge: 0.1
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 135  # 2026-07-13 starve-1: 2248 rejects at p50=74min lead; matches hype 15m; early-positioning noted per Codex
+            entry_window_max: 135
         1h:
           up:
-            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): xrp 1h up = -$12.19 pooled good-config (12%WR n8), lo -$9.4/mid -$2.8, ZERO +band; this session -$1/n1. Prohibitive 0.0->0.30 = effective CUT, instantly revertible.
+            min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 30  # 2026-07-17 operator GO: was 0.0. Lower edge of the same band — see entry_window_max note. Cuts the late/in-window tail where xrp|1h|up loses.
-            entry_window_max: 150  # 2026-07-17 operator GO (single-lane test): xrp|1h|up traded a 0-360min window. Live: INSIDE [30,150] n=26 WR46%% +$10.65 vs OUTSIDE n=11 WR18%% -$11.01 — the out-of-band tail is the whole lane's loss (lane net was -$0.36). Band it to the zone where its money actually is. Chosen over a blanket 1h band: 1h has NO global sweet spot (grid best [30,150] on n=167/10 lanes = overfit; eth|1h|up/down are profitable BOTH sides of it; a 55-cap would have killed btc|1h|up which lives at mte p50=58 and makes +$14.80). 15m's pre-window story does NOT transfer to 1h (1h PRE 42%% > IN 37%%). SINGLE LANE — xrp 5m + all other 1h lanes untouched. Break: revert [0,360] if the lane starves >24h or WR drops below 38%% (its current blended) over the next 10-15 closes.
+            entry_window_min: 30
+            entry_window_max: 150
             size_multiplier: 0.3
           down:
-            entry_price_min: 0.53  # 2026-07-14 X1+X3 operator GO: 0.51 leaked band-edge fills (band checks MID, fill pays ASK — NO landed 0.50-0.51, the losing zone); 0.53 = filled NO <=0.49 after ~2c spread
-            min_edge: 0.08  # 2026-07-24 operator GO + Codex GO: gate the 0%-WR sub-0.08 admitted band. LIFETIME band-split (live realized): edge<0.08 = -$12.72/0%WR/n5 (all losers); edge>=0.08 = +$89.02/61%/n33 (the winning engine). Lane is +$76 lifetime DESPITE the junk. 0.02 was 3-4x looser than sol0.07/bnb0.08. Cuts loser sub-band ONLY; winning band is by-def >=0.08 so untouched. Hot-reload, side-isolated (1h down). Break: revert if 24h zero-fill WITH normal candidate flow, OR >=0.08 band net-neg over next 15 closed. Prior: 0.02 restored 07-08 from 0.04 on "lane won" (stale=win was the >=0.08 band, not sub-0.08).
+            entry_price_min: 0.53
+            min_edge: 0.02
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 360
@@ -1872,37 +1856,25 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
     overconfidence_sitout:
-      enabled: false  # 2026-07-08 Fix A OFF for this WINNING lane (postdates its winning run; per-lane, not global)
+      enabled: false
       band: 0.01
       min_edge: 0.12
   doge_macro:
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["5m", "15m"]
-    # 2026-07-20 SWEEP FIX 2 (operator GO): buy_no_min_no_price_5m: 0.49 DELETED.
-    # It was staged 07-16 restart-only, so the +869 run NEVER executed it — it first went
-    # live at today's 16:40 restart and immediately banned the cheap-NO 0.34-0.45 band that
-    # doge|5m|down (+$124, the #2 engine of the +869 session) trades in. Its comment claimed
-    # it protected the "15m|down winner" — wrong lane: doge's winner was 5m|down. And since
-    # it produced ZERO fills, its pnl-based break ("revert if 5m|down net<=-$8/10cl") could
-    # never trigger. Key removed -> code falls back to the 0.20 default the +869 run used.
-    # BREAK: re-add 0.49 if doge|5m|down goes net <= -$10 over the next 15 closed.
-    buy_yes_lane_repair:  # 2026-07-16 ENTRY-FAMILY GATE (operator GO, probationary): doge 1h up trend-chase longs
+    buy_no_min_no_price_5m: 0.49
+    buy_yes_lane_repair:
       enabled: true
       rules:
-      - name: doge_1h_up_standard_trendchase_cut_20260716  # 'standard' family = generic trend longs, -$13.25/27%WR/n11 (peak-then-reverse). min_edge_add gates; keeps doge_1h_native (+$20). Break: revert if doge 1h up net drops OR native turns neg over next ~10 fills
+      - name: doge_1h_up_standard_trendchase_cut_20260716
         window: 1h
         entry_family: standard
-        min_edge_add: 0.30
+        min_edge_add: 0.3
         probability_haircut: 0.0
-    lane_max_notional_15m_down: 5  # 2026-07-23 operator GO (Codex CLEAN): DOWNSIZE 10->5. doge 15m down = June->July EDGE DECAY (Jun ~+$36 -> Jul ~-$24; good-config 4W/13L -$16.01 24%WR n=17; this session 0W/7L -$14.10, all doge_15m_native, 5/7 healthy-edge losers = NOT thin-admit, edge decayed like xrp). Halve exposure, keep firing for data. Break: revert 10 if starves 0-fill 24h; lift if net-positive at $5. (Prev 07-14: 10 was a mild cap from $15.)
-    fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
-    tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
-    tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
-    window_delta_flip_to_long_enabled: false  # 2026-07-12 restore: flip-to-long fake-edge fix (wiped by +70 revert)
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
+    lane_max_notional_15m_down: 10
+    fresh_cross_override: true
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 20
+    window_delta_flip_to_long_enabled: false
+    ai_updown_observe_only: true
     entry_admission_calibration_shrink: 0.28
     min_est_prob_conviction_buy_yes: 0
     fade_regime: false
@@ -1910,15 +1882,16 @@ strategies:
     - 5m
     - 15m
     disable_buy_no_5m: false
-    disable_buy_yes_5m: false  # 2026-07-24 operator GO + Codex: re-enable doge 5m LONG. 06-16 disable was ghost EV -0.084 + Kimi-flag (both distrusted); LIVE realized +$37.45 9/15 60%WR contradicts it. Probation @0.3x size / 0.06 edge; review after 10-15 fresh closed fills; re-disable ONLY on fresh live -EV, never ghost.
-    5m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-24 Codex guard: rsi_hard_gate is off so rsi_buy_block_above:70 is only a soft penalty; with +0.17 bullish bump overbought longs still net +0.13 edge inflation. Cap the bump at RSI 70 to avoid forcing longs into tops.
+    # 2026-07-28 doge 5m LONG RE-DISABLED (cherry-pick, Codex audit): immediate never-green
+    # loser in live, adds frequency in a bad-selection tape. Back to disabled for live.
+    disable_buy_yes_5m: true
     buy_yes_15m_pocket_rsi_max: 35
     est_prob:
       atr_low_pct: 0.0035
       atr_high_pct: 0.0053
     disable_buy_no_1h: true
     buy_no_1h_allow_postflip: true
-    disable_buy_no_15m: false  # 2026-07-13 operator GO: reopen doge 15m shorts — native side of bearish tape, 91 blocked since 06:00; 1h short cut (07-12) stays
+    disable_buy_no_15m: true
     disable_buy_yes_1h_when_bullish: false
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
@@ -1934,7 +1907,7 @@ strategies:
     - 15m:LONG
     - 1h:LONG
     - 1h:SHORT
-    disable_buy_no_5m_native: false  # 2026-07-13 T2 operator GO (Codex CONDITIONAL-GO packaged experiment): UNDATED legacy flag, 651 rejects tonight; reopened WITH xrp exit shape; break WR<35% n>=8 -> true
+    disable_buy_no_5m_native: false
     enabled: true
     use_ai: true
     use_ai_updown: true
@@ -1969,9 +1942,9 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: true
@@ -1980,7 +1953,7 @@ strategies:
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
-    oracle_max_age_sec: 450  # 2026-07-13 re-applied lost 07-01 fix: chainlink cadence 93-411s; basis caps stay tight
+    oracle_max_age_sec: 450
     oracle_max_basis_bps: 18.0
     oracle_basis_relax_max_bps: 22.0
     oracle_stale_basis_relax_max_bps: 75.0
@@ -1989,8 +1962,7 @@ strategies:
     entry_timing_window_5m_min: 0.5
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27
-    lane_max_notional_5m_down: 10  # 2026-07-21 BREAK RULE MET -> revert 20->10 (operator: cut losing directions). The 07-17 note set "Break: revert 10 if net<=+0 over next 15 OR WR<45%"; this session doge 5m|down = 40% WR / -$20.92 / n20 = BOTH conditions met. Downsize the loser. Break: restore 20 if net turns +EV / WR>50% over next 15.
-    lane_max_notional_1h_up: 15  # 2026-07-21 PROBATIONARY THROTTLE (operator: cut losing directions): doge 1h|up 0W/6L -$27.66 this session, ALL 6 gap-throughs. Was uncapped (kelly->$25). The wide-book stop-through fix caps the gap losses; this throttle bounds downside while that proves out WITHOUT killing the resolution edge (+EV at resolution historically, mfe p50 +29.8%). Break: lift/remove once wide-book fix proven + WR recovers, or if it starves the resolution winners.
+    lane_max_notional_5m_down: 20
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -2016,8 +1988,6 @@ strategies:
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
-    buy_no_5m_pocket_rsi_min: 35.0   # 2026-07-24 operator GO + Codex: doge 5m SHORT oversold-fault. Live RSI<35 = -$35.64 43%WR (30t), RSI>=35 = +$28.45 49% (70t). This session median entry RSI 32 -> -$57. Gate=sol_macro:3496 (bnb already uses).
-    buy_no_15m_pocket_rsi_min: 35.0  # 2026-07-24 same fault: doge 15m SHORT RSI<35 = -$35.94 30%WR (33t), RSI>=35 = +$51.30 49% (35t). Turns both doge shorts into winners at lower freq.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
@@ -2040,7 +2010,7 @@ strategies:
     low_corr_damping: 0.8
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 2->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
@@ -2062,7 +2032,7 @@ strategies:
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.15  # 2026-07-23 operator GO (ATTACK loser): doge 5m down = good-config WINNER (+$24.28/n62/50%WR pooled, stops ~breakeven) DRAGGED by the lo-edge band. Edge<0.15: -$7.81 good-config / -$15.16 this session (17-44%WR); mid(.15-.22)=+$23.53, hi(>=.22)=+$8.56. Floor 0.08->0.15 cuts the coin-flip drag, KEEPS the earning bands (same pattern as xrp5m down 0.13). This session's -$39 was stop-sum -$34 (flap-aggravated bad fills) on top of the lo-band. wso.5m.down binding (line 2056). Break: revert 0.08 if lane starves 0-fill 24h OR the kept bands turn net<=-$8/10cl.
+            min_edge: 0.08
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -2076,18 +2046,18 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.15  # 2026-07-23 operator GO (ATTACK loser): doge 15m down = GENUINE loser (-$13.19/n36/36%WR pooled good-config, stop-sum -$41.30). The loss IS the lo-edge band: edge<0.15 = n=32 of 36 (89% of volume) at -$13.98; mid+hi (n=4) ~breakeven+ (+$0.78). Floor 0.06->0.15 cuts the coin-flip 89% -> rare-fire hi-conviction only. Already downsized cap 10->5 (03:49). Combined = downsize-loser-with-data. Expect low frequency (that's correct for a coin-flip loser). wso.15m.down binding (line 2070). Break: revert 0.06 if hi-conviction (>=0.15) proves net-positive at n>=8 AND wants more volume, or lane starves 0-fill 24h with the hi-band still +EV.
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 32.0 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=41 WR51% +$48.87 vs PRE n=15 WR27% -$8.99. 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 32.0 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            entry_window_max: 15
         1h:
           up:
             min_edge: 0.04
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 10.0  # 2026-07-14 doge-1h-late-cut operator GO: min runway — 17:56:59 entry w/ 3min left = -$11.41 forced flatten_pre_resolution; pairs w/ max 50. Break: 10 closed, revert 0.0 if lane starves 24h or net worsens
-            entry_window_max: 50  # 2026-07-14 doge-1h-WIN operator+Codex GO: was 360 (no timing discipline). By true mins-to-end at entry: >50m n=32 WR28% -$81.23 (73% of fills, ALL the bleed) vs <=50m n=12 +$2.37. Cap cuts early out-of-window entries. Pairs w/ D-1h stop 0.30. Break: 15-20 closed, revert if net<=-$25 or WR<35% n>=20
+            entry_window_min: 10.0
+            entry_window_max: 50
             size_multiplier: 0.3
           down:
             min_edge: 0.06
@@ -2109,45 +2079,43 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
     overconfidence_sitout:
-      enabled: false  # 2026-07-08 Fix A OFF for this WINNING lane (postdates its winning run; per-lane, not global)
+      enabled: false
       band: 0.01
       min_edge: 0.12
+    disable_buy_no_15m_native: true
+    disable_buy_yes_15m: true
+    disable_buy_yes_15m_native: true
+    disable_buy_yes_1h: true
   bnb_macro:
-    apply_calibration_correction: true  # 2026-07-22 operator GO — calibration correction LIVE. bnb|5m|down is UNDER-rated (predicts 56.5%, realizes 62.5% -> delta -0.0145 = slight UPSIZE). SIZING-ONLY, reads est_prob_correction_map.json, fail-safe. Same apply-gate as eth. ONLY validated lanes; revert: false.
-    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
-    tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
-    tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
-    tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["15m"]  # 2026-07-21 operator ORDER (un-starve bnb 5m — "was winning, now starved"): the tape-gate was bnb 5m's #1 blocker THIS session (182 rejects, time-filtered). bnb 5m is a proven winner; exclude 5m from bnb's tape-gate so it trades again. bnb 15m stays gated. Reversible: restore ["5m","15m"] if bnb 5m bleeds wrong-direction over next ~15.
-    # 2026-07-20 WINNER LIFT (operator GO, Codex GO): the 07-14 probe cap's own break condition
-    # was "hold until n>=15" — n is now 55 and the lane inverted from -$1.79 to a confirmed
-    # winner: aggregate 07-13+ n=55 WR49.1% +$32.89, last 3 days +$31.08, current session
-    # 1W/3 +$1.41 (aggregate AND live session agree). avg notional 9.70 = pinned at the $10 cap.
-    # Codex corrected 20 -> 15: avg-at-cap proves it is BINDING, not that 20 is right; step to
-    # 20 only after another 15-25 closed stay positive. NO floor and NO ignores_minimal added —
-    # the loss-streak brake must keep working on it (cf. the btc 1h|up armor that just came off).
-    # BREAK: revert to 10 if the next 15 closed are net <= -$10 OR WR < 40%.
-    lane_max_notional_15m_down: 15  # 2026-07-20: 10 -> 15 (confirmed winner, cap was binding)
-    fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
-    tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
-    tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
-    ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
+    lane_max_notional_15m_down: 10
+    fresh_cross_override: true
+    tape_veto_60s_enabled: true
+    tape_veto_60s_bps: 20
+    ai_updown_observe_only: true
     entry_admission_calibration_shrink: 0.28
-    min_est_prob_conviction_buy_yes: 0.52  # 2026-07-15 B-A operator GO (Codex): 0.6 containment-era; 0.28 shrink -> raw>=0.857 starves bnb 1h BUY_YES winner (recent +$43.76/28t/50%WR, now RSI<=53-gated). 0.52=bnb precedent. Break: 10 closed, revert 0.6 if net<=-$15 or WR<40%
+    min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
-    fade_regime_windows: []  # 2026-07-15 BNB-FADE-OFF operator GO: was [15m] - fade inverted bearish-15m to LONG (77 rejects at buy_yes_15m_pocket_off), killed the +$26.58 native 15m BUY_NO winner. Empty=15m resolves native SHORT (the winner); native-long loser stays pocket-blocked. Break: 10 closed 15m NO, revert [15m] if net<=-$12/WR<35%
+    fade_regime_windows: []
+    # 2026-07-28 DISABLE bnb 1h LONG (operator GO + data): persistent loser -$50.72/27% all-time
+    # AND -$15.62/31% in recent-20 sessions (n35, fires every session) — loses in every conviction
+    # band, no clean floor salvages it (one +$13 pocket at 0.55-0.60 swamped by losses either side).
+    # Structural loser like eth 1h. Re-enable if a lane-specific fix is found.
+    disable_buy_yes_1h: true
     disable_buy_no_1h: false
     disable_buy_no_15m: false
-    disable_buy_no_5m: false  # 2026-07-14 BNB-REVIVE operator GO: re-enable WITH 0.70 stop (T-1/E-1 pattern) - 07-08 disable was for naked whipsaw mae -60/-82% = the exact drainer the stop now cuts, not a dead signal. Break: 10 closed, re-disable if net<=-$15 or WR<35%
-    buy_yes_15m_pocket_rsi_max: 65.0  # 2026-07-17 operator GO (65 of 60/65/70): THE REAL bnb 15m|up lever. Lane had 0 FILLS IN 65H. Cross-tab reason x htf_bias proved the blocked population is buy_yes_15m_pocket_off n=2137 and 100% BULLISH htf (BEARISH pocket_off = 0), RSI p10=56.5 p50=61.6 p90=71.3 — so the RSI arm is the ONLY binding gate and 35 was unreachable. My earlier include_bearish=true was a NO-OP (bearish arm has nothing to admit) and was reverted. 65 admits 1350/2137 = 63% of the blocked tape (60=38%, 70=86%). SINGLE LEVER: min_edge 0.09 untouched — it's the separate blocker for the 339 BEARISH longs (RSI 35.8-43.2) which already pass the pocket; if the newly-admitted bullish longs now die at lane_min_edge, THAT is the next lever (do not stack). Gate was 06-16 ghost-era; ghost severed 07-13 and BARRED. Break: revert 35.0 if >=10 closed AND (net<=-$8 OR WR<35%).
-    buy_yes_15m_pocket_include_bearish: false  # 2026-07-17 REVERTED my own no-op 30min after deploying it. I proposed (and Codex endorsed) include_bearish=true to unlock bnb 15m|up's 0-fills-in-65h. PROVEN DEAD by reason x htf_bias cross-tab: the buy_yes_15m_pocket_off population is 2137 rows and 100% BULLISH htf (BEARISH pocket_off = 0). The bearish arm only admits BEARISH-htf longs => true unlocks EXACTLY 0 candidates. The 339 BEARISH longs never reach the pocket at all - they die earlier on lane_min_edge (RSI 35.8-43.2). Codex was mis-framed by me: I gave it 'RSI 55-70 + bearish arm off' and omitted that the blocked rows are all BULLISH. REAL lever = buy_yes_15m_pocket_rsi_max (35->60 admits 38%, 65->63%, 70->86% of the 2137) - pending operator GO. Reverted to keep config honest: true is dead today but would latently admit bearish longs if min_edge ever passes.
-    buy_no_1h_pocket_rsi_min: 35.0  # 2026-07-17 operator+Codex GO: STRUCTURAL CONTRADICTION fix. bnb 1h = 1288/1335 candidates SHORT, htf 100% BEARISH, but 1280 died on buy_no_1h_pocket_off: gate needed RSI>=45 while bearish tape holds RSI p50=35.1 max=45.0 -> floor NEVER reachable => 2 fills/65h. Gate was anti-correlated with its own lane thesis and was built 06-16 on ghost-era EV buckets (ghost severed 07-13, barred). 35 = p50 of the blocked tape (~50% admit); Codex chose 35 over 30/removal since lane has only n=2 live data. Break: revert 45.0 if net<=-$8 over 10 closes OR WR<35%.
+    # 2026-07-28 REVERTED sit-out (operator GO) — the -$16.55/14% was a 7-trade RECENT
+    # slice; full record is +$41.35/46%WR n85 (lane HAS edge). Re-enabled but kept
+    # downsized (size_multiplier 0.15) as recent-loss protection instead of a full cut.
+    disable_buy_no_5m: false
+    buy_yes_15m_pocket_rsi_max: 65.0
+    buy_yes_15m_pocket_include_bearish: false
+    buy_no_1h_pocket_rsi_min: 35.0
     buy_no_15m_pocket_rsi_min: 35.0
     est_prob:
       atr_low_pct: 0.0026
       atr_high_pct: 0.0038
-    disable_buy_yes: false  # 2026-07-15 BNB-LONGS-REVIVE operator GO: re-enable longs - dig 436 fills: high-RSI -$100/32%, LOW-RSI +$43/48% = the lane wasnt all bad, the 07-12 -$47 disable buried a profitable oversold half. Isolated via overbought hard-gate (rsi_buy_block_above 53 + hard) + 0.70 stop on naked 5m up + existing 0.3x size. Break: 10 closed, re-disable if net<=-$20 or WR<38%
-    disable_buy_yes_5m_when_bullish: false  # 2026-07-08 operator RE-ENABLE bnb 5m LONG: stale 06-26 leak-guard blocked 1826/wk of a WINNER (5m YES +$16.76/100%WR) exactly when bullish=when longs win; short side disabled instead
+    disable_buy_yes: false
+    disable_buy_yes_5m_when_bullish: false
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -2161,7 +2129,7 @@ strategies:
     marginal_ev_admit_lanes:
     - 15m:LONG
     - 1h:LONG
-    disable_buy_no_5m_native: false  # 2026-07-14 BNB-REVIVE operator GO: re-enable native 5m NO w/ stop (see disable_buy_no_5m)
+    disable_buy_no_5m_native: false
     enabled: true
     use_ai: true
     use_ai_updown: true
@@ -2201,9 +2169,9 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 10  # 2026-07-14 U3 operator ORDER (Codex GO): marginals died on BUDGET not verdict (47/2h xrp); async broker handles latency. Break: revert if scan cadence degrades or AI-marginal admits 0/5 or net<=-$15
+    max_ai_calls_per_scan: 10
     ai_observer_timeout_sec: 60
-    ai_decision_timeout_sec: 10  # 2026-07-08 RESTORE: winning-era 07-04 value (10s sync-latency guard); my wholesale revert raised it to 40 on all alts
+    ai_decision_timeout_sec: 10
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: true
@@ -2212,7 +2180,7 @@ strategies:
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
-    oracle_max_age_sec: 450  # 2026-07-13 re-applied lost 07-01 fix: chainlink cadence 93-411s; basis caps stay tight
+    oracle_max_age_sec: 450
     oracle_max_basis_bps: 30.0
     oracle_basis_relax_max_bps: 40.0
     oracle_max_basis_bps_15m_buy_yes: 30.0
@@ -2247,9 +2215,11 @@ strategies:
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: true
     min_edge_buy_no: 0.08
-    rsi_buy_block_above: 53.0  # 2026-07-15 BNB-LONGS-REVIVE: was 70 (soft) - isolate the +$43 oversold long subset, block RSI>=53 (the -$100 high-RSI top-buys). Same overbought-trap pattern as btc BTC-OB guard
+    rsi_buy_block_above: 53.0
     rsi_sell_block_below: 30.0
-    rsi_hard_gate_enabled: true  # 2026-07-15 BNB-LONGS-REVIVE: make rsi_buy_block_above a HARD skip not soft penalty. SIDE-EFFECT (kept, protective): also hard-blocks bnb SHORTS at rsi_sell_block_below=30 (dont short deep-oversold = bounce risk on the just-re-enabled 5m NO)
+    rsi_hard_gate_enabled: true
+    # 2026-07-28 quant-agreement gate (see sol_macro): veto side!=quant_side entries.
+    require_quant_side_agreement: true
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
@@ -2272,7 +2242,7 @@ strategies:
     low_corr_damping: 0.8
     look_ahead_15m: 8
     look_ahead_5m: 1
-    max_concurrent_positions: 5  # 2026-07-08 operator EXPAND 2->5 (was unapproved per-asset cap throttling frequency; global 50 still caps total)
+    max_concurrent_positions: 5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
@@ -2299,6 +2269,8 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
+            # 2026-07-28 downsize REVERTED (cherry-pick, Codex audit): bnb 5m short is +EV
+            # full-record (+$41); restored to baseline 0.3 (was 0.3 before this session).
             size_multiplier: 0.3
         15m:
           up:
@@ -2314,7 +2286,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 180.0 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=13 WR46% -$2.02 vs PRE n=11 WR36% -$4.55. 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 180.0 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            entry_window_max: 15
         1h:
           up:
             min_edge: 0.08
@@ -2342,20 +2314,20 @@ strategies:
         BULL: 1.0
         RANGE: 0.7
         BEAR: 0.5
-    disable_buy_yes_15m: false  # 2026-07-15 BNB-LONGS-REVIVE operator GO (see disable_buy_yes)
+    disable_buy_yes_15m: false
     overconfidence_sitout:
       enabled: true
       band: 0.01
       min_edge: 0.12
 updown_composite:
-  default_min_score: 0.0  # 2026-07-08 operator DISABLE composite gate (blocked 283 +edge/session; devs' own comment flagged over-blocking; pure entry gate not structural)
-  btc_neutral_15m_min_score: 0.0  # 2026-07-08 composite disabled
-  low_confidence_min_score: 0.0  # 2026-07-08 composite disabled
+  default_min_score: 0.0
+  btc_neutral_15m_min_score: 0.0
+  low_confidence_min_score: 0.0
   strategy_window_min_scores:
     bnb_macro:
-      1h: 0.0  # 2026-07-08 composite disabled
+      1h: 0.0
     doge_macro:
-      1h: 0.0  # 2026-07-08 composite disabled
+      1h: 0.0
   regime_action_gate_enabled: false
   regime_action_min_convergence: 0.55
 ai:
@@ -2463,7 +2435,7 @@ ai:
     startup_delay_seconds: 90
     include_underperformance: true
     include_skip_exit_reasons: true
-    include_calibration_drift: false  # 2026-07-15: shadow_pipeline observe-data unused by dual-monitor; stop the startup narrator read
+    include_calibration_drift: false
     include_strategy_conflict: true
     timeout_seconds: 30
     output_path: projects/polymarket-bot/strategy-log/_ai_summary.md
@@ -2558,7 +2530,7 @@ learning_loop:
   kelly_rule_max_ai_trades: 50
   backtest_expectations: {}
 performance_feedback:
-  enabled: false  # 2026-07-14 K1 operator GO: overtight scan applied GHOST-derived min_edge loosen mults (0.7-0.83, 9 lanes) to LIVE admission off the FROZEN settled log — barred-data leak; drift side was inert anyway
+  enabled: false
   refresh_every_n_cycles: 6
   min_live_sample: 15
   min_min_edge_mult: 0.7
@@ -2684,7 +2656,13 @@ no_signal_gate:
   - sol_macro|5m|down
   - xrp_macro|5m|up
   - hype_macro|1h|up
-
-# 2026-07-13 operator order: stop in-bot ghost settlement (counterfactuals barred from decisions)
 ghost_calibration:
   auto_settle_enabled: false
+never_green_cut:
+  mode: live
+  green_threshold_pct: 0.02
+  cut_after_secs: 60
+  cut_after_secs_by_window:
+    5m: 60
+    15m: 120
+    1h: 300

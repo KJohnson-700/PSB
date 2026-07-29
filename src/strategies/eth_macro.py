@@ -38,6 +38,8 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
+from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.tape_freshness import compute_freshness_penalty
 from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
     get_loosen_min_edge_mult,
@@ -1023,6 +1025,27 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             action = direction_decision.action
             primary_htf_bias = resolution.primary_htf_bias
+            _preflip_disabled_reason = None
+            if action == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False)):
+                _preflip_disabled_reason = f"buy_no_{_updown_tf}_disabled_lane"
+            elif action == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False)):
+                _preflip_disabled_reason = f"buy_yes_{_updown_tf}_disabled_lane"
+            if _preflip_disabled_reason:
+                _bump_skip(_preflip_disabled_reason)
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason=_preflip_disabled_reason,
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "side_source": side_source,
+                        "stage": "pre_flip_lane_disable",
+                    },
+                )
+                continue
 
             # 2026-07-06 ETH FADE-SHADOW (Codex-GO, observe-only): eth is the only
             # alt with NO fade machinery (sol_macro: 39 fade refs, eth: 0), so it can
@@ -2094,8 +2117,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             effective_min_edge += follow_penalty_min_edge_add
             # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only.
+            # 2026-07-28: per-tf resolution (by_tf.<tf> > defaults > flat) so the floor
+            # is per-lane, matching sol/btc — flat self.config.get ignored by_tf overrides.
             _yes_conv_floor = float(
-                self.config.get("min_est_prob_conviction_buy_yes", 0.0) or 0.0
+                self._tf_cfg(_updown_tf, "min_est_prob_conviction_buy_yes", 0.0) or 0.0
             )
             if (
                 action == "BUY_YES"
@@ -2308,6 +2333,46 @@ class ETHMacroStrategy(SolMacroStrategy):
                 regime=primary_htf_bias,
             )
 
+            # DYNAMIC ADMISSION (2026-07-26 operator GO) — tape-aware min_edge delta,
+            # same as the sol_macro path. LOOSEN a winning+green lane (frequency),
+            # TIGHTEN a losing never-green lane. Guarded; 0.0 when off/unknown/error.
+            try:
+                _tape_adm = get_tape_admission_delta("eth_macro", _updown_tf, lane_side)
+                if _tape_adm:
+                    effective_min_edge = max(0.0, effective_min_edge + _tape_adm)
+                    reason_parts.append(f"tape_adm={_tape_adm:+.3f}")
+            except Exception:
+                pass
+
+            # 2026-07-26 (#3/#4 candidate-time TAPE FRESHNESS): graded edge+size penalty
+            # for a stale/exhausted entry (own-TF MACD rolled over against the side or
+            # RSI-exhausted). Generic, never hard-blocks. This is the 1h stale-bias
+            # cover (#4) tape_arbitration lacks. size_mult carried to final_size below.
+            _freshness_size_mult = 1.0
+            try:
+                _fresh_macd = (
+                    eth.macd_5m if _updown_tf == "5m"
+                    else eth.macd_1h if _updown_tf == "1h"
+                    else eth.macd_15m
+                )
+                _fresh = compute_freshness_penalty(
+                    action=action,
+                    own_macd=_fresh_macd,
+                    rsi=getattr(eth, "rsi_14", None),
+                    cfg=self.full_config.get("tape_freshness", {}),
+                )
+                if _fresh.get("edge_add"):
+                    effective_min_edge += float(_fresh["edge_add"])
+                _freshness_size_mult = float(_fresh.get("size_mult", 1.0) or 1.0)
+                if _fresh.get("staleness"):
+                    reason_parts.append(
+                        f"tape_fresh={_fresh['staleness']:.2f}"
+                        f"(e+{float(_fresh.get('edge_add', 0.0)):.3f},"
+                        f"x{_freshness_size_mult:.2f})"
+                    )
+            except Exception:
+                _freshness_size_mult = 1.0
+
             if action == "BUY_YES":
                 _lane_meta = build_lane_metadata(
                     strategy=self._signal_strategy_name,
@@ -2346,6 +2411,39 @@ class ETHMacroStrategy(SolMacroStrategy):
                         "min_edge_add": _repair.min_edge_add,
                         "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
                     }
+
+            # 2026-07-26 (operator GO "A" + Codex): ETH BUY_YES overbought soft
+            # ceiling — symmetric twin of eth_buy_no_rsi_min_floor. eth 1h longs
+            # bought overbought bleed: live RSI>65 = 21% WR / -$37.7 over n24
+            # (RSI 85+ = 0% WR / -$14.8), while RSI<=65 = 48% WR / +$18.2. SOFT
+            # (require extra min_edge, NOT a hard block) so a rare fat-edge
+            # overbought long still admits. 1h ONLY — eth 5m>65 WINS (+$63) and
+            # eth 15m>65 is ~break-even; scoping to 1h avoids clobbering them.
+            # Runs AFTER buy_yes_lane_repair so the repair's effective_min_edge
+            # overwrite can't wipe the penalty. Unset key => no-op.
+            _by_rsi_max = self.config.get("eth_buy_yes_rsi_max_floor")
+            if (
+                action == "BUY_YES"
+                and _updown_tf == "1h"
+                and _by_rsi_max is not None
+            ):
+                # All float coercions guarded (Codex 2026-07-26): a malformed
+                # TA RSI or config value must no-op, never abort the scan.
+                try:
+                    _eth_rsi_by = getattr(eth, "rsi_14", None)
+                    if _eth_rsi_by is not None and float(_eth_rsi_by) > float(_by_rsi_max):
+                        try:
+                            _by_add = float(
+                                self.config.get("eth_buy_yes_rsi_max_edge_add", 0.06)
+                            )
+                        except (TypeError, ValueError):
+                            _by_add = 0.06
+                        effective_min_edge += _by_add
+                        reason_parts.append(
+                            f"eth_by_overbought_edge_add={_by_add:+.3f}"
+                        )
+                except (TypeError, ValueError):
+                    pass
 
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
@@ -2593,7 +2691,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                             f"shadow_pm={shadow_out.get('portfolio_action', '')}"
                         )
             elif (
-                edge < effective_min_edge
+                # 2026-07-28: AI is OBSERVE-ONLY on eth (config ai_updown_observe_only), so its
+                # timing window must NOT block a marginal entry — observing != enforcing, matching
+                # the open-window admit path. Same fix as the sol-family gate; eth duplicates the
+                # scan loop so it needs its own copy.
+                not _ai_updown_observe_only
+                and edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
@@ -2963,6 +3066,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     # lane_max is a HARD CAP last (per-lane downsize lever, e.g. sol 5m $15)
                     if _ln_max > 0:
                         final_size = min(final_size, _ln_max)
+            # #3 tape-freshness SIZE penalty (computed at the min_edge block above):
+            # de-size a stale/exhausted entry rather than block it. Applied last.
+            try:
+                final_size *= float(_freshness_size_mult)
+            except Exception:
+                pass
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -3208,4 +3317,28 @@ class ETHMacroStrategy(SolMacroStrategy):
                             _tsr["overconfidence_sitout"] = _tsr.get("overconfidence_sitout", 0) + _oc_dropped
                 except Exception:
                     pass
+        def _lane_disabled(sig):
+            w = getattr(sig, "window_size", None)
+            if not w:
+                return False
+            a = getattr(sig, "action", None)
+            if a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)):
+                return True
+            if a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)):
+                return True
+            return False
+        _before_lane_disable = len(signals)
+        signals = [sig for sig in signals if not _lane_disabled(sig)]
+        if len(signals) != _before_lane_disable:
+            logger.info(
+                "%s lane-disable filter dropped %d emitted signal(s) (late-flip/native bypass)",
+                self._signal_strategy_name,
+                _before_lane_disable - len(signals),
+            )
+            try:
+                _st = self.last_scan_stats
+                if isinstance(_st, dict) and "signals" in _st:
+                    _st["signals"] = len(signals)
+            except Exception:
+                pass
         return signals

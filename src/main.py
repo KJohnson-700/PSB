@@ -64,6 +64,7 @@ from src.analysis import regime_fade
 from src.analysis.lane_manager import LaneManager
 from src.analysis.circuit_breakers import CircuitBreakerManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
+from src.analysis.lane_tape_adapter import LaneTapeAdapter
 from src.analysis.calibration_log import (
     append_calibration_record,
     build_record_from_closed_trade,
@@ -115,6 +116,10 @@ _HOT_RELOAD_TRADING_KEYS = frozenset(
         "max_exposure_per_trade",
         "max_position_size",
         "min_hours_to_resolution",
+        # 2026-07-27: the slippage/depth guard reads self.config.get() per order, so it
+        # is safe to hot-reload — add it here so depth_price_ceiling_cents / tolerance
+        # tweaks apply on a file edit WITHOUT a restart (this knob just cost a restart).
+        "slippage_guard",
     }
 )
 # Crash-triage breadcrumbs (see _init_fault_handler). HEARTBEAT_FILE is rewritten
@@ -766,8 +771,21 @@ class PolyBot:
             max_position=self.config.get("trading", {}).get("max_position_size", 15),
         )
         self.kelly_sizer = get_kelly_sizer(self.config)
+        # Per-lane tape adapter: reads each lane's recent net-pnl + green-rate and
+        # scales its notional DOWN when the tape turns against that side (net-losing
+        # AND fills stop going green), back UP as it recovers. De-size only
+        # (max_mult<=1.0) so it can never enlarge a position. mode off|shadow|live.
+        self.lane_tape_adapter = LaneTapeAdapter(self.config.get("lane_tape_adapter", {}))
         self.notifier = NotificationManager(self.config)
+        # is_paper drives loss_kill_active (the per-lane loss-streak pause is inert in
+        # paper). config.trading.dry_run is NOT applied from --live until AFTER __init__
+        # (see the session-anchor block below), so reading it here reports True even on a
+        # live launch — which silently disabled the loss-kill in every live run. Detect
+        # live from argv (timing-independent), matching how the anchor block does it.
+        # 2026-07-27.
         is_paper = self.config.get("trading", {}).get("dry_run", True)
+        if "--live" in sys.argv:
+            is_paper = False
         # Each crypto strategy gets its OWN exposure manager so losses
         # in one don't pause the other.
         self.btc_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='BTC')
@@ -827,12 +845,19 @@ class PolyBot:
         # positions (they're reconciled against the venue right after startup). dry_run
         # isn't applied to config until after __init__, so detect live via argv here.
         _live_mode = "--live" in sys.argv
+        # LIVE_FRESH_SESSION=1 forces a live run to start a BRAND-NEW session anchored at
+        # the real wallet (0 realized), instead of resuming the latest. Use this when the
+        # latest session carries a stale P&L anchor you do not want dragged forward (e.g.
+        # a prior run's -$72.73 wallet-drift showing on a 0-trade fresh launch). Only safe
+        # when the venue has NO real open positions to adopt — a fresh journal will not
+        # inherit resumed positions. 2026-07-27.
+        _live_fresh = os.environ.get("LIVE_FRESH_SESSION", "false").lower() in ("1", "true", "yes")
         if _forced_session and not _resume_session:
             # Explicit session name given — use it (e.g. PAPER_SESSION_ID=reset_20260416)
             self.journal = TradeJournal(session_id=_forced_session, resume_latest=False)
             self._fresh_session_created = False
             logging.info(f"Forced session via PAPER_SESSION_ID={_forced_session}")
-        elif _resume_session or _live_mode:
+        elif (_resume_session or _live_mode) and not _live_fresh:
             # Resume latest: PAPER_RESUME_SESSION=true, or any live run (no orphans).
             self.journal = TradeJournal(resume_latest=True)
             self._fresh_session_created = False
@@ -842,13 +867,19 @@ class PolyBot:
                 self.journal.session_id,
             )
         else:
-            # Default: fresh session every restart (process lifecycle = test cycle)
+            # Default: fresh session every restart (process lifecycle = test cycle).
+            # Also the live-fresh path (LIVE_FRESH_SESSION=1): new session, but leave the
+            # bankroll for refresh_live_wallet_bankroll() so it anchors at the real wallet
+            # instead of the paper 500 default (which would flash $500 until refresh).
             new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
             self._fresh_session_created = True
-            self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
-            self.bankroll_source = "config_initial"
-            logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
+            if not _live_mode:
+                self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
+                self.bankroll_source = "config_initial"
+                logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
+            else:
+                logging.info(f"Fresh LIVE session {new_id} — bankroll deferred to live wallet refresh")
         self._session_traded_market_ids: Set[str] = self._load_session_traded_market_ids()
 
         def _buy_no_skip_callback(
@@ -1022,6 +1053,11 @@ class PolyBot:
 
         # Drift-driven runtime feedback cadence (see performance_feedback in settings.yaml)
         self._performance_feedback_cycle = 0
+        # Fresh-ask entry repricing (2026-07-29): the guard stashes the live best_ask so
+        # marketable BUY entries are priced/sized at the executable ask, not the stale
+        # scan-snapshot signal.price (which was killing FAK orders: "no orders to match").
+        self._last_fresh_entry_ask: Optional[float] = None
+        self._last_fresh_entry_token_id: Optional[str] = None
 
         # State
         self.running = False
@@ -1407,6 +1443,16 @@ class PolyBot:
             self._maybe_alert_exit_policy_drift(settle_summary)
         except Exception as _ee:  # noqa: BLE001 — alerting must never break settle
             logging.warning("exit-policy drift alert skipped: %s", _ee)
+        # Adaptive per-lane SIZER shadow recompute (config trading.adaptive_sizer).
+        # SHADOW-ONLY: writes adaptive_sizer_state.json + shadow log; moves no real
+        # size (resolve_size_mult returns 1.0 unless mode==live). Same worker thread.
+        try:
+            # gate on the EXIT-settle summary (n_settled) — that is the process that
+            # actually rewrites trades_settled.jsonl, which the sizer reads. The ghost
+            # settle_summary counter is a different pipeline and can be 0 here.
+            self._maybe_recompute_adaptive_sizer(exit_settle_summary)
+        except Exception as _se:  # noqa: BLE001 — sizer shadow must never break settle
+            logging.warning("adaptive-sizer shadow recompute skipped: %s", _se)
         # allow_jsonl_scan=False: in the live bot NEVER fall back to the 500MB+
         # JSONL scan (the memory balloon we eliminated). DuckDB fast-path or the
         # cached/unavailable status only — even on cold start with a locked db.
@@ -1445,6 +1491,142 @@ class PolyBot:
                 self._ghost_calibration_refresh_inflight = False
 
         self._spawn_bg(_runner(), name="ghost_calibration_refresh")
+
+    def _warmup_feed_ready(self, wcfg: Dict[str, Any]) -> bool:
+        """True when the scanner is pricing a healthy slice of the universe with FRESH
+        data (signal-based, not a timer).
+
+        Readiness = the most recent scan priced >= ``min_universe`` candidate tokens
+        whose price is within ``price_max_age_sec``, AND the scan phase is healthy.
+        SOURCE-AGNOSTIC on purpose: a REST-fallback price 3s old is exactly as tradeable
+        as a WS one — that is what ``price_max_age_sec`` (=8) already guarantees, and it
+        is the same freshness contract the entry path itself trades on.
+
+        History: the first version required 80% WS-source coverage. But the WS market
+        subscription is DEFERRED until the scanner universe primes, so ``ws_cov=0.000``
+        for the entire warmup window (log: ``FEED_PRICE_SRC ws_hit=0 rest=614``). That bar
+        was unreachable, so release ALWAYS fell to the 180s time backstop — the blind
+        timer the operator rejected. Keying on freshness instead fires in ~ready_cycles
+        scans (REST serves fresh from cycle 1), and still holds if the feed is truly dead.
+        ``_last_price_src[tid] = (src, ts, age_ms)``: ts is loop-time when priced this
+        cycle; age_ms is data staleness (REST=0.0, WS only stamped when already <=max_age).
+        """
+        try:
+            sc = getattr(self, "market_scanner", None)
+            src_map = dict(getattr(sc, "_last_price_src", {}) or {})
+            if not src_map:
+                return False
+            # MUST use the same clock the scanner stamps ts with (asyncio loop time,
+            # scanner.py ~918/1023) — mixing epoch vs loop-monotonic makes every record
+            # look ancient and the signal never fires (prior Codex catch, preserved).
+            import asyncio as _aio
+            try:
+                now = _aio.get_running_loop().time()
+            except Exception:
+                import time as _t
+                now = _t.monotonic()
+            # price_max_age_sec is THE freshness contract the bot trades on; warmup may
+            # override via warmup.max_price_age_sec but defaults to the same value.
+            cw = ((self.config.get("trading") or {}).get("clob_ws") or {})
+            max_age_s = float(wcfg.get("max_price_age_sec", cw.get("price_max_age_sec", 8)) or 8)
+            # Fresh-as-of-now = last priced within max_age AND underlying data age within
+            # max_age. Stamp sites already guarantee both, so this counts tokens currently
+            # priced fresh (REST-served ones included); prior-cycle records still within
+            # max_age legitimately count — that IS the freshness contract the entry uses.
+            fresh = [
+                v for v in src_map.values()
+                if (now - float(v[1])) <= max_age_s and float(v[2]) <= max_age_s * 1000.0
+            ]
+            if len(fresh) < int(wcfg.get("min_universe", 10)):
+                return False  # not enough of the universe priced fresh yet
+            meta = (getattr(self, "last_ai_scan_stats", {}) or {}).get("scanner", {}) or {}
+            sync_ms = float(meta.get("sync_phase_elapsed_ms", 0) or 0)
+            if sync_ms and sync_ms > float(wcfg.get("max_sync_ms", 8000)):
+                return False  # scan phase not healthy yet
+            return True
+        except Exception:
+            return True  # never let a readiness-check bug hard-block trading
+
+    def _warmup_tick(self) -> None:
+        """Advance warmup readiness ONCE PER SCAN CYCLE (signal-driven release).
+
+        Called from the main trading loop after each scan — INDEPENDENT of whether
+        any candidate survives to the entry gate. This is the fix for the ready-streak
+        only accumulating when a candidate reached ``_warmup_blocks_entry``: with the
+        June-tight gates filtering most candidates, the streak never grew and release
+        fell to the 180s time backstop (a blind timer the operator explicitly rejected).
+        Now the streak tracks the ACTUAL feed-sync signal (WS coverage across the
+        universe + healthy scan phase), so entries release the moment the feed is
+        genuinely warm — usually well under the backstop. Fail-OPEN on any error.
+        """
+        wcfg = ((self.config.get("trading") or {}).get("warmup"))
+        if not isinstance(wcfg, dict) or not bool(wcfg.get("enabled", False)):
+            return
+        if getattr(self, "_warmup_cleared", False):
+            return
+        try:
+            import time as _t
+            if getattr(self, "_warmup_start_mono", None) is None:
+                self._warmup_start_mono = _t.monotonic()
+                self._warmup_ready_streak = 0
+                self._warmup_last_cycle = -1
+            cyc = int(getattr(self, "_unified_cycle_count", 0) or 0)
+            if cyc == self._warmup_last_cycle:
+                return  # already advanced this cycle (guard against a double-call)
+            self._warmup_last_cycle = cyc
+            self._warmup_ready_streak = (self._warmup_ready_streak + 1) if self._warmup_feed_ready(wcfg) else 0
+            need = int(wcfg.get("ready_cycles", 3))
+            max_sec = float(wcfg.get("max_warmup_sec", 180))
+            if self._warmup_ready_streak >= need:
+                self._warmup_cleared = True
+                logging.info(
+                    "[warmup] feed synced (%d ready cycles, %.0fs) — entries enabled",
+                    self._warmup_ready_streak, _t.monotonic() - self._warmup_start_mono,
+                )
+            elif (_t.monotonic() - self._warmup_start_mono) >= max_sec:
+                self._warmup_cleared = True
+                logging.warning(
+                    "[warmup] max_warmup_sec %.0fs reached — entries enabled WITHOUT full sync (backstop)", max_sec,
+                )
+        except Exception:
+            self._warmup_cleared = True  # never let a warmup bug hard-block trading
+
+    def _warmup_blocks_entry(self) -> bool:
+        """Return True to BLOCK a new entry while the post-restart feed hasn't synced.
+
+        Pure read of the warmup state that ``_warmup_tick()`` maintains once per scan
+        cycle (signal-based release with a hard max-time backstop). Config-gated + fully
+        reversible via ``trading.warmup.enabled``. Exits are never gated — only new entries.
+        """
+        wcfg = ((self.config.get("trading") or {}).get("warmup"))
+        if not isinstance(wcfg, dict) or not bool(wcfg.get("enabled", False)):
+            return False
+        return not bool(getattr(self, "_warmup_cleared", False))
+
+    def _maybe_recompute_adaptive_sizer(self, settle_summary: Dict[str, Any]) -> None:
+        """Recompute the adaptive per-lane sizer shadow state from settled trades.
+
+        Gated by ``trading.adaptive_sizer``. SHADOW-ONLY: writes
+        ``adaptive_sizer_state.json`` + ``adaptive_sizer_shadow.jsonl`` and never
+        mutates real position size (``resolve_size_mult`` returns 1.0 while
+        ``mode != 'live'``). Throttled on new settles so it does not churn.
+        """
+        cfg = ((self.config.get("trading") or {}).get("adaptive_sizer")) or {}
+        if not bool(cfg.get("enabled", False)):
+            return
+        min_new = int(cfg.get("recompute_min_new_settles", 10) or 10)
+        # exit settler summary uses ``n_settled`` (newly resolved this run).
+        if int(settle_summary.get("n_settled", 0) or 0) < min_new:
+            return
+        from src.analysis.adaptive_lane_sizer import build as _sizer_build, write as _sizer_write
+        state = _sizer_build(self.config)
+        _sizer_write(state)
+        top = sorted(state.get("lanes", []), key=lambda l: -abs(l.get("ema_mult", 1.0) - 1.0))[:5]
+        logging.info(
+            "[adaptive-sizer] shadow recomputed mode=%s lanes=%d top_mults=%s",
+            state.get("mode"), len(state.get("lanes", [])),
+            {l["lane"]: l["ema_mult"] for l in top if l.get("ema_mult") != 1.0},
+        )
 
     def _maybe_alert_exit_policy_drift(self, settle_summary: Dict[str, Any]) -> None:
         """Recompute the exit-policy shadow recommendation; queue drift for review.
@@ -1712,10 +1894,38 @@ class PolyBot:
             self.kelly_sizer.reload_from_config(self.config)
         else:
             self.kelly_sizer = KellySizer(self.config)
+        # Rebuild the tape adapter from the (possibly hot-reloaded) config, but
+        # PRESERVE its learned per-lane close history across reloads.
+        _prev_adapter = getattr(self, "lane_tape_adapter", None)
+        self.lane_tape_adapter = LaneTapeAdapter(self.config.get("lane_tape_adapter", {}))
+        if _prev_adapter is not None and getattr(_prev_adapter, "_lanes", None):
+            # hot-reload: keep the learned per-lane close history in-process.
+            self.lane_tape_adapter._lanes = _prev_adapter._lanes
+        else:
+            # fresh process (restart): warm-start the adapter + Kelly streaks from
+            # recent closed trades so the adaptive layer doesn't cold-start blind.
+            self._hydrate_adaptive_state()
         if hasattr(self, "market_scanner") and self.market_scanner is not None:
             self.market_scanner.reload_from_config(self.config)
         if hasattr(self, "exit_manager") and self.exit_manager is not None:
             self.exit_manager.reload_from_config(self.config)
+        # never-green-cut: refresh mode on config reload (Codex #4) so flipping it back to
+        # shadow/off DISABLES the live cut without a restart. On disable, clear the pending
+        # set + the exit_manager cut ids so no stale cut fires. (off->live still needs a
+        # restart to construct the observer; the common disable path works live.)
+        if hasattr(self, "_never_green_mode"):
+            try:
+                _ngm = str(
+                    (self.config.get("never_green_cut", {}) or {}).get("mode", "off") or "off"
+                ).lower()
+                if _ngm != self._never_green_mode:
+                    self._never_green_mode = _ngm
+                    if _ngm != "live":
+                        self._never_green_cut_pending = set()
+                        if hasattr(self, "exit_manager") and self.exit_manager is not None:
+                            self.exit_manager._never_green_cut_ids = set()
+            except Exception:
+                pass
         self.bitcoin_strategy = BitcoinStrategy(
             self.config,
             self.ai_agent,
@@ -2072,21 +2282,35 @@ class PolyBot:
         if getattr(self, "_live_run_equity_anchor", None) is not None:
             return
         path = Path("data/runtime/live_run_equity_anchor.json")
-        try:
-            if path.exists():
-                self._live_run_equity_anchor = float(json.loads(path.read_text())["start_equity"])
-                logging.info("Live-run P&L anchor loaded: $%.2f", self._live_run_equity_anchor)
-                return
-        except Exception as exc:
-            logging.warning("Could not read live-run anchor (%s); re-seeding.", exc)
+        # A FRESH live session must anchor P&L at THIS run's starting equity — never a
+        # stale persisted anchor from a prior run. That stale-anchor bug made a 0-trade
+        # fresh launch display run P&L = current_wallet - old_anchor (e.g. $125.82 -
+        # $198.55 from 2026-06-14 = -$72.73), which read as "session P&L" on every
+        # screen. Fresh session => re-seed the anchor to current equity and overwrite the
+        # file. RESUMED sessions keep the persisted anchor so their P&L stays continuous
+        # across restarts (the original intent). 2026-07-27.
+        _fresh = bool(getattr(self, "_fresh_session_created", False))
+        if not _fresh:
+            try:
+                if path.exists():
+                    self._live_run_equity_anchor = float(json.loads(path.read_text())["start_equity"])
+                    logging.info("Live-run P&L anchor loaded: $%.2f", self._live_run_equity_anchor)
+                    return
+            except Exception as exc:
+                logging.warning("Could not read live-run anchor (%s); re-seeding.", exc)
         self._live_run_equity_anchor = float(current_equity)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({
                 "start_equity": self._live_run_equity_anchor,
                 "started_at": datetime.now(timezone.utc).isoformat(),
+                "note": "live Olympus run start equity",
             }))
-            logging.info("Live-run P&L anchor initialized: $%.2f", self._live_run_equity_anchor)
+            logging.info(
+                "Live-run P&L anchor %s: $%.2f",
+                "re-seeded (fresh session)" if _fresh else "initialized",
+                self._live_run_equity_anchor,
+            )
         except Exception as exc:
             logging.warning("Could not persist live-run anchor: %s", exc)
 
@@ -2101,12 +2325,16 @@ class PolyBot:
         """
         if self.config.get("trading", {}).get("dry_run", True):
             return
-        if not self.clob_client.using_olympus():
-            return
-        live_cids = await self.clob_client.olympus_open_condition_ids()
+        # Venue-agnostic: Olympus via portfolio, direct CLOB via the Data API
+        # (data-api.polymarket.com/positions). Either returns None on fetch failure
+        # so we fail SAFE (keep all journal positions) rather than abandon a real one.
+        if self.clob_client.using_olympus():
+            live_cids = await self.clob_client.olympus_open_condition_ids()
+        else:
+            live_cids = await self.clob_client.clob_open_condition_ids()
         if live_cids is None:
             logging.warning(
-                "Position reconcile skipped: could not fetch Olympus portfolio "
+                "Position reconcile skipped: could not fetch venue positions "
                 "(keeping all journal positions)."
             )
             return
@@ -2118,12 +2346,63 @@ class PolyBot:
                 or ""
             ).lower()
 
-        kept = dropped = 0
+        import time as _time
+        from datetime import datetime as _dt, timezone as _tz
+
+        _now = _time.time()
+        _grace_sec = float(
+            (self.config.get("trading") or {}).get("position_reconcile_grace_sec", 120)
+            or 120
+        )
+
+        def _opened_epoch(pos: dict):
+            raw = pos.get("opened_at") or pos.get("timestamp")
+            if not raw:
+                return None
+            try:
+                t = _dt.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=_tz.utc)
+                return t.timestamp()
+            except Exception:
+                return None
+
+        # Consecutive-absence tracker (Codex-hardened): a single spurious empty/absent
+        # Data-API response (200 [] glitch) must NOT wipe real positions. Require N
+        # consecutive successful snapshots with the position absent before dropping.
+        _absent = getattr(self, "_reconcile_absent_rounds", None)
+        if _absent is None:
+            _absent = self._reconcile_absent_rounds = {}
+        _confirm_rounds = int(
+            (self.config.get("trading") or {}).get(
+                "position_reconcile_confirm_rounds", 2
+            )
+            or 2
+        )
+        kept = dropped = skipped_young = skipped_unconfirmed = 0
+        _seen_tids = set()
         for pos in list(self.journal.get_open_positions()):
             tid = pos.get("trade_id")
+            _seen_tids.add(tid)
             if _cid(pos) and _cid(pos) in live_cids:
                 kept += 1
+                _absent.pop(tid, None)  # present on venue -> reset absence streak
                 continue
+            # Age grace: never drop a just-placed position (Data-API index lag), and
+            # never drop one whose age can't be parsed (unknown age = fail-safe keep).
+            _oe = _opened_epoch(pos)
+            if _oe is None or (_now - _oe) < _grace_sec:
+                skipped_young += 1
+                _absent.pop(tid, None)  # can't confirm -> reset streak
+                continue
+            # Absent from a SUCCESSFUL, aged snapshot. Require N consecutive absent
+            # snapshots before the destructive drop.
+            _cnt = _absent.get(tid, 0) + 1
+            _absent[tid] = _cnt
+            if _cnt < _confirm_rounds:
+                skipped_unconfirmed += 1
+                continue
+            _absent.pop(tid, None)
             dropped += 1
             self.journal.open_positions.pop(tid, None)
             try:
@@ -2131,18 +2410,24 @@ class PolyBot:
             except Exception:
                 pass
             logging.info(
-                "Reconcile: dropped phantom position %s (%s) — not open on Olympus.",
-                tid, str(pos.get("market_question"))[:40],
+                "Reconcile: dropped phantom/closed position %s (%s) — absent from venue "
+                "%d consecutive snapshots.",
+                tid, str(pos.get("market_question"))[:40], _cnt,
             )
+        # Prune the absence tracker for positions no longer in the journal.
+        for _k in list(_absent.keys()):
+            if _k not in _seen_tids:
+                _absent.pop(_k, None)
         journal_cids = {_cid(p) for p in self.journal.get_open_positions()}
         unmanaged = [c for c in live_cids if c not in journal_cids]
         logging.info(
-            "Olympus position reconcile: kept=%d dropped_phantom=%d olympus_unmanaged=%d",
-            kept, dropped, len(unmanaged),
+            "Venue position reconcile: kept=%d dropped=%d skipped_young=%d "
+            "skipped_unconfirmed=%d venue_unmanaged=%d",
+            kept, dropped, skipped_young, skipped_unconfirmed, len(unmanaged),
         )
         if unmanaged:
             logging.warning(
-                "Olympus has %d open position(s) the bot is NOT tracking "
+                "Venue has %d open position(s) the bot is NOT tracking "
                 "(manual/pre-restart) — manage these yourself: %s",
                 len(unmanaged), [c[:14] for c in unmanaged],
             )
@@ -2690,7 +2975,7 @@ class PolyBot:
                 await self._maybe_hot_reload_code()
                 self._unified_cycle_count += 1
                 cycle_started = time.monotonic()
-                await self._unified_cycle()
+                await self._unified_cycle()  # _warmup_tick() runs inside, post-scan
                 elapsed = time.monotonic() - cycle_started
                 sleep_for = _compute_trading_cycle_sleep(
                     self.scan_interval,
@@ -2827,6 +3112,127 @@ class PolyBot:
         except Exception as _cal_exc:  # noqa: BLE001 — telemetry only
             logging.warning("calibration_log skipped: %s", _cal_exc)
 
+    def _hydrate_adaptive_state(self) -> None:
+        """Warm-start the tape adapter + Kelly streaks from recent closed trades.
+
+        A process restart otherwise cold-starts both (empty ``_lanes`` / empty streak
+        buffers), throwing away the tape knowledge the prior session accumulated —
+        Codex flagged this as a strong amplifier of the post-restart WR collapse.
+        Reads at most the last ``hydrate_max_age_hours`` of closed trades from
+        trades.jsonl (chronological), replays them into the adapter (de-size-only, so
+        replaying a stale close can never enlarge a position) and into Kelly streaks.
+        Only called from the fresh-process branch of the rebuild; a hot-reload keeps
+        ``_lanes`` in memory and never reaches here. Fully guarded — never raises.
+        """
+        try:
+            adapter = getattr(self, "lane_tape_adapter", None)
+            if adapter is None:
+                return
+            tcfg = self.config.get("lane_tape_adapter", {}) or {}
+            if not bool(tcfg.get("hydrate_on_start", True)):
+                return
+            try:
+                max_age_h = float(tcfg.get("hydrate_max_age_hours", 12.0) or 12.0)
+            except (TypeError, ValueError):
+                max_age_h = 12.0
+            path = os.path.join("data", "calibration", "trades.jsonl")
+            if not os.path.exists(path):
+                return
+            try:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_h)).isoformat()
+            except Exception:
+                cutoff = ""
+            rows = []
+            with open(path) as fh:
+                for line in fh:
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    ts = str(d.get("ts") or "")
+                    # ISO8601 UTC strings sort lexicographically; skip anything older
+                    # than the cutoff so hydration reflects the CURRENT tape only.
+                    if cutoff and ts and ts < cutoff:
+                        continue
+                    rows.append(d)
+            # chronological (oldest -> newest) so record_close keeps the latest k/lane
+            rows.sort(key=lambda d: str(d.get("ts") or ""))
+            closes = []
+            kelly = getattr(self, "kelly_sizer", None)
+            for d in rows:
+                strat = d.get("strategy")
+                window = d.get("window") or d.get("window_size")
+                side = d.get("action") or d.get("side")
+                if not strat or not window or not side:
+                    continue
+                # Require a numeric pnl — a malformed row must be skipped, never
+                # hydrated as a phantom never-green loss (Codex 2026-07-26).
+                pnl = d.get("pnl")
+                if pnl is None:
+                    continue
+                try:
+                    pnl = float(pnl)
+                except (TypeError, ValueError):
+                    continue
+                mfe = d.get("mfe_pct")
+                closes.append((strat, window, side, mfe, pnl))
+                if kelly is not None:
+                    try:
+                        win = bool(d.get("win")) if d.get("win") is not None else (pnl > 0)
+                        kelly.record_outcome(strat, win, window)
+                    except Exception:
+                        pass
+            ingested = adapter.hydrate(closes)
+            # Persist immediately so the strategy readers (get_tape_admission_delta,
+            # RSI-floor) see the hydrated deltas at once instead of a stale/missing
+            # file — even on 0 rows, which clears stale >12h deltas to neutral
+            # (Codex 2026-07-26 NO-GO fix).
+            try:
+                adapter.persist_state()
+            except Exception:
+                pass
+            logging.info(
+                "[tape-adapter] hydrated %d recent closes across %d lanes "
+                "(<=%.1fh) on restart", ingested, len(adapter._lanes), max_age_h,
+            )
+        except Exception as _hexc:  # noqa: BLE001 — warm-start is best-effort
+            logging.warning("adaptive-state hydrate skipped: %s", _hexc)
+
+    def _apply_tape_adapter_size(
+        self, final_size: float, strategy: str, window_size, action: str
+    ) -> float:
+        """Scale an entry's notional by the per-lane tape multiplier.
+
+        No-op when the adapter is off/shadow (size_multiplier returns 1.0). The
+        adapter can only REDUCE size (max_mult<=1.0), never enlarge it. Logs every
+        active de-size so each decision is auditable on live fills. Fully guarded so
+        a sizing edit can never raise inside the execute path.
+        """
+        try:
+            adapter = getattr(self, "lane_tape_adapter", None)
+            if adapter is None:
+                return final_size
+            mult = adapter.size_multiplier(strategy, str(window_size or ""), action or "")
+            if mult < 0.999:
+                logging.info(
+                    "[tape-adapter] %s %s %s size %.2f -> %.2f (mult=%.2f) %s",
+                    strategy, window_size, action, final_size,
+                    final_size * mult, mult,
+                    adapter.explain(strategy, str(window_size or ""), action or ""),
+                )
+                return final_size * mult
+            # shadow mode still logs the intended cut without applying it
+            if adapter.mode == "shadow":
+                raw = adapter.raw_multiplier(strategy, str(window_size or ""), action or "")
+                if raw < 0.999:
+                    logging.info(
+                        "[tape-adapter:shadow] %s %s %s WOULD size x%.2f",
+                        strategy, window_size, action, raw,
+                    )
+        except Exception as _e:  # never break execution on a sizing helper
+            logging.error("[tape-adapter] size apply error: %s", _e, exc_info=True)
+        return final_size
+
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
         """Apply realized PnL to paper/live bankroll with a hard floor at zero."""
         # 2026-07-20 CREDITOR AUDIT: caught live — a fresh session's cash was credited
@@ -2933,8 +3339,20 @@ class PolyBot:
                         strategy=strat,
                         market_id=s.get("market_id", ""),
                         window_size=window,
+                        side=s.get("action", ""),  # BUY_YES/BUY_NO → up/down lane
                     )
                 self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
+                try:
+                    # Resolution exits carry no excursion; a resolved winner reached
+                    # favorable (price -> 1.0), a loser never did -> green from pnl sign.
+                    self.lane_tape_adapter.record_close(
+                        strat, window, s.get("action", ""),
+                        mfe_pct=(1.0 if s["pnl"] > 0 else 0.0),
+                        pnl=float(s["pnl"] or 0.0),
+                    )
+                    self.lane_tape_adapter.persist_state()
+                except Exception as _e:
+                    logging.error("[tape-adapter] record_close (settle) error: %s", _e)
                 # Phase 0 calibration log + Phase 6 posterior update for
                 # market-resolution exits. Without this, trades.jsonl
                 # silently undercounts vs the paper-session summary.
@@ -3268,6 +3686,18 @@ class PolyBot:
         if ng is None:
             return
         try:
+            # Persistent pending-cut set (Codex #3): a qualifying 5m/15m position stays
+            # in the live cut set until it actually CLOSES, not just the one tick the
+            # observer event fires (the observer fires once via st.fired). Pruned to live
+            # positions each tick below.
+            _pending = getattr(self, "_never_green_cut_pending", None)
+            if _pending is None:
+                _pending = set()
+                self._never_green_cut_pending = _pending
+            _ng_green_thr = float(
+                (self.config.get("never_green_cut", {}) or {}).get("green_threshold_pct", 0.02)
+                or 0.02
+            )
             from datetime import datetime, timezone
             from src.execution.updown_exit_shared import CRYPTO_UPDOWN_STRATEGIES
             live_ids = set()
@@ -3294,6 +3724,14 @@ class PolyBot:
                 if hold_s < 0:
                     continue
                 live_ids.add(pos_id)
+                # winner-safety (Codex #1): if this position EVER reached green on the
+                # CANONICAL high-water (pos.peak_token_price — what check_exits + the
+                # wide-book tracker update), it can NEVER be a never-green cut. Drop it
+                # from the pending set every tick, even after the observer already fired.
+                _cpk0 = getattr(pos, "peak_token_price", None)
+                _cpk0 = float(_cpk0) if _cpk0 else entry
+                if entry > 0 and ((_cpk0 - entry) / entry) >= _ng_green_thr:
+                    _pending.discard(pos_id)
                 cy = float(cy)
                 entry_leg = getattr(pos, "entry_leg", "YES") or "YES"
                 outcome = getattr(pos, "outcome", "") or ""
@@ -3317,6 +3755,14 @@ class PolyBot:
                         ev["hold_seconds"], ev["cut_after_secs"], ev["peak_pnl_pct"] * 100,
                         ev["would_cut_pnl_pct"] * 100,
                     )
+                    # GRADUATED 2026-07-26: in LIVE mode, actually CUT 5m/15m never-green
+                    # positions (1h stays shadow — its slow winners get false-cut). The
+                    # close is executed by exit_manager.check_exits, which reads this set.
+                    if self._never_green_mode == "live" and str(win) in ("5m", "15m"):
+                        _cpk = getattr(pos, "peak_token_price", None)
+                        _cpk = float(_cpk) if _cpk else entry
+                        if entry <= 0 or ((_cpk - entry) / entry) < _ng_green_thr:
+                            _pending.add(pos_id)
                     # 2026-07-23: persist a STRUCTURED record so the would-cut event
                     # joins cleanly to its exit outcome. pos_id == entries.jsonl trade_id
                     # (position_id is set from trade_id, main.py:1855); ts in UTC so there
@@ -3345,10 +3791,27 @@ class PolyBot:
             for pid in list(getattr(ng, "_state", {}).keys()):
                 if pid not in live_ids:
                     ng.drop(pid)
+            # Prune to ACTUAL open positions (Codex #3 re-review): prune against the real
+            # active-position ids, NOT live_ids (which only holds positions observed with a
+            # valid price THIS tick) — else a transient price-miss `continue` would drop a
+            # still-open position from the one-shot pending set and it would never re-cut.
+            try:
+                _pending &= set(self.risk_manager.active_positions.keys())
+            except Exception:
+                _pending &= live_ids
+            try:
+                self.exit_manager._never_green_cut_ids = set(_pending)
+            except Exception:
+                pass
         except Exception as e:
             # 2026-07-23: was logging.debug (invisible at INFO) which hid why the shadow
             # logged 0 events despite qualifying positions. Surface it so the next session
-            # shows the exact throw. Still shadow-only — never affects trading.
+            # shows the exact throw. On any error, clear the cut set so a failed tick can
+            # never leave a STALE set that cuts positions that no longer qualify.
+            try:
+                self.exit_manager._never_green_cut_ids = set()
+            except Exception:
+                pass
             logging.warning("NEVER_GREEN_SHADOW error: %s", e, exc_info=True)
 
     async def _run_exit_checks(
@@ -3867,6 +4330,56 @@ class PolyBot:
             except Exception:
                 logging.debug("topup wide sampler: market %s failed (ignored)", market_id, exc_info=True)
 
+    def _sample_entry_tape_spots(self) -> None:
+        """SHADOW: sample every asset's live spot into the entry-tape ring buffer.
+
+        Called off the 3s fast-exit tick. O(1) per asset (candle-feed live last bar),
+        fully fail-open, gated on trading.entry_tape_shadow.enabled. Never touches
+        trading state — it only feeds the never-green fill-instant micro-move shadow."""
+        try:
+            cfg = (self.config.get("trading", {}) or {}).get("entry_tape_shadow", {}) or {}
+            if not bool(cfg.get("enabled", False)):
+                return
+            from src.market import ws_candle_feed as _wcf
+            from src.analysis import entry_tape_shadow as _ets
+            feed = _wcf.get_feed()
+            now = time.time()
+            for _sym in set(_ets.STRATEGY_SYMBOL.values()):
+                px = feed.get_last_price(_sym)
+                if px is not None:
+                    _ets.sample_spot(_sym, px, now)
+        except Exception:
+            return
+
+    def _capture_entry_tape(self, *, trade_id, strategy, window, action, extra=None) -> None:
+        """SHADOW: log the fill-instant spot micro-move for this entry (fail-open).
+
+        Gated on trading.entry_tape_shadow.enabled. Reads the in-memory spot ring buffer
+        and appends one row to tape_entry_shadow.jsonl keyed by trade_id — never affects
+        the entry, size, or exit."""
+        try:
+            cfg = (self.config.get("trading", {}) or {}).get("entry_tape_shadow", {}) or {}
+            if not bool(cfg.get("enabled", False)):
+                return
+            from src.analysis import entry_tape_shadow as _ets
+            lookbacks = cfg.get("lookbacks_sec") or [10, 20, 30]
+            # Capture the fill-instant timestamp NOW, then do the buffer-read + jsonl
+            # append off-thread so a disk stall can never add latency to the entry
+            # coroutine (Codex hardening; timing is preserved via the passed now_ts).
+            _now_ts = time.time()
+            self._spawn_bg(asyncio.to_thread(
+                _ets.capture_entry,
+                trade_id=str(trade_id),
+                strategy=strategy,
+                window=window,
+                action=action,
+                now_ts=_now_ts,
+                lookbacks_sec=[float(x) for x in lookbacks],
+                extra=extra or {},
+            ))
+        except Exception:
+            return
+
     async def _fast_exit_loop(self) -> None:
         """Decoupled TP/SL monitor — see exit_check_interval in __init__.
 
@@ -3896,6 +4409,29 @@ class PolyBot:
                 # WIDE top-up sampler — standalone, runs every tick regardless of held
                 # positions (the position-mode shadow is starved; this is the real one).
                 await self._run_topup_wide_sampler()
+                # SHADOW: sample each asset's live spot into the entry-tape ring buffer
+                # (fail-open, gated on trading.entry_tape_shadow.enabled). Never affects
+                # trading; feeds the never-green fill-instant micro-move analysis.
+                self._sample_entry_tape_spots()
+                # Periodic venue reconcile (2026-07-27) — runs AFTER exit checks so a slow
+                # Data API never delays an exit. Keeps the bot's open set matched to the
+                # actual account (detect manual closes / resolutions / phantoms → right
+                # count, no chasing gone positions). Throttled, fail-safe, age-graced, and
+                # requires N consecutive absent snapshots before dropping. Zero disables.
+                _rec_iv = float(
+                    self.config.get("trading", {}).get(
+                        "position_reconcile_interval_sec", 120
+                    )
+                    or 0
+                )
+                if _rec_iv > 0 and (
+                    time.monotonic() - getattr(self, "_last_pos_reconcile_m", 0.0)
+                ) >= _rec_iv:
+                    self._last_pos_reconcile_m = time.monotonic()
+                    try:
+                        await self.reconcile_open_positions_with_venue()
+                    except Exception as _re:
+                        logging.warning("[reconcile] periodic error: %s", _re)
             except Exception as e:  # never let the monitor die
                 logging.error("[fast-exit] error: %s", e, exc_info=True)
             await asyncio.sleep(interval)
@@ -3924,6 +4460,7 @@ class PolyBot:
                     )
                     if status == OrderStatus.FILLED:
                         setattr(pos, "pending_exit_order_id", "")
+                        setattr(pos, "exit_pending_ticks", 0)
                         order = True
                     elif status in (OrderStatus.CANCELLED, OrderStatus.FAILED, None):
                         logging.warning(
@@ -3935,31 +4472,132 @@ class PolyBot:
                         setattr(pos, "pending_exit_order_id", "")
                         order = None
                     else:
-                        logging.warning(
-                            "Exit order still pending for %s: order_id=%s status=%s",
-                            exit_decision.position_id,
-                            pending_exit_order_id,
-                            status.value if isinstance(status, OrderStatus) else status,
+                        # 2026-07-27 DIAGNOSTIC (operator-approved "A", READ-ONLY): the
+                        # ride-to-zero freeze hinges on whether a stuck marketable exit
+                        # order is RESTING (active on the book) or a KILLED FAK misreported
+                        # as pending. Log the full CLOB order record ONCE per order_id so
+                        # the next stuck loser tells us definitively. No order actions.
+                        _dbg_ids = getattr(self, "_stuck_exit_dbg_ids", None)
+                        if _dbg_ids is None:
+                            _dbg_ids = self._stuck_exit_dbg_ids = set()
+                        if pending_exit_order_id not in _dbg_ids:
+                            _dbg_ids.add(pending_exit_order_id)
+                            try:
+                                _rec = await self.clob_client.debug_stuck_order(
+                                    pending_exit_order_id
+                                )
+                                logging.warning(
+                                    "STUCK-EXIT DEBUG pos=%s marketable=%s action=%s "
+                                    "exit_price=%s size=%s reason=%s :: %s",
+                                    exit_decision.position_id,
+                                    getattr(exit_decision, "marketable", None),
+                                    getattr(exit_decision, "action", None),
+                                    getattr(exit_decision, "exit_price", None),
+                                    getattr(exit_decision, "size", None),
+                                    getattr(exit_decision, "reason", None),
+                                    _rec,
+                                )
+                            except Exception as _dbg_e:
+                                logging.warning(
+                                    "STUCK-EXIT DEBUG fetch failed for %s: %s",
+                                    pending_exit_order_id,
+                                    _dbg_e,
+                                )
+                        # 2026-07-27 RIDE-TO-ZERO FIX (killed-FAK-misreported-as-PENDING):
+                        # a marketable (FAK) exit CANNOT rest — it fills or is killed. But
+                        # a KILLED FAK leaves an empty /data/order record + no trade, and
+                        # _recover_status_from_trades then returns PENDING (clob_client.py
+                        # tail), so the old code froze here forever and the loser rode to
+                        # resolution. Fix: after a GRACE window (enough ticks for a real
+                        # fill to propagate to trade history and return FILLED above), a
+                        # marketable exit still reading PENDING is a KILLED FAK -> cancel
+                        # the dead order (idempotent) and RE-ARM a fresh FAK this tick.
+                        # DOUBLE-SELL-SAFE: exits SELL the held token, so the venue caps
+                        # the fill at actual holdings; and any real/partial fill would have
+                        # returned FILLED (trade-history match), not this PENDING path.
+                        # Restricted to SELL exits; a non-SELL close keeps the old wait.
+                        _mk = bool(getattr(exit_decision, "marketable", False))
+                        _is_sell = "SELL" in str(getattr(exit_decision, "action", "")).upper()
+                        _pend = int(getattr(pos, "exit_pending_ticks", 0) or 0) + 1
+                        setattr(pos, "exit_pending_ticks", _pend)
+                        _grace = int(
+                            (self.config.get("trading") or {}).get(
+                                "exit_fak_pending_grace_ticks", 3
+                            )
+                            or 3
                         )
-                        return
+                        if _mk and _is_sell and _pend > _grace:
+                            try:
+                                await self.clob_client.cancel_order(pending_exit_order_id)
+                            except Exception as _ce:
+                                logging.warning(
+                                    "stale-exit cancel failed %s: %s",
+                                    pending_exit_order_id,
+                                    _ce,
+                                )
+                            setattr(pos, "pending_exit_order_id", "")
+                            setattr(pos, "exit_pending_ticks", 0)
+                            logging.warning(
+                                "Stale FAK SELL exit %s for %s PENDING %d ticks (> grace "
+                                "%d) => killed FAK; cancel + re-arm fresh FAK",
+                                pending_exit_order_id,
+                                exit_decision.position_id,
+                                _pend,
+                                _grace,
+                            )
+                            order = None
+                        else:
+                            logging.warning(
+                                "Exit order still pending for %s: order_id=%s status=%s "
+                                "(pending_ticks=%d/%d)",
+                                exit_decision.position_id,
+                                pending_exit_order_id,
+                                status.value if isinstance(status, OrderStatus) else status,
+                                _pend,
+                                _grace,
+                            )
+                            return
                 else:
                     order = None
 
                 if order is None:
+                    _marketable = bool(getattr(exit_decision, "marketable", False))
+                    _limit_price = exit_decision.exit_price
+                    # A+ (2026-07-27 ride-to-zero fix, Codex-flagged): a marketable exit
+                    # must CROSS the book NOW, not rest at a mark that can sit behind the
+                    # best bid/ask (FAK-at-mark prevents resting but not no-fill). Submit
+                    # an AGGRESSIVE crossing limit for live FAK exits — SELL accepts any
+                    # bid (floor ~= 1 tick), BUY accepts any ask (~= 1 - tick). Matching
+                    # still fills at the REAL best bid/ask, so this never fills worse than
+                    # the book. Recorded P&L uses exit_decision.unrealized_pnl (mark), NOT
+                    # this limit (main.py ~4250/4273), so aggressive pricing does not
+                    # corrupt accounting. Entries are unaffected (they price their own FAK
+                    # in clob_client.place_entry_order). dry_run keeps the mark so paper
+                    # fills stay realistic.
+                    if _marketable and not dry_run:
+                        try:
+                            _tick = float(await self.clob_client.fetch_tick_size(exit_decision.token_id))
+                        except (TypeError, ValueError):
+                            _tick = 0.01
+                        if not _tick or _tick <= 0:
+                            _tick = 0.01
+                        if "SELL" in str(exit_decision.action).upper():
+                            _limit_price = _tick
+                        else:  # BUY close
+                            _limit_price = round(1.0 - _tick, 4)
                     order = await self.clob_client.place_order(
                         token_id=exit_decision.token_id,
                         side=exit_decision.action,
-                        price=exit_decision.exit_price,
+                        price=_limit_price,
                         size=exit_decision.size,
                         market_id=exit_decision.market_id,
                         dry_run=dry_run,
-                        # Executable-price stop exits fill at the bid -> place FAK
-                        # (marketable) so they take that liquidity now instead of
-                        # resting as a GTC limit. Other exits keep the GTC default.
-                        order_type="FAK" if getattr(exit_decision, "marketable", False) else "GTC",
-            market_title=getattr(pos, "market_question", None),
-            market_slug=getattr(pos, "market_slug", None),
-            condition_id=getattr(pos, "condition_id", None),
+                        # Loss-cutting/near-resolution exits are marketable -> FAK (take
+                        # the bid now). Other exits keep the GTC default.
+                        order_type="FAK" if _marketable else "GTC",
+                        market_title=getattr(pos, "market_question", None),
+                        market_slug=getattr(pos, "market_slug", None),
+                        condition_id=getattr(pos, "condition_id", None),
                     )
                     if order and not dry_run:
                         status = await self.clob_client.get_order_status(order.order_id)
@@ -4004,8 +4642,19 @@ class PolyBot:
                             strategy=strat,
                             market_id=exit_decision.market_id,
                             window_size=window,
+                            side=(getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",
                         )
                     self.kelly_sizer.record_outcome(strat, exit_pnl > 0, window)
+                    try:
+                        self.lane_tape_adapter.record_close(
+                            strat, window,
+                            (getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",
+                            mfe_pct=float(getattr(exit_decision, "mfe_pct", 0.0) or 0.0),
+                            pnl=float(exit_pnl or 0.0),
+                        )
+                        self.lane_tape_adapter.persist_state()
+                    except Exception as _e:
+                        logging.error("[tape-adapter] record_close error: %s", _e)
                     self.journal.log_exit(
                         trade_id=exit_decision.position_id,
                         exit_price=exit_decision.exit_price,
@@ -4197,6 +4846,13 @@ class PolyBot:
                 scanner_meta.get("updown_1h_count"),
                 scanner_meta.get("updown_hype_alt_count"),
             )
+
+        # Signal-driven warmup: advance feed-readiness HERE — after the scan has
+        # refreshed _last_price_src + last_ai_scan_stats['scanner'] and BEFORE any
+        # strategy executes entries below. This gives same-cycle release: the cycle
+        # whose streak reaches ready_cycles unblocks its own candidates, instead of
+        # waiting one more scan (Codex nit). Idempotent per cycle; fail-open.
+        self._warmup_tick()
 
         # Publish a live-scan snapshot for the dashboard scanner/watchlist panels
         # (they read data/live_scans/scan_*.json — nothing wrote it before, so the
@@ -4791,6 +5447,19 @@ class PolyBot:
         )
         log_ops_pulse(self, "main")
 
+        # 2026-07-27 ADAPTIVE SCANNER (Codex-scoped): feed this cycle's per-strategy
+        # signal counts to the scanner so the NEXT cycle's slug fetch orders deeper
+        # lookahead by EMA productivity (producers first -> the inner-fetch timeout
+        # cuts unproductive deep-lookahead tails, never a producer's near window).
+        # Guarded no-op unless trading.scanner_adaptive_slug_order is enabled.
+        try:
+            if hasattr(self.market_scanner, "update_asset_productivity"):
+                self.market_scanner.update_asset_productivity(
+                    dict(self.last_signal_counts or {})
+                )
+        except Exception:
+            pass
+
         # AI broker housekeeping + diagnostic. Sweep expired/stale entries
         # and emit one line summarising broker state so we can see at a glance
         # whether decisions are landing in time.
@@ -5022,6 +5691,7 @@ class PolyBot:
         strategy: str,
         decision: Any,
         market_question: str,
+        signal_edge: Optional[float] = None,
     ) -> bool:
         """Live-only pre-order slippage guard.
 
@@ -5039,6 +5709,8 @@ class PolyBot:
         live entries. Default mode is ``observe`` (log only); ``enforce`` skips.
         """
         cfg = (self.config.get("trading", {}) or {}).get("slippage_guard", {}) or {}
+        self._last_fresh_entry_ask = None
+        self._last_fresh_entry_token_id = None
         if not cfg.get("enabled", True):
             return True
         if self.config.get("trading", {}).get("dry_run", True):
@@ -5047,6 +5719,17 @@ class PolyBot:
             return True
         try:
             tol = float(cfg.get("max_slippage_cents", 0.02))
+            # 2026-07-29 STALE-SNAPSHOT FIX: the signal's edge was computed on the
+            # per-cycle scan snapshot (market.yes_price), which is ~15-20s old by the
+            # time this lane emits+executes (sequential lane scan). Rather than blocking
+            # on the raw ask-vs-stale-price gap (which counts half-spread + benign drift
+            # as "slippage" and starved live entries), re-validate the EDGE at the FRESH
+            # book here: residual_edge = signal.edge - slip (slip = fresh_ask - intended).
+            # Buying `slip` higher erodes edge 1:1, so this is the true edge at the price
+            # we'd actually pay. Block only when the move ate the edge below the floor
+            # (real adverse move / pump) — edge-intact stale signals proceed. Side-
+            # agnostic: signal.edge already encodes YES/NO. Fail-open if edge unknown.
+            edge_floor = float(cfg.get("min_residual_edge", 0.0))
             mode = str(cfg.get("mode", "observe")).strip().lower()
             max_spread = float(cfg.get("max_spread_cents", 0.03))
             require_full_depth = bool(cfg.get("require_full_depth", True))
@@ -5082,6 +5765,8 @@ class PolyBot:
                     token_id[:20],
                 )
                 return True
+            self._last_fresh_entry_ask = float(best_ask)
+            self._last_fresh_entry_token_id = str(token_id)
             best_bid = bid_levels[0][0] if bid_levels else None
             slip = best_ask - float(intended_price)
             spread = None if best_bid is None else best_ask - best_bid
@@ -5090,13 +5775,22 @@ class PolyBot:
 
             block_reason = None
             block_detail = ""
-            if slip > tol:
+            if signal_edge is not None:
+                residual_edge = float(signal_edge) - slip
+                if residual_edge < edge_floor:
+                    block_reason = "buy_edge_eroded"
+                    block_detail = (
+                        f"slip={slip:+.4f} edge={float(signal_edge):.4f} "
+                        f"residual_edge={residual_edge:.4f} floor={edge_floor:.4f}"
+                    )
+            elif slip > tol:
+                # Fallback (signal.edge unavailable): legacy absolute-slippage cap.
                 block_reason = "buy_slippage_block"
                 block_detail = f"slip={slip:+.4f} tol={tol:.4f}"
-            elif spread is not None and spread > max_spread:
+            if block_reason is None and spread is not None and spread > max_spread:
                 block_reason = "buy_spread_block"
                 block_detail = f"spread={spread:.4f} max_spread={max_spread:.4f}"
-            elif (
+            if block_reason is None and (
                 require_full_depth
                 and requested_size is not None
                 and float(requested_size) > 0
@@ -5138,6 +5832,35 @@ class PolyBot:
         market_id: str,
         market_question: str,
     ) -> bool:
+        # 2026-07-25 PER-LANE KILL SWITCH (operator GO): FINAL-action gate at the shared
+        # execution choke — both the bitcoin impl and every alt impl route through here,
+        # and lane_meta carries the post-all-flips lane_window/lane_side, so (unlike the
+        # earlier in-loop placement, which Codex caught as fail-open on flipped lanes)
+        # this can't attribute to the wrong lane. Skip placing the order if this exact
+        # lane (window|side) is loss-paused. Per-lane not per-asset. Live-only (inert in
+        # paper unless exposure.loss_kill_apply_in_paper).
+        _km = self._get_exposure_manager_for(strategy)
+        if _km is not None:
+            try:
+                _lk_paused, _lk_reason = _km.lane_paused(
+                    lane_meta.get("lane_window"), lane_meta.get("lane_side")
+                )
+            except Exception:
+                # FAIL CLOSED: this switch is the smoke's risk net (chosen over size
+                # reduction), so if we cannot determine the lane's pause state, do NOT
+                # place the entry. Loud log so a real bug surfaces immediately.
+                logging.exception(
+                    "[LANE-KILL] lane_paused() errored for %s %s|%s — failing CLOSED (blocking entry)",
+                    strategy, lane_meta.get("lane_window"), lane_meta.get("lane_side"),
+                )
+                return False
+            if _lk_paused:
+                logging.info(
+                    "[LANE-KILL] %s %s|%s paused — %s (skipping entry)",
+                    strategy, lane_meta.get("lane_window"),
+                    lane_meta.get("lane_side"), _lk_reason,
+                )
+                return False
         lane_id = str(lane_meta.get("lane_id") or "").strip()
         dry_run = bool(self.config.get("trading", {}).get("dry_run", True))
         allowed, reason, state, matched_key = self.lane_manager.can_execute(lane_id, dry_run=dry_run)
@@ -5396,11 +6119,23 @@ class PolyBot:
             bankroll=self.bankroll,
             strategy="bitcoin",
             requested_size=signal.size,
+            market_id=signal.market_id,
+            action=signal.action,
+            direction=signal.direction,
         )
         if not can_trade:
-            logging.warning(f"Bitcoin trade term risk check failed: {reason}")
-            self._log_decision_skip(decision, f"term_risk: {reason}")
+            logging.warning(f"Bitcoin trade risk evaluation failed: {reason}")
+            skip_reason = (
+                "topic_exposure_limit"
+                if str(reason).startswith("topic_exposure_limit")
+                else f"term_risk: {reason}"
+            )
+            self._log_decision_skip(decision, skip_reason)
             return
+
+        final_size = self._apply_tape_adapter_size(
+            final_size, "bitcoin", signal.window_size, signal.action
+        )
 
         intent = self._resolve_execution_intent(signal, strategy="bitcoin")
         if intent is None:
@@ -5434,20 +6169,46 @@ class PolyBot:
             strategy="bitcoin",
             decision=decision,
             market_question=signal.market_question,
+            signal_edge=getattr(signal, "edge", None),
         ):
             return
 
+        if self._warmup_blocks_entry():
+            self._log_decision_skip(decision, "warmup_feed_not_synced")
+            return
+        entry_params = self._entry_exec_params()
+        entry_price = float(signal.price)
+        dry_run = self.config.get("trading", {}).get("dry_run", True)
+        entry_mode = str(entry_params.get("entry_mode") or "marketable").lower()
+        try:
+            hybrid_windows = {str(x).lower() for x in (entry_params.get("hybrid_windows") or ())}
+        except TypeError:
+            hybrid_windows = {"15m", "1h"}
+        window = str(getattr(signal, "window_size", "") or "").lower()
+        marketable_entry = entry_mode == "marketable" or (
+            entry_mode == "hybrid" and window not in hybrid_windows
+        )
+        if (
+            not dry_run
+            and side == "BUY"
+            and marketable_entry
+            and self._last_fresh_entry_token_id == token_id
+            and self._last_fresh_entry_ask is not None
+        ):
+            entry_price = float(self._last_fresh_entry_ask)
+            order_size = final_size / max(0.01, entry_price)
+            pos_size = order_size
         logging.info(
-            f"Executing BITCOIN trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
+            f"Executing BITCOIN trade: {signal.action} {final_size:.2f} @ {entry_price} ({signal.direction})"
         )
         order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
-            price=signal.price,
+            price=entry_price,
             size=order_size,
             window=getattr(signal, "window_size", None),
             market_id=signal.market_id,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
+            dry_run=dry_run,
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
             market_title=signal.market_question,
             market_slug=getattr(signal, "market_slug", None),
@@ -5459,7 +6220,7 @@ class PolyBot:
             ),
             # Entry fill policy (marketable | maker | hybrid). Hybrid = maker-first
             # then cross to taker; 5m falls back to marketable. See _entry_exec_params.
-            **self._entry_exec_params(),
+            **entry_params,
         )
 
         if order and hasattr(order, "order_id"):
@@ -5585,6 +6346,13 @@ class PolyBot:
                 getattr(signal, "token_id_no", None),
                 getattr(signal, "action", None),
             ))
+            self._capture_entry_tape(
+                trade_id=order.order_id, strategy="bitcoin",
+                window=getattr(signal, "window_size", None), action=signal.action,
+                extra={"edge": getattr(signal, "edge", None),
+                       "est_prob": getattr(signal, "est_prob", None),
+                       "side_source": getattr(signal, "side_source", None)},
+            )
             self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
@@ -5694,11 +6462,23 @@ class PolyBot:
             bankroll=self.bankroll,
             strategy=strat,
             requested_size=signal.size,
+            market_id=signal.market_id,
+            action=signal.action,
+            direction=signal.direction,
         )
         if not can_trade:
-            logging.warning(f"{strat} trade term risk check failed: {reason}")
-            self._log_decision_skip(decision, f"term_risk: {reason}")
+            logging.warning(f"{strat} trade risk evaluation failed: {reason}")
+            skip_reason = (
+                "topic_exposure_limit"
+                if str(reason).startswith("topic_exposure_limit")
+                else f"term_risk: {reason}"
+            )
+            self._log_decision_skip(decision, skip_reason)
             return
+
+        final_size = self._apply_tape_adapter_size(
+            final_size, strat, signal.window_size, signal.action
+        )
 
         intent = self._resolve_execution_intent(signal, strategy=strat)
         if intent is None:
@@ -5731,20 +6511,60 @@ class PolyBot:
             strategy=strat,
             decision=decision,
             market_question=signal.market_question,
+            signal_edge=getattr(signal, "edge", None),
         ):
             return
 
+        if self._warmup_blocks_entry():
+            self._log_decision_skip(decision, "warmup_feed_not_synced")
+            return
+        # Per-strategy ENTRY-FRESHNESS cap (2026-07-28): the staleness sweet spot is
+        # asset-specific — XRP's edge dies in the 20s+ price-age bucket (n21 -$16.6 good
+        # sessions) while it's +EV at 3-20s, and ETH/BNB/BTC/SOL still earn out to 45s.
+        # So this is PER-ASSET (config trading.entry_freshness_caps.<strategy> in seconds;
+        # unset = no cap = global price_max_age governs). Skip when the mark the edge was
+        # priced on is older than the lane's cap. Fail-open on missing age.
+        _fc = ((self.config.get("trading") or {}).get("entry_freshness_caps") or {})
+        _cap_s = _fc.get(strat)
+        if _cap_s:
+            _age_ms = (self._entry_price_provenance(
+                getattr(signal, "token_id_yes", None)) or {}).get("price_asof_age_ms")
+            if _age_ms is not None and float(_age_ms) > float(_cap_s) * 1000.0:
+                self._log_decision_skip(decision, "entry_price_too_stale")
+                return
+        entry_params = self._entry_exec_params()
+        entry_price = float(signal.price)
+        dry_run = self.config.get("trading", {}).get("dry_run", True)
+        entry_mode = str(entry_params.get("entry_mode") or "marketable").lower()
+        try:
+            hybrid_windows = {str(x).lower() for x in (entry_params.get("hybrid_windows") or ())}
+        except TypeError:
+            hybrid_windows = {"15m", "1h"}
+        window = str(getattr(signal, "window_size", "") or "").lower()
+        marketable_entry = entry_mode == "marketable" or (
+            entry_mode == "hybrid" and window not in hybrid_windows
+        )
+        if (
+            not dry_run
+            and side == "BUY"
+            and marketable_entry
+            and self._last_fresh_entry_token_id == token_id
+            and self._last_fresh_entry_ask is not None
+        ):
+            entry_price = float(self._last_fresh_entry_ask)
+            order_size = final_size / max(0.01, entry_price)
+            pos_size = order_size
         logging.info(
-            f"Executing {strat} trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
+            f"Executing {strat} trade: {signal.action} {final_size:.2f} @ {entry_price} ({signal.direction})"
         )
         order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
-            price=signal.price,
+            price=entry_price,
             size=order_size,
             window=getattr(signal, "window_size", None),
             market_id=signal.market_id,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
+            dry_run=dry_run,
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
             market_title=signal.market_question,
             market_slug=getattr(signal, "market_slug", None),
@@ -5756,7 +6576,7 @@ class PolyBot:
             ),
             # Entry fill policy (marketable | maker | hybrid). Hybrid = maker-first
             # then cross to taker; 5m falls back to marketable. See _entry_exec_params.
-            **self._entry_exec_params(),
+            **entry_params,
         )
 
         if order and hasattr(order, "order_id"):
@@ -5888,6 +6708,13 @@ class PolyBot:
                 getattr(signal, "token_id_no", None),
                 getattr(signal, "action", None),
             ))
+            self._capture_entry_tape(
+                trade_id=order.order_id, strategy=strat,
+                window=getattr(signal, "window_size", None), action=signal.action,
+                extra={"edge": getattr(signal, "edge", None),
+                       "est_prob": getattr(signal, "est_prob", None),
+                       "side_source": getattr(signal, "side_source", None)},
+            )
             self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
@@ -6345,6 +7172,34 @@ async def main():
     )
     if dry_run is not None:
         bot.config.setdefault("trading", {})["dry_run"] = dry_run
+        # 2026-07-27 (Codex live-debug P0): several sub-components CACHE dry_run in their
+        # own __init__ — which ran during PolyBot() above, BEFORE this CLI/confirm-live
+        # step, when config still held the paper default. The worst is OlympusClient:
+        # _enforce_smoke_limits() RAISES "called in dry_run" for any live order while its
+        # cached _is_dry_run is True, silently blocking EVERY live entry/exit. Propagate
+        # the CONFIRMED dry_run to those cached readers now (this is the correct point —
+        # after confirmation, so an unconfirmed --live stays paper).
+        try:
+            _oc = getattr(getattr(bot, "clob_client", None), "olympus_client", None)
+            if _oc is not None and hasattr(_oc, "_is_dry_run"):
+                _oc._is_dry_run = bool(dry_run)
+            if getattr(bot, "ctf_redeemer", None) is not None:
+                bot.ctf_redeemer.dry_run = bool(dry_run)
+            for _mattr in (
+                "btc_exposure_manager", "sol_exposure_manager", "eth_exposure_manager",
+                "hype_exposure_manager", "xrp_exposure_manager", "doge_exposure_manager",
+                "bnb_exposure_manager",
+            ):
+                _m = getattr(bot, _mattr, None)
+                if _m is not None and hasattr(_m, "is_paper"):
+                    _m.is_paper = bool(dry_run)
+            logging.warning(
+                "Runtime dry_run=%s propagated to Olympus broker guard + CTF redeemer + "
+                "exposure managers (fixes cached-paper-in-live order block).",
+                dry_run,
+            )
+        except Exception as _exc:
+            logging.error("Failed to propagate runtime dry_run to sub-components: %s", _exc)
 
     # Load API keys before dashboard so /api/status shows correct AI readiness (incl. dashboard-only).
     api_keys = {
@@ -6479,6 +7334,33 @@ async def main():
             os._exit(1)
         shutdown_state["signal"] = sig
         bot._terminal_shutdown_sig = sig
+        # SHUTDOWN WATCHDOG (2026-07-27): arm an independent hard-kill timer on the
+        # FIRST stop signal. The graceful path (_graceful_shutdown_or_exit, ~8s) only
+        # begins AFTER `await bot.start()` unblocks from the cancel below — but if the
+        # main loop is wedged in a blocking sync/executor call, that cancel never
+        # lands, the graceful timeout never even arms, and the process ignores a
+        # single Ctrl-C until a SECOND signal (this is the "stop command doesn't work"
+        # symptom). This daemon Timer fires from its own thread regardless of main-loop
+        # state, so ONE stop signal always terminates the process. A normal graceful
+        # shutdown finishes well under the deadline and the os._exit(0) at the end of
+        # main() tears this thread down before it can fire, so it never kills a healthy
+        # shutdown. Deadline sits below the supervisor's 15s child-wait so the child
+        # self-terminates before the supervisor escalates to SIGTERM.
+        try:
+            _wd_deadline = max(12.0, _shutdown_timeout_seconds() + 4.0)
+
+            def _watchdog_force_exit():
+                try:
+                    _write_death_marker("watchdog_force_exit")
+                except Exception:
+                    pass
+                os._exit(1)
+
+            _wd = threading.Timer(_wd_deadline, _watchdog_force_exit)
+            _wd.daemon = True
+            _wd.start()
+        except Exception:
+            pass
         _write_runtime_status(
             phase="signal_received",
             session_id=getattr(bot.journal, "session_id", None),

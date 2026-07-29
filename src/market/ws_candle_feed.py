@@ -127,6 +127,28 @@ class WSCandleFeed:
         except Exception:
             return None
 
+    def get_last_price(self, symbol: str) -> Optional[float]:
+        """O(1) latest live close for a symbol (from the 1m stream's live last bar).
+
+        Cheap accessor for high-frequency sampling (entry-tape shadow) — reads the
+        last bar's close under lock, no DataFrame materialization. None if not ready
+        or the last packet is stale. Fail-open."""
+        try:
+            key = ((symbol or "").upper(), "1m")
+            with self._lock:
+                if key not in self._ready:
+                    return None
+                buf = self._bars.get(key)
+                if not buf:
+                    return None
+                upd = self._last_update.get(key, 0.0)
+                if (time.time() - upd) > 90.0:  # stale stream -> no live price
+                    return None
+                close = float(buf[-1][4])
+                return close if close > 0 else None
+        except Exception:
+            return None
+
     # ---- seeding ----------------------------------------------------------
     def _seed(self, symbol: str, interval: str) -> bool:
         url = _FUT_REST if symbol.upper() in _FUTURES_SYMBOLS else _SPOT_REST

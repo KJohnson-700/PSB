@@ -247,7 +247,11 @@ def test_place_order_routes_order_type_to_post_order(monkeypatch):
     c = CLOBClient({})
     monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
     c.client = MagicMock()
-    c.client.create_order.return_value = "SIGNED_ORDER"
+    # 2026-07-27 entry-outage fix: FAK/FOK are MARKET orders on the CLOB (maker<=2dec,
+    # taker<=4dec) and the bot routes them through create_market_order, NOT create_order
+    # (the limit path built swapped precision and 400'd). GTC still uses create_order.
+    c.client.create_market_order.return_value = "SIGNED_MKT_ORDER"
+    c.client.create_order.return_value = "SIGNED_LIMIT_ORDER"
     c.client.post_order.return_value = {"order_id": "oid1"}
     c.ensure_fresh_credentials = AsyncMock(return_value=True)
 
@@ -258,7 +262,10 @@ def test_place_order_routes_order_type_to_post_order(monkeypatch):
         )
     )
     assert order is not None and order.order_id == "oid1"
+    # FAK routed through the MARKET path; its signed order is what reaches post_order.
+    c.client.create_market_order.assert_called_once()
+    c.client.create_order.assert_not_called()
     args, _ = c.client.post_order.call_args
-    assert args[0] == "SIGNED_ORDER"
+    assert args[0] == "SIGNED_MKT_ORDER"
     assert args[1] == OrderType.FAK      # time-in-force routed to post_order
     assert args[2] is False              # post_only flag preserved (default False)

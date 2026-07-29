@@ -84,6 +84,8 @@ from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
     get_loosen_min_edge_mult,
 )
+from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.tape_freshness import compute_freshness_penalty
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -1958,6 +1960,37 @@ class SolMacroStrategy:
         )
         return side, policy
 
+    def _pocket_rsi_floor_tape_adjusted(self, base_floor, tf: str):
+        """Tape-adaptive pocket RSI floor (2026-07-26 operator GO, dynamic 'A').
+
+        Moves the FROZEN buy_no pocket RSI floor with the lane's tape signal — the RSI
+        axis Codex flagged that the min_edge admission delta cannot cover:
+          - losing never-green short lane -> RAISE the floor (block more oversold shorts)
+          - winning lane -> LOWER the floor (admit more oversold shorts = frequency)
+        Derived from the SAME per-lane admission delta (get_tape_admission_delta, edge
+        units) scaled to RSI points, so RSI adapts in lockstep with min_edge — no adapter
+        change, so this hot-reloads (sol_macro is a code-reload module; keys via
+        self.config.get). Clamped to a sane band. Guarded -> base_floor on any error.
+        """
+        try:
+            # keys live under ROOT lane_tape_adapter (self.config is the per-strategy
+            # sub-dict; read full_config like get_loosen_min_edge_mult does — hot-reloads).
+            _lta = self.full_config.get("lane_tape_adapter", {}) if isinstance(self.full_config, dict) else {}
+            _lta = _lta or {}
+            if not bool(_lta.get("pocket_rsi_tape_enabled", True)):
+                return base_floor
+            _adm = get_tape_admission_delta(self._signal_strategy_name, tf, "down")
+            if not _adm:
+                return base_floor
+            _max_pts = float(_lta.get("pocket_rsi_tape_max_points", 8.0) or 8.0)
+            # admission tighten_max ~0.05 edge -> full RSI points; loosen scales the same
+            _pts = max(-_max_pts, min(_max_pts, _adm / 0.05 * _max_pts))
+            _fmin = float(_lta.get("pocket_rsi_tape_floor_min", 15.0) or 15.0)
+            _fmax = float(_lta.get("pocket_rsi_tape_floor_max", 60.0) or 60.0)
+            return max(_fmin, min(_fmax, float(base_floor) + _pts))
+        except Exception:
+            return base_floor
+
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
         if tf not in ("5m", "15m", "1h"):
@@ -3360,6 +3393,27 @@ class SolMacroStrategy:
                 # allowed_side is LONG here (a faded side would be SHORT), so this is a
                 # native/aligned long band entry regardless of fade_regime — tag plainly.
                 side_source = (side_source or "") + "+simple_band_long"
+                # 2026-07-28 QUALITY VETO (opt-in, sol only). The 1h simple-band long
+                # cohort admits on price-band consensus alone (est_prob unusable, so it's
+                # EXEMPT from the quant-agreement gate), and is a verified realized leak:
+                # sol n63 30%WR -$79.64, with NO salvageable +EV subset (every momentum
+                # split negative; Codex-confirmed). RSI-pocket is a banned fix (was wrong
+                # for doge's band). Veto + ghost-log so the counterfactual keeps settling.
+                _a1hsl_cfg = self.config.get("alt_1h_simple_long", {}) or {}
+                if bool(_a1hsl_cfg.get("quality_veto_enabled", False)):
+                    _bump_skip("alt_1h_simple_long_quality_veto")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action="BUY_YES",
+                        reason="alt_1h_simple_long_quality_veto",
+                        yes_price=market.yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": side_source,
+                                 "rule": "sol_1h_simple_band_disable_20260728"},
+                    )
+                    continue
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
@@ -3494,16 +3548,49 @@ class SolMacroStrategy:
             # BNB 1h: RSI<45 -EV, 45-55 +0.408 -> min 45. BNB 15m: RSI<35 -0.098, >=35 +EV
             # -> min 35. Opt-in (key unset = off); ghost-logs the rejected rest.
             _bn_pocket_rsi_min = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_min")
+            if _bn_pocket_rsi_min is not None:
+                _bn_pocket_rsi_min = self._pocket_rsi_floor_tape_adjusted(
+                    _bn_pocket_rsi_min, _updown_tf
+                )
             if is_updown and action == "BUY_NO" and _bn_pocket_rsi_min is not None:
                 _alt_rsi = getattr(sol, "rsi_14", None)
                 if _alt_rsi is not None and float(_alt_rsi) < float(_bn_pocket_rsi_min):
-                    _bump_skip(f"buy_no_{_updown_tf}_pocket_off")
+                    if float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0) > 0.0:
+                        # DYNAMIC soft mode (per-lane opt-in): do NOT hard-reject the oversold
+                        # short on the EARLY action -- defer to a min-edge bump on the FINAL
+                        # post-flip action at the edge gate below. sol left hard (+$88 winner).
+                        pass
+                    else:
+                        _bump_skip(f"buy_no_{_updown_tf}_pocket_off")
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=allowed_side,
+                            action=action,
+                            reason=f"buy_no_{_updown_tf}_pocket_off",
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={"side_source": side_source, "rsi_14": _alt_rsi},
+                        )
+                        continue
+            # 2026-07-28: per-window BUY_NO POCKET CEILING (RSI max) — mirror of the
+            # buy_yes pocket_rsi_max but for shorts on FAST windows where the RSI dynamic
+            # INVERTS vs 1h/15m. 5m shorts are +EV only when genuinely oversold (low RSI,
+            # a real broken-down dump) and -EV when shorting mid-RSI dips into the bounce.
+            # sol 5m data (recent 10 sess): RSI>=28 = 0W/5L, RSI<28 = 5W/2L. Admit BUY_NO
+            # only when alt RSI <= buy_no_<window>_pocket_rsi_max. Opt-in (unset = off);
+            # ghost-logs the rejected rest.
+            _bn_pocket_rsi_max = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_max")
+            if is_updown and action == "BUY_NO" and _bn_pocket_rsi_max is not None:
+                _alt_rsi = getattr(sol, "rsi_14", None)
+                if _alt_rsi is not None and float(_alt_rsi) > float(_bn_pocket_rsi_max):
+                    _bump_skip(f"buy_no_{_updown_tf}_pocket_ceiling_off")
                     _log_skip_reject(
                         market=market,
                         window=_updown_tf,
                         side=allowed_side,
                         action=action,
-                        reason=f"buy_no_{_updown_tf}_pocket_off",
+                        reason=f"buy_no_{_updown_tf}_pocket_ceiling_off",
                         yes_price=yes_price,
                         htf_bias=primary_htf_bias,
                         context={"side_source": side_source, "rsi_14": _alt_rsi},
@@ -3558,6 +3645,42 @@ class SolMacroStrategy:
                     side=allowed_side,
                     action=action,
                     reason="buy_yes_15m_native_suppressed",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
+
+            # 2026-07-25 NATIVE-SHORT CUT (operator GO, next-restart bundle): mirror of the
+            # 15m native-long suppressor for BUY_NO. The plain disable_buy_no_15m gate does
+            # NOT catch native-source shorts (side_source=doge_15m_native / hype_15m_native),
+            # so hype/doge 15m-down kept firing after the 07-25 "cut". This closes them.
+            # Per-strategy (self.config is the strategies.<name> dict), isolated. Excludes
+            # fade_native sources for symmetry with the long hooks (no active fade-native
+            # short in current config: hype fade_regime_windows [], doge fade_regime false).
+            # Break: revert disable_buy_no_15m_native false if the suppressed cohort would
+            # have won (>=2 skipped-then-would-win, net-positive) on either asset.
+            if (
+                is_updown
+                and _updown_tf == "15m"
+                and action == "BUY_NO"
+                and "15m_native" in (side_source or "")
+                and "fade_native" not in (side_source or "")
+                and bool(self.config.get("disable_buy_no_15m_native", False))
+            ):
+                # 2026-07-26 Codex smoke-review fix: require "15m_native" in side_source so
+                # this cuts ONLY native htf-aligned 15m shorts (doge_15m_native / hype_15m_native)
+                # — NOT non-native shorts (override / vs_slower / neutral). This gate runs
+                # BEFORE the flips, so a native short's source is a clean "*_15m_native" with no
+                # flip suffix; tape-driven FLIP shorts (the +EV cohort) get their suffix later and
+                # are handled by _post_flip_disabled_side, which intentionally admits them.
+                _bump_skip("buy_no_15m_native_suppressed")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_no_15m_native_suppressed",
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
                     context={"side_source": side_source},
@@ -5622,6 +5745,63 @@ class SolMacroStrategy:
                 regime=macro_trend,
             )
 
+            # DYNAMIC ADMISSION (2026-07-26 operator GO): replace the static per-lane
+            # floors with a tape-aware delta. LOOSEN (negative) a winning+green lane to
+            # reclaim frequency a frozen floor would cost; TIGHTEN (positive) a net-losing
+            # never-green lane. Self-correcting via the same signal that drives sizing.
+            # Guarded + defaults to 0.0 (no effect) when the state file/admission is off.
+            try:
+                _tape_adm = get_tape_admission_delta(
+                    self._signal_strategy_name,
+                    _updown_tf if is_updown else "15m",
+                    lane_side,
+                )
+                if _tape_adm:
+                    _pre_adm = effective_min_edge
+                    # never below a small hard floor; bounded delta already clamped upstream
+                    effective_min_edge = max(0.0, effective_min_edge + _tape_adm)
+                    reason_parts.append(f"tape_adm={_tape_adm:+.3f}")
+                    logger.debug(
+                        "  %s tape_admission %s|%s|%s min_edge %.4f -> %.4f (%+.3f)",
+                        _brand, self._signal_strategy_name, _updown_tf, lane_side,
+                        _pre_adm, effective_min_edge, _tape_adm,
+                    )
+            except Exception:
+                pass
+
+            # 2026-07-26 (#3 candidate-time TAPE FRESHNESS — operator-directed, Codex
+            # root-cause). A GRADED edge+size penalty for entries where the immediate
+            # tape has rolled over against the side (own-TF MACD decelerating/reversed)
+            # or the move is RSI-exhausted. Reacts on THIS candidate (unlike the
+            # close-based adapter, which lags the turn) and NEVER hard-blocks (unlike
+            # tape_arbitration), so it cannot re-choke frequency. Covers 1h too (#4 =
+            # the eth-1h-up stale-bias leak). size_mult carried to final_size below.
+            _freshness_size_mult = 1.0
+            try:
+                _fresh_tf = _updown_tf if is_updown else "15m"
+                _fresh_macd = (
+                    sol.macd_5m if _fresh_tf == "5m"
+                    else sol.macd_1h if _fresh_tf == "1h"
+                    else sol.macd_15m
+                )
+                _fresh = compute_freshness_penalty(
+                    action=action,
+                    own_macd=_fresh_macd,
+                    rsi=getattr(sol, "rsi_14", None),
+                    cfg=self.full_config.get("tape_freshness", {}),
+                )
+                if _fresh.get("edge_add"):
+                    effective_min_edge += float(_fresh["edge_add"])
+                _freshness_size_mult = float(_fresh.get("size_mult", 1.0) or 1.0)
+                if _fresh.get("staleness"):
+                    reason_parts.append(
+                        f"tape_fresh={_fresh['staleness']:.2f}"
+                        f"(e+{float(_fresh.get('edge_add', 0.0)):.3f},"
+                        f"x{_freshness_size_mult:.2f})"
+                    )
+            except Exception:
+                _freshness_size_mult = 1.0
+
             if is_updown and action == "BUY_YES":
                 _lane_meta = build_lane_metadata(
                     strategy=self._signal_strategy_name,
@@ -5660,6 +5840,25 @@ class SolMacroStrategy:
                         "min_edge_add": _repair.min_edge_add,
                         "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
                     }
+
+            # DYNAMIC pocket-RSI soft penalty (2026-07-24) — on the FINAL post-flip action.
+            # An oversold BUY_NO must clear effective_min_edge + penalty; weak low-RSI shorts
+            # (they bleed in a bounce) fall out, strong-edge ones pass, and the lane self-admits
+            # again when low-RSI shorts win. Per-lane opt-in; pairs with the pocket gate which
+            # skips its static hard reject when this is set. Replaces static floor w/ dynamic bar.
+            _pkt_soft_applied = False
+            _pkt_soft = float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0)
+            if _pkt_soft > 0.0 and is_updown and action == "BUY_NO":
+                _pkt_min = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_min")
+                if _pkt_min is not None:
+                    _pkt_min = self._pocket_rsi_floor_tape_adjusted(_pkt_min, _updown_tf)
+                _pkt_rsi = getattr(sol, "rsi_14", None)
+                if _pkt_min is not None and _pkt_rsi is not None and float(_pkt_rsi) < float(_pkt_min):
+                    effective_min_edge = float(effective_min_edge) + _pkt_soft
+                    _pkt_soft_applied = True  # Codex 2026-07-24: block the AI-off marginal bypass below
+                    reason_parts.append(
+                        f"pocket_rsi_soft={_pkt_soft:.3f}(rsi={float(_pkt_rsi):.1f}<{float(_pkt_min):.0f})"
+                    )
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             _ai_updown_observe_only = bool(
@@ -5810,6 +6009,14 @@ class SolMacroStrategy:
                     _bump_skip("ai_nonpositive_edge_marginal_updown")
             elif (
                 is_updown
+                # 2026-07-28: AI is OBSERVE-ONLY on every alt (config ai_updown_observe_only),
+                # so its timing window must NOT block a marginal alt entry — observing != enforcing.
+                # This mirrors the open-window path above, where observe-only alts are always
+                # admitted because the AI cannot veto. Only enforcing lanes keep this gate; bitcoin
+                # (the sole enforcing updown lane) runs a separate code path and is unaffected. In
+                # June the alt _DECISION_GATE_WINDOWS was empty so alt AI never fired at all — a
+                # 2026-07-03 change turned it on for alts, which is what re-introduced this block.
+                and not _ai_updown_observe_only
                 and edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
@@ -5833,7 +6040,7 @@ class SolMacroStrategy:
             # SHORTs are admitted on quant terms (see _admit_marginal_quant_short) —
             # the composite scorer is the quality gate instead of an auto lane_min_edge
             # reject. The two upstream AI tiebreaker blocks are also skipped for these.
-            _admit_marginal_no_ai = self._admit_marginal_quant_short(
+            _admit_marginal_no_ai = False if _pkt_soft_applied else self._admit_marginal_quant_short(
                 edge, allowed_side, _timing_window_open,
                 window=(_updown_tf if is_updown else "15m"),
             )
@@ -6424,6 +6631,14 @@ class SolMacroStrategy:
                     # lane_max is a HARD CAP last (per-lane downsize lever, e.g. sol 5m $15)
                     if _ln_max > 0:
                         final_size = min(final_size, _ln_max)
+            # #3 tape-freshness SIZE penalty (computed at the min_edge block above):
+            # de-size a stale/exhausted entry rather than block it. Applied last so it
+            # binds under lane floors/caps; a heavily-penalized size may fall below the
+            # 0.5 floor and skip, which is the intended outcome for a fully-stale entry.
+            try:
+                final_size *= float(_freshness_size_mult)
+            except Exception:
+                pass
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -6459,6 +6674,34 @@ class SolMacroStrategy:
                 quant_side=side_from_est_prob_up(raw_est_prob),
                 momentum_side=side_from_momentum_bias(getattr(mtt, "m5_trend", None)),
             )
+
+            # 2026-07-28 QUANT-AGREEMENT admission gate (opt-in, sol/bnb). Entries whose
+            # final side DISAGREES with quant_side (the est_prob-implied direction) are a
+            # verified realized leak: sol+bnb non-flip disagree n103 34%WR -$100.90 vs
+            # agree n765 48% +$416.53 (all sessions). Veto the override, EXCEPT paths that
+            # deliberately ignore est_prob: window_delta_flip (tape-driven edge) and
+            # simple_band (est_prob unusable, sized on flat edge). quant_side=None (raw
+            # est_prob exactly 0.5 placeholder) is NOT vetoed. Config: require_quant_side_
+            # agreement (per-strategy). Skip reason: quant_side_disagree.
+            if bool(self.config.get("require_quant_side_agreement", False)):
+                _qs = side_from_est_prob_up(raw_est_prob)
+                _chosen = "LONG" if action == "BUY_YES" else "SHORT"
+                _ss = str(signal_side_source or "")
+                _exempt = ("window_delta_flip" in _ss) or ("simple_band" in _ss)
+                if _qs is not None and _chosen != _qs and not _exempt:
+                    _bump_skip("quant_side_disagree")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="quant_side_disagree",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": signal_side_source,
+                                 "quant_side": _qs, "chosen": _chosen},
+                    )
+                    continue
 
             signal = SolMacroSignal(
                 market_id=market.id,

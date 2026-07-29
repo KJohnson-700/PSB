@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,15 @@ class ExposureManager:
         self.loss_kill_apply_in_paper = bool(
             exposure_config.get('loss_kill_apply_in_paper', False)
         )
+        # 2026-07-26 operator GO — DIRECTIONAL BREAKER, per-lane allowlist. When non-empty,
+        # the 3-consecutive-loss pause enforces ONLY on these lanes ("asset|window|side",
+        # lowercased); every other lane is exempt. The directional_breaker_shadow proved a
+        # BLANKET breaker LOSES money (false-cuts winners, net -$47..-$88) but is a clear
+        # per-lane winner on specific lanes (xrp|5m|down +$25.37, xrp|15m|down +$8.58).
+        # Empty/unset = legacy all-lanes behavior (unchanged).
+        self.loss_kill_lane_allowlist = self._parse_lane_allowlist(
+            exposure_config.get('loss_kill_lane_allowlist')
+        )
         self.max_consecutive_losses = exposure_config.get('max_consecutive_losses', 3)
         self.pause_cycles = exposure_config.get('pause_cycles', 2)  # Test mode: pause N cycles
         self.max_pause_cycles = int(
@@ -159,6 +168,13 @@ class ExposureManager:
         self._pause_recovery_anchor_pnl: float = 0.0
         self._pause_recovery_target: float = 0.0
         self._latest_green_window: Optional[bool] = None
+        # --- Per-lane loss-streak state (2026-07-25 operator GO) ---
+        # The loss kill switch is PER-LANE, not per-asset: 3 consecutive losses on
+        # e.g. doge 5m|down pauses ONLY that lane, not doge 5m|up / 15m / 1h. Keyed by
+        # "window|side" (side normalized to up/down). The asset-level _paused/_pause_*
+        # scalars above are now only driven by MANUAL pause; loss-streak pausing lives
+        # entirely in _lane_state and is gated per-candidate via lane_paused().
+        self._lane_state: Dict[str, Dict[str, Any]] = {}
 
     def _apply_per_asset_overrides(self, exposure_config: Dict[str, Any]) -> None:
         """Apply exposure.per_asset.<lane_name.lower()> overrides to this manager.
@@ -223,6 +239,10 @@ class ExposureManager:
         if "loss_kill_apply_in_paper" in exposure_config:
             self.loss_kill_apply_in_paper = bool(
                 exposure_config["loss_kill_apply_in_paper"]
+            )
+        if "loss_kill_lane_allowlist" in exposure_config:
+            self.loss_kill_lane_allowlist = self._parse_lane_allowlist(
+                exposure_config.get("loss_kill_lane_allowlist")
             )
         self.max_consecutive_losses = exposure_config.get("max_consecutive_losses", 3)
         self.pause_cycles = exposure_config.get("pause_cycles", 2)
@@ -454,8 +474,14 @@ class ExposureManager:
         strategy: str = "",
         market_id: str = "",
         window_size: str = "",
+        side: str = "",
     ):
-        """Record a completed trade result. Triggers lane pause if needed."""
+        """Record a completed trade result. Triggers the PER-LANE loss pause if needed.
+
+        ``side`` (BUY_YES/BUY_NO/YES/NO/up/down) is normalized to up/down and combined
+        with ``window_size`` into the lane key, so the loss streak and pause are scoped
+        to the exact lane (asset+window+side), not the whole asset.
+        """
         result = TradeResult(
             timestamp=datetime.now(),
             pnl=pnl,
@@ -469,25 +495,42 @@ class ExposureManager:
         if len(self._recent_trades) > 50:
             self._recent_trades = self._recent_trades[-50:]
 
-        # Track consecutive losses
-        if pnl < 0:
-            self._consecutive_losses += 1
-            self._streak_loss_abs_total += abs(float(pnl))
-            logger.info(f"Exposure: Loss recorded ({pnl:+.2f}), streak={self._consecutive_losses}")
+        key = self._lane_key(window_size, side)
+        st = self._lane_st(key)
 
-            if self.loss_kill_active and self._consecutive_losses >= self.max_consecutive_losses:
-                self._trigger_pause(
-                    f"{self._consecutive_losses} consecutive losses",
-                    window_size=str(window_size or ""),
+        # Track consecutive losses PER LANE
+        if pnl < 0:
+            st["consecutive_losses"] += 1
+            st["streak_loss_abs_total"] += abs(float(pnl))
+            self._streak_loss_abs_total += abs(float(pnl))
+            logger.info(
+                f"Exposure[{self.lane_name}/{key}]: Loss recorded ({pnl:+.2f}), "
+                f"lane streak={st['consecutive_losses']}"
+            )
+            if (
+                self.loss_kill_active
+                and self._lane_breaker_enabled(key)
+                and st["consecutive_losses"] >= self.max_consecutive_losses
+            ):
+                self._trigger_pause_lane(
+                    key, st, f"{st['consecutive_losses']} consecutive losses",
+                    window_size=str(window_size or ""), side=side,
                 )
-            elif not self.loss_kill_active and self._consecutive_losses >= self.max_consecutive_losses:
+            elif not self.loss_kill_active and st["consecutive_losses"] >= self.max_consecutive_losses:
                 _why = "disabled" if not self.loss_kill_switch_enabled else "paper session (live-only)"
-                logger.info(f"Exposure: Loss-streak lane pause inert ({_why}) — would pause at {self._consecutive_losses} losses")
+                logger.info(
+                    f"Exposure[{self.lane_name}/{key}]: Loss-streak lane pause inert "
+                    f"({_why}) — would pause at {st['consecutive_losses']} losses"
+                )
         else:
-            if self._consecutive_losses > 0:
-                logger.info(f"Exposure: Win recorded ({pnl:+.2f}), resetting loss streak")
-            self._consecutive_losses = 0
-            self._streak_loss_abs_total = 0.0
+            if st["consecutive_losses"] > 0:
+                logger.info(f"Exposure[{self.lane_name}/{key}]: Win recorded ({pnl:+.2f}), resetting lane streak")
+            st["consecutive_losses"] = 0
+            st["streak_loss_abs_total"] = 0.0
+        # Compat aggregate for tier penalty / dashboard: worst lane streak.
+        self._consecutive_losses = max(
+            (s["consecutive_losses"] for s in self._lane_state.values()), default=0
+        )
 
     def _trigger_pause(self, reason: str, *, window_size: str = ""):
         """Activate the loss-streak lane pause."""
@@ -559,6 +602,189 @@ class ExposureManager:
         logger.info(f"EXPOSURE RESUMED: {reason}")
 
     # ──────────────────────────────────────────────────────────────
+    # Per-lane loss-streak kill switch (2026-07-25 operator GO)
+    # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _norm_side(side: Any) -> str:
+        """Normalize any side/action vocab to the lane 'up'/'down'."""
+        s = str(side or "").strip().lower()
+        if s in ("buy_yes", "yes", "up", "long"):
+            return "up"
+        if s in ("buy_no", "no", "down", "short"):
+            return "down"
+        return s  # unknown → keep raw so it still isolates by whatever was passed
+
+    def _lane_key(self, window: Any, side: Any) -> str:
+        return f"{str(window or '').strip().lower()}|{self._norm_side(side)}"
+
+    def _parse_lane_allowlist(self, raw: Any) -> set:
+        """Normalize allowlist entries to 'asset|window|up-or-down' so config can be
+        written with any side vocab (BUY_NO/short/down) or stray spaces and still match
+        the runtime lane id. Codex 2026-07-26."""
+        out: set = set()
+        for x in (raw or []):
+            s = str(x or "").strip().lower()
+            if not s:
+                continue
+            parts = [p.strip() for p in s.split("|")]
+            if len(parts) == 3:
+                parts[2] = self._norm_side(parts[2])
+            out.add("|".join(parts))
+        return out
+
+    def _lane_breaker_enabled(self, key: str) -> bool:
+        """True if the loss-streak breaker enforces on this lane. Empty allowlist =
+        every lane (legacy). Otherwise only 'asset|window|side' lanes in the allowlist
+        (e.g. 'xrp|5m|down'). Keeps the breaker per-lane, not blanket."""
+        if not self.loss_kill_lane_allowlist:
+            return True
+        return f"{str(self.lane_name or '').strip().lower()}|{key}" in self.loss_kill_lane_allowlist
+
+    def _lane_st(self, key: str) -> Dict[str, Any]:
+        st = self._lane_state.get(key)
+        if st is None:
+            st = {
+                "consecutive_losses": 0,
+                "paused": False,
+                "pause_reason": "",
+                "pause_start": None,
+                "cycles_since_pause": 0,
+                "streak_loss_abs_total": 0.0,
+                "recovery_anchor_pnl": 0.0,
+                "recovery_target": 0.0,
+                "last_trigger": None,
+            }
+            self._lane_state[key] = st
+        return st
+
+    def _trigger_pause_lane(
+        self, key: str, st: Dict[str, Any], reason: str, *,
+        window_size: str = "", side: str = "",
+    ) -> None:
+        """Activate the loss-streak pause for ONE lane."""
+        st["paused"] = True
+        st["pause_reason"] = reason
+        st["pause_start"] = datetime.now()
+        st["cycles_since_pause"] = 0
+        st["recovery_anchor_pnl"] = self._portfolio_pnl
+        st["recovery_target"] = (
+            st["streak_loss_abs_total"] * self.loss_pause_recovery_multiple
+            if self.loss_pause_recovery_multiple > 0
+            else 0.0
+        )
+        lane_label = f"{self.lane_name}|{key}"
+        st["last_trigger"] = {
+            "lane": str(self.lane_name or "UNKNOWN"),
+            "lane_key": key,
+            "window_size": str(window_size or "").strip(),
+            "side": self._norm_side(side),
+            "reason": reason,
+            "timestamp": st["pause_start"].isoformat(),
+            "streak_loss_abs_total": round(st["streak_loss_abs_total"], 4),
+            "recovery_target": round(st["recovery_target"], 4),
+            "recovery_anchor_pnl": round(st["recovery_anchor_pnl"], 4),
+        }
+        # Mirror to the asset-level diagnostic slot so the dashboard/ops_pulse still
+        # surface the most-recent kill (now lane-scoped).
+        self._last_loss_kill_trigger = st["last_trigger"]
+        if self.is_paper:
+            logger.warning(f"LOSS-STREAK LANE PAUSE [{lane_label}]: {reason} — pausing {self.pause_cycles} cycles")
+        else:
+            mode_desc = "auto-resume" if self.resume_mode == PauseResumeMode.AUTO else "manual resume"
+            logger.warning(f"LOSS-STREAK LANE PAUSE [{lane_label}]: {reason} — paused until {mode_desc}")
+
+        if self._notifications is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self._notifications.notify_kill_lane(
+                            lane_label, reason, st["consecutive_losses"]
+                        )
+                    )
+            except Exception:
+                pass
+        if self._on_pause_ai_callback is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self._on_pause_ai_callback(reason, st["consecutive_losses"])
+                    )
+            except Exception:
+                pass
+
+    def _unpause_lane(self, key: str, st: Dict[str, Any], reason: str) -> None:
+        """Deactivate the loss-streak pause for ONE lane."""
+        st["paused"] = False
+        st["pause_reason"] = ""
+        st["cycles_since_pause"] = 0
+        st["consecutive_losses"] = 0
+        st["streak_loss_abs_total"] = 0.0
+        st["recovery_anchor_pnl"] = self._portfolio_pnl
+        st["recovery_target"] = 0.0
+        st["last_trigger"] = None
+        logger.info(f"EXPOSURE LANE RESUMED [{self.lane_name}|{key}]: {reason}")
+
+    def _should_resume_lane(self, st: Dict[str, Any], conditions: MarketConditions) -> bool:
+        """Per-lane mirror of _should_resume (reads the lane's recovery anchor/target)."""
+        base_ok = (
+            conditions.volume_ratio >= self.low_volume_ratio
+            and conditions.trend_strength >= 0.3
+            and conditions.volatility >= self.low_vol_threshold
+        )
+        if not base_ok:
+            return False
+        if self.require_green_window_for_resume and not self._is_green_window(conditions):
+            return False
+        if st["recovery_target"] > 0:
+            recovered = max(0.0, self._portfolio_pnl - st["recovery_anchor_pnl"])
+            if recovered < st["recovery_target"]:
+                return False
+        return True
+
+    def lane_paused(self, window: Any, side: Any, conditions: Optional[MarketConditions] = None) -> Tuple[bool, str]:
+        """PER-LANE loss-kill gate — call per-candidate in the strategy scan loop.
+
+        Returns (paused, reason). Applies the same cooldown / auto-resume logic as the
+        old asset-wide pause, but scoped to one lane. Inert when loss_kill_active is
+        False (disabled or paper without loss_kill_apply_in_paper). Manual/global pause
+        is handled separately by get_exposure().
+        """
+        if not self.loss_kill_active:
+            return False, ""
+        key = self._lane_key(window, side)
+        if not self._lane_breaker_enabled(key):
+            return False, ""
+        st = self._lane_state.get(key)
+        if not st or not st["paused"]:
+            return False, ""
+        cond = conditions if conditions is not None else self._last_conditions
+        if self.is_paper or self.resume_mode == PauseResumeMode.AUTO:
+            st["cycles_since_pause"] += 1
+            if st["cycles_since_pause"] >= self.pause_cycles:
+                if st["cycles_since_pause"] >= self.max_pause_cycles and st["recovery_target"] <= 0:
+                    self._unpause_lane(key, st, "Max pause cycles reached")
+                    return False, ""
+                if cond is not None and self._should_resume_lane(st, cond):
+                    self._unpause_lane(key, st, "Conditions improved after pause")
+                    return False, ""
+                return True, f"lane_paused({st['pause_reason']}) [cycle {st['cycles_since_pause']}/{self.max_pause_cycles}]"
+            return True, f"lane_paused({st['pause_reason']}) cooling [cycle {st['cycles_since_pause']}/{self.pause_cycles}]"
+        # Manual resume mode (live): stay paused until manual_resume().
+        return True, f"lane_paused({st['pause_reason']}) — manual resume required"
+
+    def lane_pause_snapshot(self) -> Dict[str, Any]:
+        """Diagnostic: currently-paused lanes (for dashboard/ops_pulse)."""
+        return {
+            k: {"reason": v["pause_reason"], "streak": v["consecutive_losses"]}
+            for k, v in self._lane_state.items() if v.get("paused")
+        }
+
+    # ──────────────────────────────────────────────────────────────
     # Manual Controls
     # ──────────────────────────────────────────────────────────────
 
@@ -578,7 +804,8 @@ class ExposureManager:
         self._pause_recovery_anchor_pnl = self._portfolio_pnl
         self._pause_recovery_target = 0.0
         self._last_loss_kill_trigger = None
-        logger.info("Exposure: MANUAL RESUME — all clear")
+        self._lane_state.clear()
+        logger.info("Exposure: MANUAL RESUME — all clear (all lanes)")
 
     def reset_for_new_paper_session(self):
         """Clear streaks, pauses, and recent trade memory after a dashboard paper reset."""
@@ -596,6 +823,7 @@ class ExposureManager:
         self._pause_recovery_target = 0.0
         self._latest_green_window = None
         self._last_loss_kill_trigger = None
+        self._lane_state.clear()
 
     def update_portfolio_pnl(self, pnl: float) -> None:
         """Update realized PnL used for recovery gating and operator diagnostics."""
@@ -666,15 +894,26 @@ class ExposureManager:
         }
 
     def get_status(self) -> Dict[str, Any]:
-        """Get exposure status for dashboard/logging."""
+        """Get exposure status for dashboard/logging.
+
+        Loss-kill pausing is now PER-LANE; the asset-level fields here AGGREGATE the
+        per-lane state so the dashboard/tests keep a coherent view: ``paused`` is true
+        if ANY lane is loss-paused (or manual), and the recovery/reason fields report
+        the representative (most-recently-triggered) paused lane.
+        """
+        paused_lanes = {k: v for k, v in self._lane_state.items() if v.get("paused")}
+        _rep = None
+        if paused_lanes:
+            _rep_key = (self._last_loss_kill_trigger or {}).get("lane_key")
+            _rep = paused_lanes.get(_rep_key) or next(iter(paused_lanes.values()))
         return {
             'tier': self._current_tier.value,
             'multiplier': self.tier_multipliers.get(self._current_tier, 0),
             'max_size': self.tier_sizing.get(self._current_tier, 0),
-            'paused': self._paused or self._manual_pause,
-            'pause_reason': self._pause_reason if self._paused else ('manual' if self._manual_pause else ''),
+            'paused': bool(paused_lanes) or self._manual_pause,
+            'pause_reason': (_rep["pause_reason"] if _rep else ('manual' if self._manual_pause else '')),
             'consecutive_losses': self._consecutive_losses,
-            'cycles_since_pause': self._cycles_since_pause,
+            'cycles_since_pause': (_rep["cycles_since_pause"] if _rep else 0),
             'recent_trades': len(self._recent_trades),
             'recent_pnl': sum(t.pnl for t in self._recent_trades[-10:]),
             'conditions': {
@@ -683,9 +922,10 @@ class ExposureManager:
                 'trend_strength': self._last_conditions.trend_strength if self._last_conditions else 0,
             } if self._last_conditions else {},
             'last_loss_kill_trigger': dict(self._last_loss_kill_trigger) if self._last_loss_kill_trigger else None,
-            'pause_recovery_target': self._pause_recovery_target,
-            'pause_recovery_anchor_pnl': self._pause_recovery_anchor_pnl,
+            'pause_recovery_target': (_rep["recovery_target"] if _rep else self._pause_recovery_target),
+            'pause_recovery_anchor_pnl': (_rep["recovery_anchor_pnl"] if _rep else self._pause_recovery_anchor_pnl),
             'portfolio_pnl': self._portfolio_pnl,
+            'paused_lanes': self.lane_pause_snapshot(),
         }
 
     @staticmethod
