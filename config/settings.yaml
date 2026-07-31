@@ -7,10 +7,11 @@ polymarket:
   min_liquidity: 10000
   max_spread: 0.05
   scanner_sync_timeout_sec: 35
-  # 2026-07-28 OFF (operator): HYPE lane is disabled (hype_macro.enabled=false, 0 fills),
-  # so fetching HYPE-alt markets every cycle was pure wasted scan load (~5-11 slugs/cycle
-  # through the shared slug pool). Was forced true, overriding the code's default (which
-  # already follows hype_macro.enabled). Re-enable together with the HYPE lane if restored.
+  # 2026-07-27 STARVATION FIX (S1, Codex GO, HOT): hype_macro.enabled=false (settings.yaml ~1300)
+  # so the HYPE strategy can't trade, yet this flag forced a slow ~13-slug hype_alt fetch every
+  # cycle producing 0 rows — dead load eating a sync-pool slot + slug-pool budget and starving the
+  # slower windows (hype_alt/1h). Off = frees that budget. ⚠️ RE-ENABLE this (set true) if you ever
+  # set hype_macro.enabled=true again — this flag overrides strategy enablement (_should_fetch_hype_alt_markets).
   fetch_hype_alt_markets: false
   gamma_http_max_retries: 3
   gamma_http_retry_backoff_base_sec: 0.5
@@ -39,72 +40,159 @@ trading:
   persistent_session: false
   cycle_interval_sec: 60
   exit_check_interval_sec: 3
+  # Position reconciler (2026-07-27): syncs the bot's open positions against the
+  # ACTUAL Polymarket account (Data API) so manual closes / resolutions / phantom
+  # entries never orphan a position or mis-count. interval=how often to reconcile;
+  # grace=don't drop a fill younger than this (Data-API index lag); confirm_rounds=
+  # consecutive absent snapshots required before a destructive drop (Codex: 3 for a
+  # conservative first live run, protects against a multi-snapshot Data-API blip).
+  position_reconcile_interval_sec: 120
+  position_reconcile_grace_sec: 120
+  position_reconcile_confirm_rounds: 3
   ws_candle_feed:
     enabled: true
-  execution_provider: clob
-  entry_mode: marketable
+  execution_provider: clob  # 2026-07-30 SWITCHED to direct CLOB (operator GO): Olympus 403-region-blocks POST /v1/trade; funds withdrawn Olympus->Polymarket (SDK-confirmed $195.33 on deposit wallet 0x7d81 sig_type3). CLOB region-clear from the VPN IP. Olympus code now dormant.
+  # 2026-07-30 FEE-AWARE EDGE gate ENABLED for direct CLOB (operator GO; research: vault + web both confirm
+  # Polymarket crypto TAKER fee = 0.07, fee = shares*0.07*p*(1-p), peaks ~1.8% at p=0.50; maker = 0%).
+  # fee_util.fee_aware_edge_hurdle() (already built, wired in sol_macro:6248 + eth_macro:2766 — sol-family+eth,
+  # NOT btc) subtracts this hurdle from raw edge before min_edge so admission is NET-of-fee. Was inert (block
+  # absent -> returns 0.0). fee_legs=1.0 = ENTRY-taker leg only (the exit leg is to be eliminated structurally
+  # via maker-first exits, not gated harder here). olympus rate stays 0.0 so this is a no-op if we ever revert
+  # to olympus. RESTART-class (min_edge path reads at scan; verify live). NOTE: raises effective min_edge most
+  # at p~0.50 (~1.75%) -> cuts thin-edge mid-price entries (the -EV coin-flip band) = intended.
+  fee_aware_edge:
+    enabled: true
+    taker_fee_rate: 0.07
+    olympus_taker_fee_rate: 0.0
+    fee_legs: 1.0
+  entry_mode: hybrid  # 2026-07-30 (operator GO): maker-first ENTRY (post_only GTC -> FAK fallback) on 15m/1h ONLY; 5m falls back to marketable. 0-fee maker leg saves the ~1.8% taker fee when it fills; guaranteed taker fallback after entry_maker_wait_sec so we never miss a fill. Paper always uses conservative marketable. Infra: clob_client.place_entry_order (Codex-approved). Restart-class (read at entry via _entry_exec_params).
   entry_maker_wait_sec: 8
   entry_hybrid_windows:
   - 15m
   - 1h
+  # 2026-07-30 MAKER-FIRST EXITS (operator GO to BUILD; default OFF pending Codex review + restart).
+  # exit_mode: marketable (default) keeps today's exact behavior — urgent/loss-cut/near-resolution
+  # exits are ALWAYS FAK aggressive-cross regardless of this flag (they can't rest). This flag only
+  # governs NON-marketable (take-profit / mark-based) exits on exit_hybrid_windows: hybrid = post_only
+  # GTC maker leg (0 fee + rebate) -> wait exit_maker_wait_sec -> cross remainder to FAK to guarantee
+  # flatten. Maker exit is the single biggest fee/slippage saver (exit taker fee ~1.8% at mid + the
+  # 250ms taker delay + book-walk slippage all eliminated when the maker leg fills). place_exit_order
+  # (clob_client) mirrors the Codex-approved entry-hybrid; SELL caps at holdings so no oversell.
+  # 2026-07-30 ON (operator GO). Urgent/loss-cut/near-resolution exits STILL FAK aggressive-cross
+  # (this flag only governs non-marketable take-profit exits on 15m/1h) so downside is bounded.
+  # Codex review runs in parallel; applies on next restart (read at exit via _exit_exec_params).
+  exit_mode: hybrid
+  exit_maker_wait_sec: 6
+  exit_hybrid_windows:
+  - 15m
+  - 1h
+  # 2026-07-30 PAPER-TO-LIVE CALIBRATION Phase 1 (operator plan). Make PAPER a CLOB execution
+  # simulator, not a "signal fills at mark" sim. All three flags below only affect PAPER/dry_run
+  # (the LiveTestingEngine + clob_client dry_run path) — live uses real venue fills, so they cannot
+  # touch live PnL. Code was already built (clob_client:1410 book-walk entry, live_testing:891 exit,
+  # live_testing:945 taker fee) and merely switched off. Restart-class (read at engine init).
+  paper_entry_fresh_fill: true  # book-walk live-snapshot entry fill; skip if no asks / no executable size / notional<$1; records the walked avg fill instead of the signal mark.
+  # 2026-07-30 PAPER CALIB #2: fail-open fills (book snapshot unavailable) are now TAGGED
+  # paper_fill_model=signal_price_fail_open in the calibration record (never invisible).
+  # Set true for STRICT calibration: treat a missing snapshot as NO-FILL instead of filling
+  # at the signal mark (removes the last fake-fill path; costs some paper frequency).
+  paper_fresh_fill_no_fill_on_snapshot_fail: false
   microstructure_enrichment_enabled: false
+  # 2026-07-30 data-loop A: journal the LIVE maker-first order lifecycle (submit/accept/
+  # maker-vs-FAK path/partial/fill/fallback + submit→resolve latency) to
+  # data/calibration/order_lifecycle.jsonl. Live-only in practice (paper uses the fresh-fill
+  # branch). Fail-safe, one row per resolved order. Set false to disable.
+  order_lifecycle_log_enabled: true
+  # 2026-07-30 NEAR-WINDOW TRADE MANAGEMENT (operator plan). PHASE 1 = LOGGING ONLY:
+  # every lane_entry_window reject is recorded to data/calibration/window_watch.jsonl to
+  # diagnose whether near-window 5m/15m markets are checked too early/late/blocked. Fast
+  # recheck (P3) stays OFF until the telemetry proves the queue is correct.
+  window_watch:
+    enabled: true
+    log_only: true
+    fast_recheck_enabled: false
+    recheck_interval_sec: 12
+    near_window_buffer_sec: 90
+    max_watch_items: 80
+    windows:
+      - 5m
+      - 15m
+    strategies:
+      - bitcoin
+      - sol_macro
+      - eth_macro
+      - xrp_macro
+      - bnb_macro
   microstructure_trade_flow_window_sec: 300
-  # 2026-07-28 THROTTLE 1->3 (operator GO, Codex scanner audit): 1h markets were re-fetched
-  # EVERY 60s cycle (~35 slugs) through the shared 8-worker pool though 1h barely moves;
-  # 3 = every 3rd cycle. Frees ~35/123 slugs/cycle to relieve the slug-pool race/starvation
-  # (code default is already 3). Restart-class (scanner reads at init/cycle).
-  crypto_hourly_scan_every_n_cycles: 3
+  crypto_hourly_scan_every_n_cycles: 3  # 2026-07-30 restored from +$80 baseline (was 1): live scanner/WS-churn optimization (#7). Restart-class (scanner reads at init/cycle).
+  # 2026-07-27 ADAPTIVE SCANNER (Codex-scoped, guarded). scanner_adaptive_slug_order: order
+  # DEEPER-lookahead slug fetches by live per-asset signal productivity (EMA) so the inner-fetch
+  # timeout cuts unproductive tails, NOT producers. TWO-PHASE: nearest window (offset 0) always
+  # canonical = every asset covered each cycle; only offset>=1 reorders. Escape hatch every N
+  # cycles reverts to canonical. ON now for paper validation — flip false to disable instantly
+  # (config, hot-read). scanner_slug_fetch_timeout_sec = S2 inner per-window slug budget.
+  scanner_adaptive_slug_order: true
+  scanner_adaptive_escape_every_n: 5
+  scanner_slug_fetch_timeout_sec: 25
+  # 2026-07-27 ADAPTIVE PER-LANE SIZER (Codex-GO, SHADOW). One realized-P&L-driven
+  # size multiplier per lane/side, replacing the scattered/dead sizing knobs.
+  # mode: shadow = compute+log the mult it WOULD apply, move ZERO real size
+  # (resolve_size_mult returns 1.0). Flip mode: live ONLY after forward-test review
+  # + operator GO (Phase 2). Sizes DOWN losers at n>=min_n_down, UP winners only at
+  # the stricter n>=min_n_up; recent sessions only (never pooled); EMA-smoothed.
+  adaptive_sizer:
+    enabled: true
+    mode: live   # 2026-07-30 2d: run the realized sizer LIVE in PAPER (dry_run) to gather realized-sizing data — paper is the test bed
+    lookback_sessions: 8
+    min_n_down: 4     # 2026-07-30 2a: was 6 — downsize losing lanes sooner (protective; asymmetric, up stays 12)
+    min_n_up: 12      # keep conservative — never grow a lane on <12 recent trades
+    mult_floor: 0.40
+    mult_ceil: 1.60
+    roi_scale: 0.22   # 2026-07-30 2a: was 0.35 — smaller scale => tanh saturates faster => a given loss moves the mult more (was too timid: all mults stuck ~1.0)
+    sensitivity: 0.80 # 2026-07-30 2a: was 0.6 — move the mult more per unit signal
+    ema_alpha: 0.50   # 2026-07-30 2a: was 0.3 — faster convergence to target (still smoothed; also see state RESET so stale +prior inertia no longer sizes a 0%-WR lane UP)
+    recompute_min_new_settles: 10
+  # 2026-07-28 WARMUP GATE — settle into feed-sync before the FIRST trade after a
+  # restart. Signal-based (NOT a timer): blocks NEW entries until the websocket is
+  # delivering fresh prices across the universe (not REST-fallback) for
+  # ready_cycles consecutive scans. max_warmup_sec is a hard backstop so it can
+  # NEVER lock the bot out. Exits are never gated. Flip enabled:false to disable.
+  warmup:
+    enabled: true
+    ready_cycles: 3          # consecutive synced scans required to release
+    min_ws_coverage: 0.8     # 2026-07-30 REVERTED my 0.25 no-op (Codex debug sweep): _warmup_feed_ready (main.py:1550) does NOT read this field — warmup uses fresh-token-count + min_universe + max_sync_ms + price_max_age_sec. Lowering it does NOTHING, so I reverted to avoid a misleading "fix". REAL warmup TODO = wire an explicit coverage threshold into readiness OR reword this field. Left at 0.8 (inert either way).
+    min_universe: 10         # need at least this many markets tracked first
+    max_sync_ms: 8000        # scan phase must be healthy
+    max_warmup_sec: 180      # hard backstop: trade anyway after 3 min
   overrun_recovery_sleep_sec: 5
-  dry_run: true
-  # 2026-07-29: opt-in (default false). When true + live, the reconciler ADOPTS
-  # unmanaged venue positions (fresh-restart orphans) so the bot manages/exits +
-  # displays them instead of stranding them. Adopt CODE staged separately; keep false
-  # until that lands. See LIVE-LAUNCH note.
-  adopt_unmanaged_positions: false
+  dry_run: false  # 2026-07-30 operator: LIVE. (--live --confirm-live also forces this False at runtime via main.py; set explicitly here so there is no ambiguity. A bare launch without --live still forces paper via _parse_run_args.)
   slippage_guard:
     enabled: true
     mode: enforce
-    # 2026-07-29 edge-preserving guard: blocks an entry only when the fresh-book move
-    # has eroded the signal's edge below this floor (residual_edge = signal.edge - slip).
-    # 0.0 = allow while any edge survives; raise (e.g. 0.02) to require residual edge.
-    min_residual_edge: 0.0
+    apply_in_paper: true  # 2026-07-30 PAPER CALIB Phase 2.4 (operator): run this fresh-book guard in PAPER too (was dry_run-bypassed) so paper fill-rate reflects live fillability. Enforces the read-robust signals (buy_spread_block / buy_edge_eroded) to rejected_candidates. Empty-book / sub-$1 notional is deferred to the paper fresh-fill layer (clob_client:1435) which already rejects+logs those — keeps paper frequency = fillability, not book-read quality (Codex).
+    paper_mode: enforce   # in paper, mirror live `mode` (enforce = paper SKIPS unfillable entries, so paper frequency+PnL stop overstating). Set to observe to log-only without skipping.
     max_slippage_cents: 0.02
-    # 2026-07-28: calibrated for real Polymarket crypto up/down books (were starving
-    # LIVE entries — every signal killed by depth/spread while paper filled them). 3c
-    # spread cap was tighter than normal 2-4c books; depth ceiling 0.0 measured depth
-    # at the (unreachable) bid instead of the ask you actually pay. Keeps enforce +
-    # slippage protection; blocks only genuinely bad books (zero real depth, >5c spread).
-    max_spread_cents: 0.05
-    # 2026-07-29 (operator GO): false — marketable FAK entries fill partial against
-    # available depth; requiring the FULL requested size at the limit blocked orders
-    # only ~10% too big for thin Polymarket books (depth_at_limit 16.44 < requested 18.39).
-    require_full_depth: false
-    depth_price_ceiling_cents: 0.02
+    max_spread_cents: 0.05  # 2026-07-30 P0 sweep: was 0.03 (GO-LIVE TRAP — paper bypasses this guard via dry_run, so the ~$80 paper run never felt it; live enforces it and 3c starves normal 3-4c crypto books). Jul-29 code + memory both ship 0.05; the pre-Jul-29 backup regressed it. Hot-reloadable.
+    require_full_depth: false  # 2026-07-27: was true = demanded the ENTIRE order size at/below limit; on thin Polymarket books depth_at_limit (e.g. 10.0) fell just under requested (10.4167) and SKIPped nearly every live BUY. false = fill against AVAILABLE depth; the max_slippage_cents 0.02 + max_spread_cents 0.03 caps still protect the fill price.
+    depth_price_ceiling_cents: 0.02  # 2026-07-27 (Codex P0): was 0.0 = zero-tolerance depth check (required full size at asks <= intended price EXACTLY), blocking ~every live BUY (eth 17x buy_depth_block/session). Match the max_slippage_cents 0.02 tolerance the guard already allows, restoring paper-parity WITHOUT loosening any strategy threshold.
   clob_ws:
     enabled: true
-    ws_app_ping_sec: 0
+    ws_app_ping_sec: 10  # 2026-07-30 WS-STALENESS fix: keepalive PING every 10s so Polymarket keeps pushing book updates (idle sockets go stale, aging decision prices). Prices are Polymarket-sourced even on Olympus.
     book_channel: market
-    subscribe_interval_sec: 15
+    subscribe_interval_sec: 30  # 2026-07-30 WS-CHURN tune (operator GO, RESTART-CLASS — Codex: clob_ws NOT in hot-reload whitelist, applies on next restart): 15->30 halves re-subscribe write pressure that triggered close_code=1006 "Cannot write to closing transport" flaps (~90/hr live).
     asset_ids_json_key: assets_ids
     drive_scanner_prices: true
-    # 2026-07-29: RESTORED to 8 (last-working-live value; the 869-revert had loosened it
-    # to 45). At 45 the scanner served marks up to 45s old → stale signal price (17s mark
-    # ages observed) = the live staleness the operator flagged. 8 = aggressive refetch,
-    # fresh signals. NOTE: a 07-28 good-session analysis argued 45 was a sweet spot (age8
-    # cuts some EV) — but live experience ran clean at 8; revisit at lane review. RESTART-class.
     price_max_age_sec: 8
     subscribe_universe: true
-    universe_subscribe_cap: 400
+    universe_subscribe_cap: 250  # 2026-07-30 WS-CHURN tune (operator GO, RESTART-CLASS — Codex: applies on next restart, main.py:2851): 400->250 sheds the deep-lookahead tail; subscribe loop is imminence-ordered (main.py:2853) so this KEEPS open-position + near 5m/15m tokens fresh, drops only the far 1h/deep that bloated the burst.
+    rest_book_price_fallback: true  # 2026-07-30 WS-STALENESS tertiary fallback: recover tokens still unpriced after WS + /midpoint with a fresh top-of-book mid from GET /book (else they'd be fail-closed rejected = missed trades). Fail-safe.
+  admit_real_05_books: false
   default_position_size: 6
   max_position_size: 25
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
-  # 2026-07-28 INERT (5.0=never triggers). Codex "fixed" the previously-dead topic cap this
-  # session, but operator did not want a new untested gate on live — kept inert so a fresh
-  # live launch behaves EXACTLY like the tested paper bot (no drift). Set to ~0.20 later to
-  # ACTIVATE concentration protection (eth-ladder), but validate in paper first.
-  max_topic_exposure: 5.0
+  max_topic_exposure: 0.2
   daily_loss_limit: 0.15
   kelly_fraction: 0.37
   regime:
@@ -114,20 +202,12 @@ trading:
   regime_feed:
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
-  # 2026-07-28 ENTRY-TAPE SHADOW (never-green research): logs the fill-instant sub-30s
-  # spot micro-move per entry to data/calibration/tape_entry_shadow.jsonl (join to EXIT
-  # mfe/pnl on trade_id). SHADOW ONLY — never affects entries/size/exits. Tests whether
-  # never-green losers are momentum CHASERS (H_exhaust) vs counter-tape (H_align).
-  entry_tape_shadow:
+  entry_freshness_caps:  # 2026-07-30 restored from +$80 baseline (#2): xrp 5m/15m depend on fresh price; xrp dies at 20s+ staleness (own per-asset cap).
+    xrp_macro: 20
+  entry_tape_shadow:  # 2026-07-30 re-added (Codex): logs the fill-instant sub-30s spot micro-move per entry (join to EXIT mfe/pnl on trade_id) for live-vs-paper entry tuning. SHADOW ONLY — never affects entries/size/exits.
     enabled: true
     mode: shadow
     lookbacks_sec: [10, 20, 30]
-  # 2026-07-28 PER-ASSET entry-freshness cap (seconds). XRP's edge dies past ~20s price-
-  # age (good sessions n1197: xrp 20s+ = -$16.6, but +$146/+$91 at 3-8s/8-20s); ETH/BNB/
-  # BTC/SOL stay +EV out to 45s so they get NO cap (global price_max_age=45 governs).
-  # Unset strategy = no cap. Skip reason: entry_price_too_stale.
-  entry_freshness_caps:
-    xrp_macro: 20
   exit_rules:
     enabled: true
     take_profit_pct: 0.3
@@ -138,19 +218,10 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.15
     updown_hold_winners_to_resolution: false
-    # 2026-07-28 SEVERITY-GATED CUTS (real never-green fix): only cut when actually deep
-    # in loss, so shallow never-green/adverse positions ride to recovery. Realized: gating
-    # never_green_cut at pnl<=-8% saves +$33.61 (0 false-cut winners); time_stop at <=-20%
-    # saves +$19.62 (time_stop was net-harmful). 0.0 = off. Restart-class (live_testing.py).
-    # 2026-07-28 CHERRY-PICK REVERT (Codex audit + operator GO): severity cuts held
-    # never-green losers to -8/-13% in live (biggest loss bucket, 19% WR session). Back
-    # to baseline early-cut behavior for live safety. 0.0 = off (original never_green_cut).
-    never_green_cut_min_loss_pct: 0.0
-    updown_time_stop_min_loss_pct: 0.0
     stop_use_executable_price: true
     stop_dual_confirm_midpoint: true
     stop_spread_guard_max: 0.1
-    realistic_paper_fills: false
+    realistic_paper_fills: true  # 2026-07-30 PAPER CALIB Phase 1.2 (operator): walk bids/asks like a live FAK exit so paper stop/TP PnL reflects real slippage, not the mark. Paper-only (live_testing engine). Restart-class.
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.3
     exit_mark_use_clob_midpoint: true
@@ -197,13 +268,22 @@ trading:
         window_lane_overrides:
           15m:
             up:
-              updown_stop_loss_pct: 0.0
+              updown_stop_loss_pct: 0.25  # 2026-07-30 (operator GO): was 0.0 = NO early stop, so a loser rode to the -50% hold_catastrophic_stop. 0.25 < catastrophic 0.5 => normal stop fires first at -25% (matches the WINNING btc 1h up pattern: hold=true + real stop 0.3<0.5 -> updown_stop_loss not catastrophic). Keeps hold-to-resolution for winners, caps losers. (Lane has 0 fills good+live; safety cap.)
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
+              # 2026-07-31 PAPER A/B (operator GO): flip hold=true. stop_hold_sweep proved the 33%
+              # stop is the WORST point on the curve — winners AND losers both draw down -33..-40%
+              # MAE, so NO stop width discriminates; every width 0.10-0.33 nets negative, only
+              # HOLD/0.40+ flips positive (+22.34 sess, +18.05 since-0730). Direction right at
+              # resolution 5/8. hold=true => hold_means_hold suppresses updown_stop_loss (code
+              # live_testing.py:780) and rides to resolution, -50% catastrophic ONLY. The stop_loss
+              # /take_profit below are now VESTIGIAL (suppressed on a hold lane) but kept as the
+              # revert target. CAVEAT: +22.34 is tail-carried by one +44 trade (ex-outlier hold
+              # = -15.82, still > stop -20.95). Accumulate n before any live consideration.
               updown_stop_loss_pct: 0.3
               updown_trail_arm_pct: 0.0
-              updown_hold_winners_to_resolution: false
+              updown_hold_winners_to_resolution: true
               take_profit_pct: 0.5
           1h:
             up:
@@ -211,6 +291,13 @@ trading:
               updown_hold_winners_to_resolution: true
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.0
+              # 2026-07-30 (operator GO): TIME-GATED late TP. hold_winners stays TRUE (winners peak
+              # +75-127% and RESOLVE; any ungated TP amputates them — failed 3x). A green >=+40% in
+              # the FINAL 5 min is a FADE not a runner -> bank it. Validated best sim (n=37 round-trip
+              # pool): TP0.40/gate5 = +$53.26 vs +$14.80 actual. Fires BEFORE the catastrophic stop.
+              # Realized this session: 2x BTC 1h up round-tripped to catastrophic (-9.05, -8.84).
+              take_profit_late_pct: 0.40
+              take_profit_late_gate_mins: 5
             down:
               updown_trail_arm_pct: 0.25
               updown_trail_gap_pct: 0.1
@@ -251,8 +338,6 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              # 2026-07-28 HOLD-TO-RESOLUTION REVERTED (cherry-pick, Codex audit): capital
-              # lockup risk too high pre-live; unexercised. Back to normal exits.
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
@@ -262,27 +347,22 @@ trading:
         window_lane_overrides:
           1h:
             up:
-              # 2026-07-28 SWITCH TO HOLD-TO-RESOLUTION (settler: held 59% vs real 32%,
-              # +$59 gap n=22). Same Codex-traced full exit-path disable as xrp 1h down;
-              # 1h is exempt from never_green_cut (main.py:3753); hold params side-agnostic.
-              # Forward-test only.
+              updown_trail_gap_pct: 0.15
+              updown_trail_arm_pct: 0.1
+              updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: true
-              updown_stop_loss_pct: 0.0
-              updown_trail_arm_pct: 0.0
-              updown_trail_gap_pct: 0.0
-              updown_exit_window_mins: 0.0
-              updown_flatten_before_resolution_sec: 0.0
-              updown_stop_cents: 1.0
-              updown_stop_cents_high_entry: 1.0
-              updown_max_hold_mins: 75.0
-              take_profit_late_pct: 0.0
-              take_profit_late_gate_mins: 0.0
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
           5m:
             down:
+              # 2026-07-31 PAPER A/B (operator GO): flip hold=true. lane_stop_optimizer
+              # (since-0730 n=8, dir-right 6/8) shows winners draw down DEEPER than losers
+              # (winnerMAE 22% > loserMAE 18%) => any stop tight enough to cut losers also
+              # guillotines winners. HOLD nets +21.71 payoff 1.06 vs every stopped width. Same
+              # archetype as BTC 15m DOWN. stop_loss/cents below now VESTIGIAL (suppressed on a
+              # hold lane, live_testing.py:780) — kept as revert target. -50% catastrophic only.
               updown_stop_loss_pct: 0.14
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
@@ -291,7 +371,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_hold_winners_to_resolution: false
+              updown_hold_winners_to_resolution: true
           15m:
             up:
               updown_exit_window_mins: 2.5
@@ -319,7 +399,7 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              updown_stop_loss_pct: 0.0
+              updown_stop_loss_pct: 0.0  # 2026-07-30: stop-cap (0.25) proposal DROPPED (operator GO) — it conflicts with the 07-29 hold-means-hold decision (early exits LOSE on sol 5m down: +$252 resolved vs -$84 early). hold-means-hold enforce would suppress a sub-catastrophic stop anyway. Keep ride-to-resolution; catastrophic (-50%) is the only floor.
               updown_hold_winners_to_resolution: true
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
@@ -339,7 +419,13 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_stop_loss_pct: 0.15
             down:
-              updown_stop_loss_pct: 0.15
+              # 2026-07-31 PAPER A/B (operator GO): WIDEN hard stop 0.15 -> 0.25. lane_stop_optimizer
+              # (since-0730 n=8, dir-right 5/8) = STOP-SEPARABLE: loserMAE 30% > winnerMAE 19%, so a
+              # stop between the two cuts losers cheap WITHOUT clipping winners. Current 0.15 sat BELOW
+              # the 19% winner drawdown => guillotined ~3 winners. 0.25 => payoff 2.73 (avgW ~$6 /
+              # avgL ~$2.2), net ~doubles. hold stays FALSE (this lane WANTS the stop to fire — unlike
+              # BTC/ETH DOWN which hold). Side-isolated; the 15m UP winner untouched.
+              updown_stop_loss_pct: 0.25
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
@@ -418,8 +504,6 @@ trading:
               updown_hold_winners_to_resolution: false
               take_profit_pct: 0.4
             down:
-              # 2026-07-28 HOLD-TO-RESOLUTION REVERTED (cherry-pick, Codex audit): capital
-              # lockup / worst-case risk too high pre-live; unexercised. Back to normal exits.
               take_profit_pct: 0.4
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
@@ -427,18 +511,23 @@ trading:
               updown_hold_winners_to_resolution: false
           5m:
             up:
-              updown_stop_loss_pct: 0.7
+              # 2026-07-30 P0 xrp5m EXIT FIX (operator: bot behaves differently live). ROOT CAUSE:
+              # the 07-29 hold-means-hold enforcement flipped this lane from normal-stop (good sessions:
+              # hold_applied=None, losses capped ~-24% via never_green/time_stop, +$9) to hold-to-catastrophic
+              # (live: hold_catastrophic_stop x8 at -50%/-70%, -$10.59). Overbought longs REVERSE, so holding
+              # hurts here (unlike sol 5m DOWN which wins by holding with-trend shorts). Restore normal stops.
+              updown_stop_loss_pct: 0.25  # was 0.7 (too wide for a 5m lane); ~matches good-session -24% loss cap
               dynamic_stop_enabled: false
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
-              updown_hold_winners_to_resolution: true
+              updown_hold_winners_to_resolution: false  # was true — the flip that caused the catastrophic stops
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
             down:
-              updown_stop_loss_pct: 0.7
+              updown_stop_loss_pct: 0.25  # 2026-07-30 (operator GO) was 0.7: cap the never-green gappers at -25% (matches UP/doge 5m down); the +4%-peak trades are already at the -8% in-profit lock, this catches shorts that go straight red. Side-isolated, XRP 5m DOWN only.
               dynamic_stop_enabled: false
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.04  # 2026-07-30 (operator GO) was 0.1: arm the trail at the same +4% the in-profit lock engages, banking weak-MFE shorts sooner (this-session MFE median +11%). XRP 5m DOWN only; UP untouched.
+              updown_trail_gap_pct: 0.04  # 2026-07-30 was 0.1: give back less on gradual fades. NOTE gap-through past the -8% in-profit lock (verified) is the dominant leak; this + tight TP is partial mitigation, not the structural fix (faster exit-recheck).
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -447,7 +536,7 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
               updown_hold_winners_to_resolution: false
-              take_profit_pct: 1.0
+              take_profit_pct: 0.15  # 2026-07-30 (operator GO) was 1.0 (=never fired): bank the peak the eval loop CAN catch before the collapse; good-session MFE median +82%, this-session +11-18%. XRP 5m DOWN only.
           15m:
             up:
               updown_stop_loss_pct: 0.15
@@ -471,7 +560,7 @@ trading:
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
               updown_hold_winners_to_resolution: true
-              updown_stop_loss_pct: 0.7
+              updown_stop_loss_pct: 0.25  # 2026-07-30 (operator GO): was 0.7 (> catastrophic 0.5 => a loser rode to the -50% hold_catastrophic_stop, same bug shape as xrp 5m up). 0.25 < 0.5 => normal stop fires at -25% first. Keep hold=true (down/short lane can win by holding with-trend like sol 5m down); the stop only caps the losers.
               dynamic_stop_enabled: false
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
@@ -501,24 +590,17 @@ trading:
     updown_time_stop_hold_severe_pct: 0.5
     updown_time_stop_hold_min_excursion: 0.04
   execution_fees:
-    enabled: false
-    crypto_updown_15m_taker_fee_rate: 0.072
-  warmup:
-    enabled: true
-    ready_cycles: 3
-    min_ws_coverage: 0.8
-    min_universe: 10
-    max_sync_ms: 8000
-    max_warmup_sec: 180
+    enabled: true  # 2026-07-30 PAPER CALIB Phase 1.3 (operator): charge the real Polymarket crypto TAKER fee on paper entry+exit round-trips (was Olympus-era $0 — that memory is superseded for CLOB). Paper-only (live_testing:945); live pays real venue fees separately, so NO double-charge. Rate is a ceiling via min() so a bad live get_fee_rate_bps can't dominate.
+    crypto_updown_15m_taker_fee_rate: 0.07  # 2026-07-30 verified current crypto taker (eased 0.072->0.07). Was 0.072.
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
   live_order_approved: true
   await_fill_on_submit: true
-  fill_poll_attempts: 12
+  fill_poll_attempts: 20  # 2026-07-30 P0 sweep: was 12 (12s). A fill confirming AFTER the poll became an unmanaged orphan (reconciler logs but doesn't adopt venue-only). 20s covers more async settles, shrinking the orphan window while the reconciler-adopt code fix is built.
   fill_poll_interval_sec: 1.0
   smoke_test:
-    enabled: true
+    enabled: false  # 2026-07-30 P0 sweep: smoke cap counted SELLs (froze exits after ~20 round-trips), blocked TP on winners >$15, and flattened/corrupted sizing. DISABLED — normal config caps (max_position_size 25, exposure 0.08 -> ~$6/trade at $75) keep orders small without the cap's defects.
     max_order_usd: 15
     max_orders_per_run: 40
     require_market_slug: true
@@ -613,18 +695,11 @@ strategies:
     lane_min_notional_1h_up: 20
     lane_max_notional_1h_up: 25
     btc_5m_long_sitout_on_1h_hist_rising: false
-    # 2026-07-28 BTC 5m SHORT selection fix (operator GO + Codex). BTC 5m short = only
-    # 5m-short lane negative in good sessions (-$58.90/30% good, -$109.82/29% full n45);
-    # 100% htf-bias-driven, no 5m-native confirm, 37% never-green. LONG side healthy
-    # (+$108/52%) — untouched. Gates side-isolated to 5m BUY_NO.
-    #  - quant_conviction: skip coin-flip shorts (quant_side None, raw in [0.48,0.52]) = -$70.69/20% n10.
-    #  - max_raw_est_prob_up 0.47: bearish FLOOR — cutting raw>=0.47 removes n28/-$89.41, keeps n17/-$20.41/35%
-    #    (subsumes the coin-flip band; both on = clean telemetry).
-    #  - require_down_tape: SPECULATIVE, kept OFF — m5_direction now instrumented on exits to validate
-    #    before enforcing (prior never-green research: counter-tape often won MORE, may be backwards).
+    # 2026-07-28 BTC 5m SHORT selection fix (operator GO + Codex) — restored 2026-07-30 for live shakedown (#1).
+    # BTC 5m short = only 5m-short lane negative in good sessions; gates side-isolated to 5m BUY_NO.
+    # quant_conviction: skip coin-flip shorts (quant_side None, raw in [0.48,0.52]). max_raw_est_prob_up 0.47: bearish floor.
     btc_5m_short_require_quant_conviction: true
     btc_5m_short_max_raw_est_prob_up: 0.47
-    btc_5m_short_require_down_tape: false
     window_delta_est_weight_15m: 0.5
     window_delta_est_weight_1h: 0.5
     min_est_prob_conviction_buy_yes: 0
@@ -649,9 +724,6 @@ strategies:
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 59.0
-        # 2026-07-28 conviction floor REVERTED (cherry-pick, Codex audit): 354 skips live,
-        # unproven it helps (may choke winners). Off for live; revisit with skipped-would-lose data.
-        min_est_prob_conviction_buy_yes: 0.0
     min_edge_15m_neutral: 0.12
     neutral_15m_min_quant_confidence: 0.0
     neutral_15m_requires_shadow_portfolio: true
@@ -678,7 +750,7 @@ strategies:
     ai_hold_veto_ttl_sec: 300
     bitcoin_1h_simple_long:
       enabled: true
-      entry_min: 0.5
+      entry_min: 0.55  # 2026-07-27: was 0.50 — band force-admitted BUY_YES LONG at the 0.50/0.53 midline (bypasses min_edge), both -16.5 losers this session. 0.55 stops midline coin-flip longs, keeps 0.55-0.85. Codex GO-WITH-NITS. RESTART-class (self._b1hsl_entry_min frozen at bitcoin.py:319).
       entry_max: 0.85
       sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
@@ -843,6 +915,10 @@ strategies:
       band: 0.01
       min_edge: 0.12
   sol_macro:
+    # 2026-07-30 SHORT-IN-BULL GUARD (operator GO, sol-family): block window_delta_flip
+    # from flipping a native long into a SHORT when the alt's own primary+1h HTF are BOTH
+    # bullish (fought a bull HTF, shorted SOL 1h inside bull/bull/bull twice, both lost).
+    window_delta_flip_to_short_in_bull_enabled: false
     lane_max_notional_15m_down: 5
     fresh_cross_override: false
     tape_veto_60s_enabled: true
@@ -866,15 +942,6 @@ strategies:
       atr_low_pct: 0.004
       atr_high_pct: 0.0064
     buy_no_5m_flip_to_yes: false
-    # 2026-07-28 REVERTED buy_no_5m_pocket_rsi_max/buy_no_min_no_price_5m — they were fit
-    # to a 13-trade RECENT slice (<28 wins) but the 106-trade base is OPPOSITE: sol 5m
-    # short <28 LOSES -$47, 28-40 WINS +$126 (n119 all-sess). The RSI<=28 cap blocked the
-    # winning zone = harmful. sol 5m short is net +$106 all-time; only <28 is adverse, so
-    # if gated it should be a MIN floor (short RSI>=28), presented separately — not applied.
-    # 2026-07-28 veto entries whose side disagrees with quant_side (est_prob-implied):
-    # sol+bnb non-flip disagree = -$100.90/34%WR n103 vs agree +$416.53/48% n765. Exempts
-    # window_delta_flip + simple_band (deliberate est_prob-ignoring paths).
-    require_quant_side_agreement: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -913,11 +980,11 @@ strategies:
         min_edge: 0.06
         min_edge_buy_no: 0.06
         entry_window_min: 1.0
-        entry_window_max: 135
+        entry_window_max: 35
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -950,12 +1017,9 @@ strategies:
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: true
-      entry_min: 0.5
+      entry_min: 0.55  # 2026-07-27: ported the btc_1h_simple_long fix — band force-admits LONG at [entry_min,0.85] bypassing min_edge; 0.50-0.54 = midline coin-flips. 0.55 keeps 0.55-0.85. FROZEN (__init__), restart-class.
       entry_max: 0.85
       sizing_edge: 0.06
-      # 2026-07-28 veto sol 1h simple-band longs (n63 30%WR -$79.64, no +EV subset;
-      # est_prob-blind so quant-gate can't catch it). Skip+ghost-log, sol-only.
-      quality_veto_enabled: true
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -978,8 +1042,11 @@ strategies:
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
     5m_buy_yes_bullish_floor_bump: 0.19
+    5m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-30 overboost ceiling (generalizes validated XRP5m fix): don't inflate a BUY_YES into an overbought top (rsi_14>=70 => bump=0 => not admitted). Protective cap, side-isolated, does NOT add frequency. (5m up currently disabled — defensive if reopened.)
     15m_buy_yes_bullish_floor_bump: 0.21
+    15m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-30 overboost ceiling (ACTIVE lane): same as XRP5m fix — the 0.21 bump must not force an overbought-top long.
     1h_buy_yes_bullish_floor_bump: 0.3
+    1h_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-30 overboost ceiling (ACTIVE lane): the 0.3 bump is the largest; cap it at rsi_14>=70 (also gated by 1h price band below).
     1h_buy_yes_floor_price_min: 0.6
     1h_buy_yes_floor_price_max: 0.88
     require_btc_catalyst_5m: true
@@ -1033,8 +1100,6 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 4.0
-            # 2026-07-28 downsize REVERTED (cherry-pick, Codex audit): sol 5m short is +EV
-            # full-record (+$106); downsizing a +EV lane degrades baseline. Restored to full.
         15m:
           up:
             min_edge: 0.09
@@ -1043,7 +1108,7 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.12
+            min_edge: 0.06
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1092,6 +1157,12 @@ strategies:
     eth_pocket_allow_15m_buy_yes_native: true
     eth_buy_yes_rsi_max: 58.0
     eth_buy_yes_rsi_momentum_max: 68.0
+    # 2026-07-30 ETH SETUP (operator GO): ETH 15m BUY_YES is a counter-trend reversal long.
+    # Full paper history n=266 splits by ETH's OWN 1h tape: BEARISH +$107.71 (53% WR) vs
+    # NEUTRAL -$42.98 / BULLISH -$47.16 (bull-chase bleed). RSI does NOT separate (winners
+    # span RSI 30-79) — tape does. Fire 15m longs only in bearish ETH tape. ETH-native,
+    # side-isolated (BUY_YES), 15m only. Hot-reloadable (self.config.get gate).
+    eth_15m_buy_yes_bearish_tape_only_enabled: true
     min_edge_when_ltf_unconfirmed_15m: 0.06
     fade_regime_windows: []
     fade_regime: true
@@ -1100,16 +1171,10 @@ strategies:
     buy_yes_5m_skip_mins_hi: null
     entry_admission_calibration_shrink: 1.0
     min_est_prob_conviction_buy_yes: 0.0
-    # 2026-07-28 PAUSE WHOLE ETH 1h TIMEFRAME (operator-directed, live capital efficiency).
-    # Full record eth 1h ALL = -$72.88/36% n160, avg 103min lockup (p90 3.5h, max 4.1h).
-    # Good sessions eth 1h UP hold = only +$15.37/54% n26 (~$0.59/trade) vs hours of capital
-    # tie-up. Net loser + capital hog -> paused BOTH sides for the live session. INTENTIONAL
-    # lane-off (do NOT revert on baseline restore). The UP hold-to-resolution override at
-    # updown_overrides.eth_macro.1h.up is now dead code while disabled (left in place).
-    disable_buy_no_1h: true
+    disable_buy_no_1h: true  # 2026-07-30 ETH 1h PAUSED for live shakedown (#3): capital-heavy + net-negative in reverted state. Both sides off.
     disable_buy_no_15m: false
     disable_buy_no_5m: false
-    disable_buy_yes_1h: true
+    disable_buy_yes_1h: true  # 2026-07-30 ETH 1h PAUSED for live shakedown (#3): capital-heavy + net-negative in reverted state. Both sides off.
     disable_buy_yes_15m: false
     disable_buy_yes_5m: false
     eth_pocket_only: false
@@ -1124,12 +1189,17 @@ strategies:
     enabled: true
     use_ai: true
     eth_momentum_confirm:
-      buy_yes: []
+      # 2026-07-27: enforce momentum-confirm on eth 15m BUY_YES only. Root cause of
+      # the eth loss = 15m BUY_YES firing on ETH_HTF=NEUTRAL at edge ~0.055 (coin-flip
+      # ~0.50), Kelly-sized to $25 (loser 25.35 -> -12.42; winner 15.0 -> +7.50). This
+      # requires eth MACD (own-TF/next-larger) bullish confirm before a 15m BUY_YES,
+      # blocking the no-momentum coin flips. 5m/1h stay shadow-only. Reversible.
+      buy_yes:
+      - 15m
       buy_no: []
       shadow:
         buy_yes:
         - 5m
-        - 15m
         - 1h
         buy_no:
         - 5m
@@ -1147,21 +1217,14 @@ strategies:
         min_edge: 0.1
         entry_window_min: 0.5
         entry_window_max: 4.0
-        # 2026-07-28 conviction floor REVERTED (cherry-pick, Codex audit): off for live.
-        min_est_prob_conviction_buy_yes: 0.0
       15m:
         min_edge: 0.09
         entry_window_min: 1.0
-        entry_window_max: 120.0
-        # 2026-07-28 RE-INSTATED eth 15m ONLY (operator GO + Codex, DATA-justified — targeted,
-        # does NOT undo the cherry-pick). eth 15m longs: est<0.60 net -$51.61 (n124 LOSE),
-        # est 0.60-0.65 net +$50.79 (n81 WIN). Floor cuts the losing thin-conviction band +
-        # stops the 5-long coin-flip ladder (all at est 0.568). Enforced eth_macro.py:2122.
-        min_est_prob_conviction_buy_yes: 0.60
+        entry_window_max: 35
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60
     min_edge_15m_when_ltf_unconfirmed: 0.06
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -1286,14 +1349,14 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.03
+            min_edge: 0.085
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.5
             entry_window_max: 4.0
             size_multiplier: 0.25
           down:
-            min_edge: 0.03
+            min_edge: 0.12
             entry_price_min: 0.47
             entry_price_max: 0.55
             entry_window_min: 0.5
@@ -1301,35 +1364,32 @@ strategies:
             size_multiplier: 0.25
         15m:
           up:
-            min_edge: 0.025
+            min_edge: 0.11
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 1.0
-            # 2026-07-28 120->45 (operator GO): tames the pre-window ladder — keeps the near
-            # rungs (winners) but cuts the far-future tail (MTE 90-120 ran -$13.37 w/ stale
-            # quotes). eth 15m is the session's carry; middle value protects the winner.
-            entry_window_max: 45
+            entry_window_max: 120.0
             size_multiplier: 0.25
           down:
-            min_edge: 0.025
+            min_edge: 0.1
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 15
         1h:
           up:
-            min_edge: 0.06
+            min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360
             size_multiplier: 0.3
           down:
-            min_edge: 0.06
+            min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60
             size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.0
@@ -1366,6 +1426,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   hype_macro:
+    window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
     fresh_cross_override: true
     tape_veto_60s_enabled: true
     tape_veto_60s_bps: 20
@@ -1443,7 +1504,7 @@ strategies:
       1h:
         min_edge: 0.0
         entry_window_min: 1.0
-        entry_window_max: 360
+        entry_window_max: 60
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: false
@@ -1533,21 +1594,21 @@ strategies:
             entry_window_min: 0.0
             entry_window_max: 5.5
           down:
-            min_edge: 0.05
+            min_edge: 0.08
             entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 11.0
         15m:
           up:
-            min_edge: 0.03
+            min_edge: 0.06
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 15
           down:
-            min_edge: 0.05
+            min_edge: 0.06
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1609,14 +1670,8 @@ strategies:
       band: 0.01
       min_edge: 0.12
   xrp_macro:
-    # 2026-07-29 (operator GO): xrp 5m native LONG bled live 0-for-2 (-$4.15) — both
-    # collapsed into drops (one -82% MAE), never-green. Disabled (native family flag is
-    # the one code reads, sol_macro.py:3609). Re-enable at lane review with a near-expiry guard.
-    disable_buy_yes_5m_native: true
-    # 2026-07-29 (operator GO): extend the sol/bnb quant-side-disagree gate to xrp — trade
-    # #1 was htf_long/quant_short (-$1.80). Veto entries whose side != quant_side (exempt
-    # flip/simple_band, same as sol/bnb). sol_macro.py:6686.
-    require_quant_side_agreement: true
+    buy_no_min_no_price_5m: 0.49  # 2026-07-31 (operator GO) xrp 5m BUY_NO floor, mirrors eth/doge. Gate (sol_macro.py:6663) blocks yes_price > (1 - this); 0.49 => block yes>0.51, cutting shorts-into-strength. This session xrp 5m went 0/5 entering NO 0.17/0.40/0.44 (yes 0.83/0.60/0.56 — all now blocked). Was falling back to base 0.20 (block only yes>0.80). Restart-class (per-window port is restart-only). NOTE: entry_price recorded is the FILL; the gate evaluates eval-time yes mid, so a near-0.51 gate-pass can still fill slightly worse — 0.49 gives margin for that.
+    window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
     lane_max_notional_15m_down: 8
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -1674,7 +1729,13 @@ strategies:
         entry_window_max: 4.5
       15m:
         min_edge: 0.085
-        min_edge_buy_no: 0.5
+        # 2026-07-30 RE-ENABLE (operator GO): 0.5 was an impossible-edge wall (pure disable).
+        # XRP 15m BUY_NO is net +$74.45 over 126 historical fills (37% WR, winners outsize:
+        # +$25.87/+$12.57/+$9.52). Restored to the strategy default (0.08) — admits the
+        # historically-profitable range (fills started ~edge 0.10) but blocks thin-edge
+        # drag-bait (Codex: sub-0.08 shorts flip red on execution drag). Bearish-native
+        # shorts (P=BEAR, RSI~35) are the edge; bull-flip shorts still caught by short-in-bull guard.
+        min_edge_buy_no: 0.08
         min_est_prob_conviction_buy_yes: 0.6
         entry_window_min: 2.0
         entry_window_max: 32.0
@@ -1682,7 +1743,7 @@ strategies:
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1749,7 +1810,12 @@ strategies:
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.5
     5m_buy_yes_bullish_floor_bump: 0.22
+    5m_buy_yes_floor_require_quant_agree: true  # 2026-07-30 FIX A (operator GO): the +0.22 bullish floor must NOT force a BUY_YES when the quant model implies SHORT (raw_est<0.50). Confirmed live offender: xrp 5m BUY_YES 0W/3L -$9.78 (catastrophic stops 0.48->0.16). Guard fires only on raw<0.50.
+    5m_buy_yes_floor_quant_agree_min: 0.57
+    5m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-30 P0 XRP-5m fix (operator GO, Option 2): don't inflate a BUY_YES into an OVERBOUGHT top. Session test_20260730_064254 xrp5m: every WIN was RSI<=66.5 (held to resolution); the RSI 71-78 longs (-6.02/-2.07/-5.09) were all hold_catastrophic_stop. Ceiling 70 kills the bump (=> entry not admitted) when own rsi_14>=70, cutting the overbought-top buys while keeping every winner. Existing tested guard (added 2026-06-28). Side-isolated (BUY_YES only), 5m-only. hot-reloadable (self.config.get). NOTE: Option 1 (relax short guard) REJECTED — good-session shorts were WITH-TREND (bearish 1h), not short-the-bull; short side returns on its own when 1h turns bearish.
     15m_buy_yes_bullish_floor_bump: 0.13
+    15m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-30 overboost ceiling (ACTIVE lane, generalizes XRP5m fix): the 0.13 bump must not force an overbought-top long (rsi_14>=70 => bump=0).
+    15m_buy_yes_floor_require_quant_agree: true  # 2026-07-30 FIX A: same guard on the 15m +0.13 floor (same asset+mechanism; preventive — guard only blocks confirmed quant-disagreement, never legit longs).
     1h_buy_yes_bullish_floor_bump: 0.0
     1h_buy_yes_floor_price_min: 0.5
     1h_buy_yes_floor_price_max: 0.66
@@ -1802,14 +1868,14 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.04
+            min_edge: 0.05
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.04
+            min_edge: 0.06
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1824,7 +1890,7 @@ strategies:
             entry_window_max: 15
           down:
             entry_price_min: 0.53
-            min_edge: 0.1
+            min_edge: 0.5
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 135
@@ -1838,7 +1904,7 @@ strategies:
             size_multiplier: 0.3
           down:
             entry_price_min: 0.53
-            min_edge: 0.02
+            min_edge: 0.04
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 360
@@ -1860,6 +1926,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   doge_macro:
+    window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
     buy_no_min_no_price_5m: 0.49
     buy_yes_lane_repair:
       enabled: true
@@ -1882,8 +1949,6 @@ strategies:
     - 5m
     - 15m
     disable_buy_no_5m: false
-    # 2026-07-28 doge 5m LONG RE-DISABLED (cherry-pick, Codex audit): immediate never-green
-    # loser in live, adds frequency in a bad-selection tape. Back to disabled for live.
     disable_buy_yes_5m: true
     buy_yes_15m_pocket_rsi_max: 35
     est_prob:
@@ -1892,6 +1957,10 @@ strategies:
     disable_buy_no_1h: true
     buy_no_1h_allow_postflip: true
     disable_buy_no_15m: true
+    disable_buy_no_15m_native: true
+    disable_buy_yes_15m: true
+    disable_buy_yes_15m_native: true
+    disable_buy_yes_1h: true
     disable_buy_yes_1h_when_bullish: false
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
@@ -1938,7 +2007,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1948,7 +2017,7 @@ strategies:
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: true
-      entry_min: 0.5
+      entry_min: 0.55  # 2026-07-27: ported the btc_1h_simple_long fix — band force-admits LONG at [entry_min,0.85] bypassing min_edge; 0.50-0.54 = midline coin-flips. 0.55 keeps 0.55-0.85. FROZEN (__init__), restart-class.
       entry_max: 0.85
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
@@ -2082,11 +2151,8 @@ strategies:
       enabled: false
       band: 0.01
       min_edge: 0.12
-    disable_buy_no_15m_native: true
-    disable_buy_yes_15m: true
-    disable_buy_yes_15m_native: true
-    disable_buy_yes_1h: true
   bnb_macro:
+    window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
     lane_max_notional_15m_down: 10
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -2096,16 +2162,8 @@ strategies:
     min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
     fade_regime_windows: []
-    # 2026-07-28 DISABLE bnb 1h LONG (operator GO + data): persistent loser -$50.72/27% all-time
-    # AND -$15.62/31% in recent-20 sessions (n35, fires every session) — loses in every conviction
-    # band, no clean floor salvages it (one +$13 pocket at 0.55-0.60 swamped by losses either side).
-    # Structural loser like eth 1h. Re-enable if a lane-specific fix is found.
-    disable_buy_yes_1h: true
     disable_buy_no_1h: false
     disable_buy_no_15m: false
-    # 2026-07-28 REVERTED sit-out (operator GO) — the -$16.55/14% was a 7-trade RECENT
-    # slice; full record is +$41.35/46%WR n85 (lane HAS edge). Re-enabled but kept
-    # downsized (size_multiplier 0.15) as recent-loss protection instead of a full cut.
     disable_buy_no_5m: false
     buy_yes_15m_pocket_rsi_max: 65.0
     buy_yes_15m_pocket_include_bearish: false
@@ -2159,12 +2217,12 @@ strategies:
         min_edge: 0.04
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
-        entry_window_max: 150.0
+        entry_window_max: 35
         min_est_prob_conviction: 0.52
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60
         min_est_prob_conviction: 0.52
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
@@ -2175,7 +2233,7 @@ strategies:
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
       enabled: true
-      entry_min: 0.5
+      entry_min: 0.55  # 2026-07-27: ported the btc_1h_simple_long fix — band force-admits LONG at [entry_min,0.85] bypassing min_edge; 0.50-0.54 = midline coin-flips. 0.55 keeps 0.55-0.85. FROZEN (__init__), restart-class.
       entry_max: 0.85
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
@@ -2218,8 +2276,6 @@ strategies:
     rsi_buy_block_above: 53.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: true
-    # 2026-07-28 quant-agreement gate (see sol_macro): veto side!=quant_side entries.
-    require_quant_side_agreement: true
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
@@ -2269,8 +2325,6 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
-            # 2026-07-28 downsize REVERTED (cherry-pick, Codex audit): bnb 5m short is +EV
-            # full-record (+$41); restored to baseline 0.3 (was 0.3 before this session).
             size_multiplier: 0.3
         15m:
           up:
@@ -2477,6 +2531,10 @@ exposure:
   minimal_min_trade_usd: 5.0
   loss_kill_switch_enabled: true
   max_consecutive_losses: 3
+  # 2026-07-30 SAME-SIDE CONCENTRATION CAP (wrong-direction/correlated-book guard): lanes are
+  # correlated (crypto moves as one); an all-one-side book = a single directional bet. Cap the
+  # number of simultaneously-open positions on the SAME outcome side (YES or NO). 0 = off.
+  max_same_side_positions: 3
   pause_cycles: 2
   max_pause_cycles: 4
   live_resume_mode: auto
@@ -2666,3 +2724,15 @@ never_green_cut:
     5m: 60
     15m: 120
     1h: 300
+tape_freshness:
+  enabled: true
+  mode: live
+  max_edge_add: 0.0
+  max_size_cut: 0.5
+  size_floor: 0.4
+  momentum_weight: 0.6
+  rsi_weight: 0.4
+  rsi_long_start: 70
+  rsi_long_full: 90
+  rsi_short_start: 30
+  rsi_short_full: 12

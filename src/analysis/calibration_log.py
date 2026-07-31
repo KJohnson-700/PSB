@@ -28,7 +28,7 @@ DEFAULT_CALIBRATION_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "calibration"
 )
 DEFAULT_TRADES_LOG = DEFAULT_CALIBRATION_DIR / "trades.jsonl"
-CALIBRATION_SCHEMA_VERSION = 2
+CALIBRATION_SCHEMA_VERSION = 3  # 2026-07-30: +fill economics, raw/exec PnL split, entry executability
 
 
 def _coerce_float(value: Any) -> Optional[float]:
@@ -229,6 +229,53 @@ def build_record_from_closed_trade(
         "exit_mark_src": closed.get("exit_mark_src"),
         "exit_mark_age_ms": _coerce_float(closed.get("exit_mark_age_ms")),
         "ws_price_age_ms": _coerce_float(closed.get("ws_price_age_ms")),
+        # 2026-07-30 PAPER-TO-LIVE CALIBRATION capture fix (operator): the paper CLOB
+        # execution-simulator fields were being written to entries.jsonl + stamped onto
+        # the closed-trade dict, but NEVER whitelisted here — so trades.jsonl (the row the
+        # analyzers read) carried none of them. Whitelist ALL of them so trades.jsonl is
+        # self-sufficient for fill-economics / execution-drag / fillability analysis.
+        # EXIT fill economics (realistic_paper_fills + execution_fees):
+        "fill_fee_usdc": _coerce_float(closed.get("fill_fee_usdc")),
+        "fill_fee_rate": _coerce_float(closed.get("fill_fee_rate")),
+        "fill_slippage_pct": _coerce_float(closed.get("fill_slippage_pct")),
+        "fill_mark_price": _coerce_float(closed.get("fill_mark_price")),
+        # Signal-vs-execution PnL split (gap = execution drag = fees + slippage):
+        "raw_signal_pnl": _coerce_float(closed.get("raw_signal_pnl")),
+        "execution_adjusted_pnl": _coerce_float(closed.get("execution_adjusted_pnl")),
+        # Microstructure at exit:
+        "secs_to_expiry_at_exit": _coerce_float(closed.get("secs_to_expiry_at_exit")),
+        "exit_book_spread": _coerce_float(closed.get("exit_book_spread")),
+        "exit_best_bid": _coerce_float(closed.get("exit_best_bid")),
+        "exit_best_ask": _coerce_float(closed.get("exit_best_ask")),
+        "exit_depth_at_limit": _coerce_float(closed.get("exit_depth_at_limit")),
+        "exit_fill_ratio": _coerce_float(closed.get("exit_fill_ratio")),
+        # ENTRY executability proof (paper_entry_fresh_fill book-walk); nested dict +
+        # flattened numerics so per-lane aggregation needs no join. None on live/non-fresh.
+        "entry_paper_fill_quality": (
+            closed.get("entry_paper_fill_quality")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict)
+            else None
+        ),
+        "entry_spread": _coerce_float(
+            (closed.get("entry_paper_fill_quality") or {}).get("entry_spread")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
+        ),
+        "entry_sim_fill_ratio": _coerce_float(
+            (closed.get("entry_paper_fill_quality") or {}).get("sim_fill_ratio")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
+        ),
+        "entry_sim_fill_price": _coerce_float(
+            (closed.get("entry_paper_fill_quality") or {}).get("sim_fill_price")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
+        ),
+        "entry_depth_at_limit": _coerce_float(
+            (closed.get("entry_paper_fill_quality") or {}).get("entry_depth_at_limit")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
+        ),
+        "entry_fee_usdc": _coerce_float(
+            (closed.get("entry_paper_fill_quality") or {}).get("fee_usdc")
+            if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
+        ),
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         **bucket_tags,
     }

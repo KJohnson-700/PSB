@@ -58,7 +58,9 @@ from src.analysis.ai_decision_broker import (
 )
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
+from src.analysis.window_watch import log_window_reject
 from src.strategies._scan_timeout import analysis_with_timeout
+from src.strategies.fee_util import fee_aware_edge_hurdle
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BTCSOLCorrelation
 from src.analysis.updown_composite_score import (
     CompositeScore,
@@ -686,7 +688,7 @@ class SolMacroStrategy:
     # Alt live-entry AI is intentionally disabled. BTC owns the 15m/1h
     # evaluate_trade_decision path; alt AI is reserved for observer/tuning and
     # self-healing surfaces.
-    _DECISION_GATE_WINDOWS = frozenset({"15m", "1h"})  # 2026-07-03 AI-FIX: was empty = alt AI never fired; enable 15m/1h AI (5m excluded), Codex GO
+    _DECISION_GATE_WINDOWS = frozenset()  # 2026-07-30 REVERT of the 2026-07-03 alt-AI extension: alt decision-layer AI is OFF again (BTC-only owns the 15m/1h evaluate_trade_decision path, per the comment above). Empty set => every alt AI-gate site (`_updown_tf in self._DECISION_GATE_WINDOWS`) is False, so alt AI never fires. Guarded by test_alt_macro_ai_gate_removed.
 
     def _log_decision_layer(
         self,
@@ -1283,8 +1285,19 @@ class SolMacroStrategy:
         btc_1h_regime: Optional[str],
         alt_h1_trend: Optional[str],
     ) -> Optional[str]:
-        if str(self._signal_strategy_name or "") not in ("sol_macro", "bnb_macro"):
-            return None  # 2026-07-05: extend short-the-bull guard to bnb (bnb_5m_vs_slower BUY_NO 0W-8L -$25.98 live; sol behavior unchanged)
+        # 2026-07-05 sol/bnb; 2026-07-29 (Codex) +xrp/doge — the 5m short-into-bull leak
+        # (xrp_5m_vs_slower, sol_5m_native) was unguarded on xrp/doge and, for native
+        # sources, on sol/bnb too. Config-scoped so scope can be narrowed/reverted without
+        # a code edit.
+        _guard_strats = set(
+            self.config.get(
+                "short_the_bull_5m_guard_strategies",
+                ["sol_macro", "bnb_macro", "xrp_macro", "doge_macro"],
+            )
+            or []
+        )
+        if str(self._signal_strategy_name or "") not in _guard_strats:
+            return None
         if action != "BUY_NO":
             return None
 
@@ -1296,8 +1309,22 @@ class SolMacroStrategy:
         # _resolve_alt_bias_for_tf (alt_neutral_fallback_sit_out), so it never
         # reaches this guard — both BUY_YES and BUY_NO are covered there.
 
-        if window_size == "5m" and source.endswith("_vs_slower") and alt_h1 == "BULLISH":
-            return f"{str(self._signal_strategy_name or '').replace('_macro','')}_vs_slower_short_against_h1"
+        # 2026-07-29 (Codex): block 5m BUY_NO into a BULLISH OWN-1h for BOTH the vs-slower
+        # AND native side-source (sol_5m_native / *_5m_vs_slower were run over by the bull).
+        # NARROW by design — 5m only, own-1h BULLISH only; 15m/1h shorts and non-bull
+        # regimes are untouched (paper shows some longer-tf bull-shorts win). Opt-out:
+        # short_the_bull_5m_guard_enabled: false.
+        _5m_native_or_vs = source.endswith("_vs_slower") or "5m_native" in source
+        if (
+            window_size == "5m"
+            and _5m_native_or_vs
+            and alt_h1 == "BULLISH"
+            and bool(self.config.get("short_the_bull_5m_guard_enabled", True))
+        ):
+            _tag = "vs_slower" if source.endswith("_vs_slower") else "native"
+            # Reason string kept backward-compatible ('<strat>_vs_slower_short_against_h1')
+            # so existing tests/log consumers still match; native adds '<strat>_native_...'.
+            return f"{str(self._signal_strategy_name or '').replace('_macro','')}_{_tag}_short_against_h1"
 
         # BTC→SOL decoupling (2026-05-29): this branch gated a SOL-*native* 15m
         # short on BTC's 1h regime, violating the standing "alts not decided by
@@ -2036,7 +2063,15 @@ class SolMacroStrategy:
             return None
         return move, prob, margin
 
-    def _window_delta_flip(self, asset_obj: Any, tf: str, mins_left: float, action: str):
+    def _window_delta_flip(
+        self,
+        asset_obj: Any,
+        tf: str,
+        mins_left: float,
+        action: str,
+        primary_htf_bias: Optional[str] = None,
+        alt_htf_bias: Optional[str] = None,
+    ):
         """When the window-delta (price since window-open) clearly OPPOSES the
         chosen side, return the flipped ``(action, allowed_side, direction,
         new_est_prob_up, prob)`` so the bot trades WITH the tape instead of being
@@ -2058,6 +2093,19 @@ class SolMacroStrategy:
         _move, prob = wd
         fmargin = float(self.config.get("window_delta_flip_margin", 0.05) or 0.0)
         if action == "BUY_YES" and prob < 0.5 - fmargin:
+            # 2026-07-30 SHORT-IN-BULL GUARD (operator GO, sol-family). The flip-to-
+            # SHORT is the freeze-fix for longs blocked into a FALLING (bear/neutral)
+            # tape. When the alt's OWN primary HTF *and* 1h bias are BOTH bullish, an
+            # intra-window dip must NOT convert a native long into a full short: that
+            # path shorted SOL 1h inside bull/bull/bull twice (raw 0.18/0.23), both
+            # lost, and NEVER appeared in the +$88 winner (its SOL shorts were NATIVE,
+            # in a BEARISH SOL HTF). Opt-out (legacy): set the flag true to re-allow.
+            if (
+                not bool(self.config.get("window_delta_flip_to_short_in_bull_enabled", True))
+                and str(primary_htf_bias or "").upper() == "BULLISH"
+                and str(alt_htf_bias or "").upper() == "BULLISH"
+            ):
+                return None
             return "BUY_NO", "SHORT", "DOWN", prob, prob
         if action == "BUY_NO" and prob > 0.5 + fmargin:
             # 2026-07-12: flip-to-LONG gated off (default-on preserves legacy).
@@ -2192,8 +2240,41 @@ class SolMacroStrategy:
             return "alt_1h_bearish_blocks_5m_buy_yes"
         return None
 
-    def _resolve_rsi_gate(self, action: str, rsi: float) -> tuple[bool, float]:
-        """Return (hard_block, est_prob_delta) for RSI-based suppression policy."""
+    def _own_tf_rsi_macd(self, asset, window):
+        """2026-07-30 Fix A: return the ENTRY-WINDOW's own RSI + MACD, not the 4h
+        canonical `rsi_14`. The short guard was gating 5m/15m entries on the 4h RSI
+        (Codex-confirmed wrong-timeframe gating). Falls back to the 4h rsi_14 only if
+        the per-window snapshot is missing (fail-safe, never crashes)."""
+        _w = str(window or "")
+        _tf_attr = {"5m": "tf_5m", "15m": "tf_15m", "1h": "tf_1h"}.get(_w)
+        _macd_attr = {"5m": "macd_5m", "15m": "macd_15m", "1h": "macd_1h"}.get(_w)
+        _rsi = None
+        if _tf_attr is not None:
+            _tf_state = getattr(asset, _tf_attr, None)
+            # Only trust the own-tf RSI if the TF snapshot is POPULATED. An empty
+            # TimeframeIndicatorState defaults rsi_14=50.0 with price=0.0, which would read
+            # as "not oversold" and silently skip the guard (Codex NO-GO). Require price>0;
+            # otherwise fall through to the canonical 4h rsi_14 (fail-safe, some signal).
+            if _tf_state is not None and float(getattr(_tf_state, "price", 0.0) or 0.0) > 0.0:
+                _rsi = getattr(_tf_state, "rsi_14", None)
+        if _rsi is None:
+            _rsi = getattr(asset, "rsi_14", None)  # fallback: 4h canonical
+        _macd = getattr(asset, _macd_attr, None) if _macd_attr else None
+        return _rsi, _macd
+
+    def _resolve_rsi_gate(self, action: str, rsi: float, *, macd=None) -> tuple[bool, float]:
+        """Return (hard_block, est_prob_delta) for RSI-based suppression policy.
+
+        2026-07-30 Fix B — OVERSOLD-SHORT EXHAUSTION GATE. An oversold RSI means the
+        down-move is already stretched; shorting there only makes sense if momentum is
+        STILL confirming down (real downtrend continuation). If the RSI is oversold AND
+        the own-tf MACD is flattening / rising / bullish-crossing (exhaustion -> bounce),
+        BLOCK the short — that oversold-bounce is what repeatedly cost us. This preserves
+        real-downtrend shorts (momentum still falling) while cutting the bounce shorts, so
+        it beats a blanket RSI floor (which was regime-dependent and cut winners in strong
+        downtrends). Default-on, opt-out via oversold_short_exhaustion_gate: false."""
+        if rsi is None:
+            return False, 0.0
         buy_ceiling = self.config.get("rsi_buy_block_above")
         sell_floor = self.config.get("rsi_sell_block_below")
         hit = (
@@ -2207,6 +2288,19 @@ class SolMacroStrategy:
         )
         if not hit:
             return False, 0.0
+
+        # Fix B: oversold + momentum-not-confirming-down => bounce risk => hard block.
+        if (
+            action == "BUY_NO"
+            and macd is not None
+            and bool(self.config.get("oversold_short_exhaustion_gate", True))
+        ):
+            _hist = float(getattr(macd, "histogram", 0.0) or 0.0)
+            _rising = bool(getattr(macd, "histogram_rising", False))
+            _cross = str(getattr(macd, "crossover", "") or "")
+            _still_falling = (_hist < 0.0) and (not _rising) and (_cross != "BULLISH_CROSS")
+            if not _still_falling:
+                return True, 0.0
 
         if self.rsi_hard_gate_enabled:
             return True, 0.0
@@ -2564,6 +2658,7 @@ class SolMacroStrategy:
         htf_bias: str,
         yes_price: Optional[float] = None,
         rsi_14: Optional[float] = None,
+        raw_est_prob: Optional[float] = None,
     ) -> float:
         """Post-calibration BUY_YES floor bump — mirror of the BTC hook.
 
@@ -2592,6 +2687,20 @@ class SolMacroStrategy:
         )
         if bump <= 0.0:
             return 0.0
+        # 2026-07-30 QUANT-AGREE GUARD (fix A, operator GO). The bullish-HTF floor must
+        # NOT force-admit a BUY_YES when the quant model itself implies SHORT (raw
+        # est_prob below the agree floor). Live root cause: xrp 5m BUY_YES 0W/3L -$9.78,
+        # each a raw_est<0.50 / quant_side=SHORT candidate that this +0.22 bump lifted
+        # over the edge bar into a catastrophic stop (0.48->0.16). Only blocks a CONFIRMED
+        # disagreement (raw present AND < floor); None/simple_band unaffected. Per-window
+        # opt-in via {strategy}.<tf>_buy_yes_floor_require_quant_agree (+ optional
+        # ..._quant_agree_min, default 0.50); unset => off (byte-identical to prior).
+        if bool(self.config.get(f"{window_size}_buy_yes_floor_require_quant_agree", False)):
+            _agree_min = float(
+                self.config.get(f"{window_size}_buy_yes_floor_quant_agree_min", 0.50) or 0.50
+            )
+            if raw_est_prob is not None and float(raw_est_prob) < _agree_min:
+                return 0.0
         # RSI overbought guard (2026-06-28): don't inflate est into an overbought top
         # (live: sol 15m RSI 86 -> +0.21 bump -> forced LONG into a reversal, mfe 0).
         # Per-window opt-in via {strategy}.<tf>_buy_yes_bullish_floor_bump_rsi_max;
@@ -4223,7 +4332,8 @@ class SolMacroStrategy:
                             f"  {self._signal_strategy_name} allow BUY_YES on '{market.question[:40]}' — "
                             f"alt 1H BEARISH retained as diagnostic only"
                         )
-                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
+                _own_rsi, _own_macd = self._own_tf_rsi_macd(sol, _updown_tf if is_updown else "15m")
+                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
                 if _rsi_hard_block:
                     _bump_skip("rsi_hard_blocked")
                     if action == "BUY_NO":
@@ -4269,8 +4379,13 @@ class SolMacroStrategy:
                     if _cl_upd is not None:
                         try:
                             _cl_age = (datetime.now(timezone.utc) - _cl_upd).total_seconds()
-                        except TypeError:  # naive timestamp from the service
-                            _cl_age = (datetime.now() - _cl_upd).total_seconds()
+                        except TypeError:  # naive timestamp from the service — treat as UTC
+                            # 2026-07-30 FEEDSTATE TZ FIX (Codex): was datetime.now() = LOCAL
+                            # (Pacific UTC-7) minus a naive-UTC oracle ts, yielding a bogus
+                            # ~-25170s (-7h = the TZ offset). Mirror _freshness_seconds: treat
+                            # the naive ts as UTC. Diagnostic-only (the real gate already
+                            # clamps via _freshness_seconds); this cleans the staleness log/calib.
+                            _cl_age = (datetime.now(timezone.utc) - _cl_upd.replace(tzinfo=timezone.utc)).total_seconds()
                     logger.info(
                         "FEEDSTATE strat=%s mkt=%s tf=%s act=%s basis_bps=%s oracle_age_s=%s ref_spot=%s passed=%s",
                         self._signal_strategy_name, market.id,
@@ -4642,7 +4757,10 @@ class SolMacroStrategy:
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = None if _fade_active else self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    _wd_flip = None if _fade_active else self._window_delta_flip(
+                        sol, _updown_tf, _eval_left, action,
+                        primary_htf_bias=primary_htf_bias, alt_htf_bias=mtt.h1_trend,
+                    )
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up
@@ -4730,9 +4848,20 @@ class SolMacroStrategy:
                         side_source = f"{side_source or ''}+buy_no_5m_to_yes_flip"
                         reason_parts.append("buy_no_5m_to_yes_flip")
 
+                    # 2026-07-30 WRONG-DIRECTION FIX (P0): re-gate the FINAL post-flip action. The gate above
+                    # ran on the pre-flip side; flips (fresh-cross/window-delta/posterior/5m-to-yes) can turn a
+                    # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
+                    # _post_flip_disabled_side re-check.
+                    _pf_rsi, _pf_macd = self._own_tf_rsi_macd(sol, _updown_tf if is_updown else "15m")
+                    _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+                    if _pf_hard:
+                        _bump_skip("rsi_hard_blocked_postflip")
+                        continue
+
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=mtt.h1_trend,
                         yes_price=yes_price, rsi_14=sol.rsi_14,
+                        raw_est_prob=raw_est_prob,
                     )
                     if _byn_floor_5m > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
@@ -4997,7 +5126,10 @@ class SolMacroStrategy:
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = None if _fade_active else self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    _wd_flip = None if _fade_active else self._window_delta_flip(
+                        sol, _updown_tf, _eval_left, action,
+                        primary_htf_bias=primary_htf_bias, alt_htf_bias=mtt.h1_trend,
+                    )
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up
@@ -5032,6 +5164,15 @@ class SolMacroStrategy:
                             context={"atr_pct": round(_atr_pct, 6), "atr_threshold": _atr_thr},
                         )
                         continue
+                    # 2026-07-30 WRONG-DIRECTION FIX (P0): re-gate the FINAL post-flip action. The gate above
+                    # ran on the pre-flip side; flips (fresh-cross/window-delta/posterior/5m-to-yes) can turn a
+                    # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
+                    # _post_flip_disabled_side re-check.
+                    _pf_rsi, _pf_macd = self._own_tf_rsi_macd(sol, _updown_tf)
+                    _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+                    if _pf_hard:
+                        _bump_skip("rsi_hard_blocked_postflip")
+                        continue
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -5048,6 +5189,7 @@ class SolMacroStrategy:
                     _byn_floor = self._alt_buy_yes_bullish_floor_bump(
                         window_size=window_label, action=action, htf_bias=mtt.h1_trend,
                         yes_price=yes_price, rsi_14=sol.rsi_14,
+                        raw_est_prob=raw_est_prob,
                     )
                     if _byn_floor > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor)
@@ -5105,12 +5247,13 @@ class SolMacroStrategy:
                     side_source_counts.get(side_source if "side_source" in locals() else "neutral_macro", 0) + 1
                 )
 
-                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
+                _own_rsi, _own_macd = self._own_tf_rsi_macd(sol, _updown_tf)
+                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
                 if _rsi_hard_block:
                     _bump_skip("rsi_hard_blocked")
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
-                        f"RSI={sol.rsi_14:.1f} hit configured hard gate"
+                        f"own-tf({_updown_tf}) RSI={float(_own_rsi):.1f} hit RSI/exhaustion gate"
                     )
                     continue
                 rsi_soft_penalty = abs(_rsi_soft_delta)
@@ -5605,6 +5748,15 @@ class SolMacroStrategy:
                 continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
+                log_window_reject(
+                    self.full_config, market=market, strategy=self._signal_strategy_name,
+                    window=_updown_tf, side=allowed_side, action=action,
+                    side_source=locals().get("side_source"),
+                    eval_mins_left=_eval_left,
+                    entry_window_min=lane_policy.entry_window_min,
+                    entry_window_max=lane_policy.entry_window_max,
+                    yes_price=yes_price, est_prob=estimated_prob, edge=edge,
+                )
                 _log_skip_reject(
                     market=market,
                     window=_updown_tf,
@@ -6128,8 +6280,19 @@ class SolMacroStrategy:
                         f"conviction={_conv:.3f} < floor={_conv_floor:.2f} ({_updown_tf})"
                     )
                     continue
-            if edge < effective_min_edge and not _admit_marginal_no_ai:
-                if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
+            # 2026-07-29 FEE-AWARE GATE: `edge` is PRE-FEE (est_prob - price). Polymarket
+            # charges taker fee ~rate*p*(1-p); Olympus $0. Subtract the venue fee hurdle so
+            # admission is net-of-fee, AND drop the marginal rescue if the net edge no longer
+            # clears the marginal floor (else fee-thin cheap-NO shorts sneak through it).
+            # No-op when trading.fee_aware_edge.enabled=false (hurdle 0 -> _net_edge == edge).
+            _fee_hurdle = fee_aware_edge_hurdle(self.config, yes_price)
+            _net_edge = edge - _fee_hurdle
+            if _admit_marginal_no_ai and _fee_hurdle > 0.0 and _net_edge < float(
+                self.config.get("ai_updown_marginal_min_edge", 0.03)
+            ):
+                _admit_marginal_no_ai = False
+            if _net_edge < effective_min_edge and not _admit_marginal_no_ai:
+                if rsi_soft_penalty > 0 and (_net_edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
                 _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
                 _reject_reason = "beta_vetoed" if _vetoed else "lane_min_edge"
@@ -6148,6 +6311,8 @@ class SolMacroStrategy:
                     context={
                         "edge": round(float(edge), 6),
                         "effective_min_edge": round(float(effective_min_edge), 6),
+                        "fee_hurdle": round(float(_fee_hurdle), 6),
+                        "net_edge": round(float(_net_edge), 6),
                         "raw_est_prob": round(float(raw_est_prob), 6),
                         "estimated_prob": round(float(estimated_prob), 6),
                         "confidence": round(float(confidence), 6),

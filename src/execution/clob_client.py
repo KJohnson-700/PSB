@@ -5,13 +5,15 @@ Order execution and risk management
 
 import asyncio
 import logging
+import re
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from enum import Enum
-from src.execution.fill_sim import simulate_book_fill
+from src.execution.fill_sim import simulate_book_fill, polymarket_taker_fee_usdc
+from src.analysis import order_lifecycle as _order_lifecycle
 from src.execution.olympus_client import OlympusClient
 try:
     from importlib.metadata import PackageNotFoundError, version as package_version
@@ -55,6 +57,58 @@ LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON = (
     "to py-clob-client-v2 / the unified SDK. Paper/read-only paths may run, but "
     "real order placement must wait for the SDK migration."
 )
+
+_CLOB_BASE_UNITS = Decimal("1000000")
+_CLOB_SHARE_QUANTUM = Decimal("0.0001")
+_BALANCE_ERROR_BALANCE_RE = re.compile(
+    r"\bbalance\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_BALANCE_ERROR_ORDER_AMOUNT_RE = re.compile(
+    r"\border\s+amount\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+
+
+def _floor_clob_shares_4(value: Any) -> float:
+    """Floor CLOB share quantities to Polymarket's 4-decimal live precision."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0.0
+    if amount <= 0:
+        return 0.0
+    return float(amount.quantize(_CLOB_SHARE_QUANTUM, rounding=ROUND_DOWN))
+
+
+def _balance_error_retry_size(side: str, requested_size: Any, price: Any, error: Exception) -> Optional[float]:
+    """Return a reduced share size when a CLOB balance/allowance reject exposes base-unit limits."""
+    message = str(error)
+    lower = message.lower()
+    if "not enough balance" not in lower or "allowance" not in lower:
+        return None
+    balance_match = _BALANCE_ERROR_BALANCE_RE.search(message)
+    order_amount_match = _BALANCE_ERROR_ORDER_AMOUNT_RE.search(message)
+    if not balance_match or not order_amount_match:
+        return None
+    try:
+        balance_base = Decimal(balance_match.group(1))
+        order_amount_base = Decimal(order_amount_match.group(1))
+        current_size = Decimal(str(requested_size))
+        order_price = Decimal(str(price))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if balance_base <= 0 or order_amount_base <= balance_base or current_size <= 0:
+        return None
+    if str(side).upper() == "BUY":
+        if order_price <= 0:
+            return None
+        reduced_size = _floor_clob_shares_4((balance_base / _CLOB_BASE_UNITS) / order_price)
+    else:
+        reduced_size = _floor_clob_shares_4(balance_base / _CLOB_BASE_UNITS)
+    if reduced_size <= 0 or Decimal(str(reduced_size)) >= current_size:
+        return None
+    return reduced_size
 
 
 class OrderStatus(Enum):
@@ -138,6 +192,27 @@ class CLOBClient:
             )
             or 0.0
         )
+        # 2026-07-30 PAPER CALIB #2 (Codex sweep): when the fresh-fill book snapshot is
+        # unavailable, paper historically filled at signal price (a fake fill). Strict mode
+        # makes that a NO-FILL instead; either way the fill is now tagged in the calibration
+        # record (paper_fill_model=signal_price_fail_open) so fail-opens are never invisible.
+        self._paper_fresh_fill_no_fill_on_snapshot_fail = bool(
+            _trading_config.get("paper_fresh_fill_no_fill_on_snapshot_fail", False)
+        )
+        # 2026-07-30 data-loop A: journal the live maker-first order lifecycle
+        # (submit/accept/maker-vs-FAK path/partial/fill/fallback) to order_lifecycle.jsonl.
+        self._order_lifecycle_log_enabled = bool(
+            _trading_config.get("order_lifecycle_log_enabled", True)
+        )
+        # 2026-07-30 PAPER CALIB Phase 2.5: entry taker-fee rate for the fill-quality
+        # journal field (diagnostic estimate; the authoritative round-trip fee is charged
+        # at exit-eval in live_testing). 0 when execution_fees is off.
+        _exec_fee_cfg = (_trading_config.get("execution_fees", {}) or {})
+        self._paper_entry_fee_rate = (
+            float(_exec_fee_cfg.get("crypto_updown_15m_taker_fee_rate", 0.0) or 0.0)
+            if bool(_exec_fee_cfg.get("enabled", False))
+            else 0.0
+        )
         self.config = config.get("polymarket", {})
         self.api_endpoint = self.config.get(
             "api_endpoint", "https://clob.polymarket.com"
@@ -149,6 +224,12 @@ class CLOBClient:
         self.pending_orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self._max_order_history = 1000
+        # 2026-07-29 (Phase-2 ④ WS user-channel fills): idempotency + per-order fill
+        # accumulator so real MATCHED trade frames set order.filled_size to venue truth
+        # without double-counting duplicate/replayed frames. Bounded to cap memory.
+        self._ws_seen_fill_ids: Set[str] = set()
+        self._ws_order_filled: Dict[str, float] = {}
+        self._ws_seen_fill_ids_cap = 10000
         # Level-0 client for public `get_order_book` when no signer/trading keys set.
         self._readonly_py_client: Optional[Any] = None
         self._fee_rate_cache: Dict[str, float] = {}
@@ -471,6 +552,8 @@ class CLOBClient:
                 self._funder_address,
             )
         creds = ApiCreds(api_key, api_secret, api_passphrase)
+        # Retain the L2 creds so the user-channel WS (Phase-2 ④) can authenticate.
+        self.creds = creds
         self.client = PyClobClient(
             host=self.api_endpoint,
             chain_id=self.chain_id,
@@ -489,6 +572,147 @@ class CLOBClient:
         if self._creds_set_at is None:
             return None
         return datetime.now() - self._creds_set_at
+
+    def get_ws_creds(self) -> Optional[Tuple[str, str, str]]:
+        """Return (api_key, api_secret, api_passphrase) for the user-channel WS, or None.
+
+        Read live from self.creds (kept fresh across re-derivation) so the WS re-auths
+        with current creds on every reconnect. Never raises.
+        """
+        creds = getattr(self, "creds", None)
+        if not creds:
+            return None
+        try:
+            api_key = getattr(creds, "api_key", None)
+            secret = getattr(creds, "api_secret", None)
+            passphrase = getattr(creds, "api_passphrase", None)
+            if api_key and secret and passphrase:
+                return (str(api_key), str(secret), str(passphrase))
+        except Exception:
+            return None
+        return None
+
+    def apply_user_fill_event(self, event: Dict[str, Any]) -> None:
+        """Apply a Polymarket user-channel WS event to the matching pending order.
+
+        2026-07-29 (Phase-2 ④). OBSERVE / CORRECTNESS ONLY — never places, cancels, or
+        gates anything. Sets order.filled_size from REAL matched fills (venue truth)
+        instead of the post_order-response inference, and logs each fill for the
+        journal-vs-venue cross-check. Idempotent via self._ws_seen_fill_ids so duplicate
+        or replayed frames cannot double-count. Never raises into the WS listen loop.
+
+        Trade lifecycle: MATCHED = fill truth; MINED/CONFIRMED = settlement of an
+        already-counted match (not additional size). Order lifecycle events
+        (PLACEMENT/UPDATE/CANCELLATION) carry no fill size and are logged only.
+        """
+        try:
+            if not isinstance(event, dict):
+                return
+            etype = str(event.get("event_type") or event.get("type") or "").lower()
+            status = str(event.get("status") or event.get("trade_status") or "").upper()
+
+            # Correlate to one of our pending orders across the id-field variants
+            # Polymarket uses (we may be maker or taker on a trade). When we match
+            # inside a nested maker_orders entry, capture THAT entry's per-order matched
+            # amount — the top-level trade `size` is the AGGREGATE across all makers and
+            # would overcount our fill.
+            oid = None
+            _nested_match_sz = None
+            for k in ("order_id", "orderID", "id", "taker_order_id", "maker_order_id"):
+                cand = event.get(k)
+                if cand and str(cand) in self.pending_orders:
+                    oid = str(cand)
+                    break
+            if oid is None:
+                # Nested maker/taker order objects on trade frames.
+                for nested_key in ("maker_orders", "taker_order"):
+                    nested = event.get(nested_key)
+                    entries = nested if isinstance(nested, list) else [nested]
+                    for e in entries:
+                        if isinstance(e, dict):
+                            cand = e.get("order_id") or e.get("orderID")
+                            if cand and str(cand) in self.pending_orders:
+                                oid = str(cand)
+                                for msz_key in ("matched_amount", "matchedAmount", "size", "size_matched", "amount"):
+                                    if e.get(msz_key) is not None:
+                                        _nested_match_sz = e.get(msz_key)
+                                        break
+                                break
+                    if oid:
+                        break
+            if oid is None:
+                return  # not one of our tracked orders
+
+            order = self.pending_orders.get(oid)
+            if order is None:
+                return
+
+            # Only trade MATCHED frames carry new fill size. Everything else is lifecycle.
+            is_fill = etype == "trade" and status == "MATCHED"
+            if not is_fill:
+                logger.info(
+                    "user WS %s event for order %s status=%s (no fill accounting)",
+                    etype or "?", oid[:20], status or "?",
+                )
+                return
+
+            # Idempotency: a unique key per matched trade so replays don't double-count.
+            trade_id = str(
+                event.get("id") or event.get("trade_id")
+                or event.get("transaction_hash") or event.get("hash") or ""
+            )
+            dedup_key = f"{oid}:{trade_id}:{status}" if trade_id else None
+            if dedup_key is not None and dedup_key in self._ws_seen_fill_ids:
+                return
+
+            # Matched share size: prefer the per-order nested amount (maker match);
+            # otherwise the top-level trade size (taker match, one order per trade).
+            if _nested_match_sz is not None:
+                _sz_raw = _nested_match_sz
+            else:
+                _sz_raw = None
+                for sz_key in ("size", "matched_amount", "size_matched", "amount", "filled_size"):
+                    if event.get(sz_key) is not None:
+                        _sz_raw = event.get(sz_key)
+                        break
+            try:
+                _sz = float(_sz_raw) if _sz_raw is not None else 0.0
+            except (TypeError, ValueError):
+                _sz = 0.0
+            if _sz <= 0:
+                return
+
+            if dedup_key is not None:
+                if len(self._ws_seen_fill_ids) >= self._ws_seen_fill_ids_cap:
+                    self._ws_seen_fill_ids.clear()  # bounded memory; old dups are moot
+                self._ws_seen_fill_ids.add(dedup_key)
+
+            # Accumulate real matched size and let WS truth SUPERSEDE the post_order
+            # inference on THIS Order in pending_orders (a fill cross-check + the enabler
+            # for async maker fills under hybrid entry). It does NOT retroactively rewrite
+            # a Position/journal entry that main.py already created synchronously from the
+            # marketable post_order fill — that path already has the correct size at entry.
+            self._ws_order_filled[oid] = self._ws_order_filled.get(oid, 0.0) + _sz
+            _cum = self._ws_order_filled[oid]
+            order.filled_size = float(_cum)
+            _tol = max(1e-6, float(_CLOB_SHARE_QUANTUM))
+            order.status = (
+                OrderStatus.FILLED if _cum >= float(order.size) - _tol else OrderStatus.PARTIAL
+            )
+            logger.info(
+                "user WS FILL: order=%s trade=%s +%.4f cum_filled=%.4f/%.4f status=%s",
+                oid[:20], (trade_id[:16] if trade_id else "?"), _sz, _cum,
+                float(order.size), order.status.name,
+            )
+            # Bound memory: once an order is fully filled its accumulator is terminal —
+            # drop it (the dedup set still blocks any replayed frame). Hard-cap backstop
+            # clears the map if it ever balloons (this bot has an OOM history).
+            if order.status == OrderStatus.FILLED:
+                self._ws_order_filled.pop(oid, None)
+            elif len(self._ws_order_filled) > self._ws_seen_fill_ids_cap:
+                self._ws_order_filled.clear()
+        except Exception as e:  # never break the WS listen loop
+            logger.debug("apply_user_fill_event ignored error: %r", e)
 
     def credentials_expired(self) -> bool:
         """
@@ -540,6 +764,8 @@ class CLOBClient:
         except Exception as exc:
             logger.error("Failed to re-derive L2 credentials: %s", exc)
             return False
+        # Keep self.creds fresh so the user-channel WS re-auths with the new creds.
+        self.creds = new_creds
         self._creds_set_at = datetime.now()
         logger.info("Re-derived L2 credentials from L1 signer; expiry clock reset.")
         return True
@@ -633,6 +859,37 @@ class CLOBClient:
         if balance is None:
             logger.error("Could not parse Polymarket wallet bankroll payload: %s", payload)
         return balance
+
+    async def get_token_balance(self, token_id: str) -> Optional[float]:
+        """Actual on-venue share balance for a conditional (outcome) token.
+
+        2026-07-29 (Codex fill-accounting fix): a live FAK BUY can PARTIAL-fill, so the
+        journaled position size can exceed what the wallet actually holds. Selling the
+        journaled size then 400s ("not enough balance/allowance") and the loose recovery
+        journals a phantom close. Use this to clamp SELL/exit size to real holdings.
+        Refreshes the server-side balance-allowance cache first, then reads it. Returns
+        None on any error (callers fail-open — never block a legitimate exit on a hiccup).
+        """
+        if self.using_olympus():
+            return None
+        if not self.client or BalanceAllowanceParams is None or AssetType is None:
+            return None
+        try:
+            params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(
+                    None, lambda: self.client.update_balance_allowance(params)
+                )
+            except Exception:
+                pass  # update is best-effort; the read below still returns current state
+            payload = await loop.run_in_executor(
+                None, lambda: self.client.get_balance_allowance(params)
+            )
+        except Exception as exc:
+            logger.warning("get_token_balance failed for %s: %s", token_id[:20], exc)
+            return None
+        return self._extract_cash_balance(payload)
 
     async def get_account_value(self) -> Optional[float]:
         """Total account value for the bankroll (cash + open-position value).
@@ -936,13 +1193,56 @@ class CLOBClient:
         _marketable = str(order_type).upper() in ("FAK", "FOK")
         _use_market = _marketable and MarketOrderArgs is not None
 
-        try:
+        # 2026-07-29 EXIT-CLAMP (Codex): clamp SELL size to the real on-venue token
+        # holding. A live FAK BUY can partial-fill, so the journaled position can exceed
+        # the wallet; selling the journaled size 400s ("not enough balance/allowance")
+        # and the loose post-error recovery journals a phantom close, corrupting P&L.
+        # Fail-open (balance read error / None -> proceed unchanged).
+        if str(side).upper() == "SELL":
+            _tok_bal = await self.get_token_balance(token_id)
+            if _tok_bal is not None:
+                if _tok_bal <= 0:
+                    logger.warning(
+                        "Exit-clamp: wallet holds ~0 of token %s (journaled sell=%.2f) — "
+                        "nothing to sell, skipping order to avoid phantom close.",
+                        token_id[:20], float(size),
+                    )
+                    return None
+                if _tok_bal < float(size) - 1e-6:
+                    logger.warning(
+                        "Exit-clamp: sell size %.2f > wallet holding %.2f for %s — "
+                        "clamping to actual holdings.",
+                        float(size), _tok_bal, token_id[:20],
+                    )
+                    size = _tok_bal
+
+        # 2026-07-29 MICRO-SHARE FLOOR (Codex Phase-1 item 3): live CLOB accepts share
+        # quantities at 4-decimal precision. Floor rather than round so fee-shaved
+        # balances and fractional residuals cannot produce an order marginally larger
+        # than the wallet can fund (silent "insufficient balance" reject).
+        _floored_size = _floor_clob_shares_4(size)
+        if _floored_size <= 0:
+            logger.warning(
+                "CLOB order size floors to zero; skipping live order: token=%s side=%s raw_size=%s",
+                token_id[:20],
+                side,
+                size,
+            )
+            return None
+        if abs(float(_floored_size) - float(size)) > 1e-12:
+            logger.info(
+                "Floored CLOB order size to 4 decimals: token=%s side=%s raw=%.8f floored=%.4f",
+                token_id[:20], side, float(size), _floored_size,
+            )
+        size = _floored_size
+
+        async def _submit_clob_order(order_size: float) -> Dict[str, Any]:
             loop = asyncio.get_event_loop()
             if _use_market:
                 if str(side).upper() == "BUY":
-                    _mkt_amount = float(size) * float(order_price)  # USDC budget
+                    _mkt_amount = float(order_size) * float(order_price)  # USDC budget
                 else:
-                    _mkt_amount = float(size)  # shares to sell
+                    _mkt_amount = float(order_size)  # shares to sell
                 market_args = MarketOrderArgs(
                     token_id=token_id,
                     amount=_mkt_amount,
@@ -958,14 +1258,44 @@ class CLOBClient:
                     token_id=token_id,
                     side=side,
                     price=order_price,
-                    size=size,
+                    size=order_size,
                 )
                 signed_order = await loop.run_in_executor(
                     None, lambda: self.client.create_order(order_args, create_opts)
                 )
-            resp = await loop.run_in_executor(
+            return await loop.run_in_executor(
                 None, lambda: self.client.post_order(signed_order, _ot, post_only)
             )
+
+        try:
+            # 2026-07-29 BALANCE-ERROR AUTO-ADJUST (Codex Phase-1 item 2): if the CLOB
+            # rejects with "not enough balance / allowance ... balance: X, order amount: Y",
+            # floor the order to the affordable size and retry ONCE. Turns a hard reject
+            # into a fill; complements the SELL exit-clamp above. Live CLOB only, one retry.
+            _balance_retry_used = False
+            while True:
+                try:
+                    resp = await _submit_clob_order(float(size))
+                    break
+                except Exception as submit_exc:
+                    reduced_size = (
+                        None
+                        if _balance_retry_used
+                        else _balance_error_retry_size(side, size, order_price, submit_exc)
+                    )
+                    if reduced_size is None:
+                        raise
+                    logger.warning(
+                        "CLOB balance/allowance reject: retrying once with reduced size "
+                        "%.4f -> %.4f for token=%s side=%s price=%.6f",
+                        float(size),
+                        reduced_size,
+                        token_id[:20],
+                        side,
+                        float(order_price),
+                    )
+                    size = reduced_size
+                    _balance_retry_used = True
             if not isinstance(resp, dict):
                 raise RuntimeError(f"unexpected post_order response type: {type(resp).__name__}")
             venue_order_id = (
@@ -987,6 +1317,37 @@ class CLOBClient:
                 size=size,
                 status=OrderStatus.PENDING,
             )
+            # 2026-07-29 (Codex fill-accounting): capture the ACTUAL matched share qty so
+            # the recorded position matches the wallet (a live FAK can partial-fill). Only
+            # override when a clear positive fill is present; otherwise leave filled_size=0
+            # so the caller's existing requested-size fallback is unchanged (no regression).
+            # The log surfaces the raw response shape so we can harden the field mapping.
+            try:
+                # Polymarket POST /order returns makingAmount / takingAmount in 6-decimal
+                # base units (NOT size_matched). For a BUY the shares acquired = takingAmount;
+                # for a SELL the shares sold = makingAmount. _normalize_usdc_amount divides
+                # 6-decimal integers to human units. If the venue echoes the REQUESTED (not
+                # matched) amount here, the diagnostic log below lets us confirm and fall
+                # back to a post-fill CONDITIONAL token-balance read.
+                if str(side).upper() == "BUY":
+                    _fill = self._normalize_usdc_amount(resp.get("takingAmount"))
+                else:
+                    _fill = self._normalize_usdc_amount(resp.get("makingAmount"))
+                if _fill and _fill > 0:
+                    order.filled_size = float(_fill)
+                    order.status = (
+                        OrderStatus.FILLED
+                        if abs(float(_fill) - float(size)) <= max(1e-6, 0.01 * float(size))
+                        else OrderStatus.PARTIAL
+                    )
+                logger.info(
+                    "post_order fill: side=%s status=%s size_req=%.2f filled=%.2f "
+                    "making=%s taking=%s resp_keys=%s",
+                    side, resp.get("status"), float(size), float(order.filled_size),
+                    resp.get("makingAmount"), resp.get("takingAmount"), sorted(resp.keys()),
+                )
+            except Exception:
+                pass
             self.pending_orders[order.order_id] = order
             self.order_history.append(order)
             if len(self.order_history) > self._max_order_history:
@@ -1068,14 +1429,36 @@ class CLOBClient:
         if dry_run:
             _eff_price = price
             _eff_size = size
+            _paper_fill_quality = None  # PAPER CALIB Phase 2.5 executability proof
             if self._paper_entry_fresh_fill and str(side).upper() == "BUY":
                 try:
                     _book = await self.fetch_order_book_snapshot(token_id)
                     if not isinstance(_book, dict):
+                        if self._paper_fresh_fill_no_fill_on_snapshot_fail:
+                            logger.info(
+                                "paper entry fresh-fill NO-FILL (strict): no book snapshot for %s",
+                                token_id,
+                            )
+                            return None
                         logger.warning(
                             "paper entry fresh-fill: no book snapshot for %s; fail-open at signal price",
                             token_id,
                         )
+                        _paper_fill_quality = {
+                            "paper_fill_model": "signal_price_fail_open",
+                            "fail_reason": "no_book_snapshot",
+                            "requested_price": round(float(price), 4),
+                            "sim_fill_price": round(float(price), 4),
+                            "sim_filled_size": round(float(size), 4),
+                            "sim_fill_ratio": 1.0,
+                            "entry_best_ask": None,
+                            "entry_best_bid": None,
+                            "entry_spread": None,
+                            "entry_depth_at_limit": None,
+                            "fee_usdc": round(
+                                float(polymarket_taker_fee_usdc(size, price, self._paper_entry_fee_rate)), 4
+                            ),
+                        }
                     else:
                         _asks = sorted(
                             (
@@ -1093,12 +1476,13 @@ class CLOBClient:
                                 size,
                             )
                             return None
+                        _limit_px = price + self._paper_entry_fresh_fill_slip_tol
                         _fill_px, _filled = simulate_book_fill(
                             "BUY",
                             size,
                             _asks,
                             marketable=False,
-                            limit_price=price + self._paper_entry_fresh_fill_slip_tol,
+                            limit_price=_limit_px,
                             pad_remainder_at_worst=False,
                         )
                         if _filled <= 0 or _fill_px * _filled < 1.0:
@@ -1106,69 +1490,350 @@ class CLOBClient:
                                 "paper entry fresh-fill no-fill: token=%s signal=%.4f limit=%.4f fill_px=%.4f filled=%.4f",
                                 token_id,
                                 price,
-                                price + self._paper_entry_fresh_fill_slip_tol,
+                                _limit_px,
                                 _fill_px,
                                 _filled,
                             )
                             return None
                         _eff_price, _eff_size = _fill_px, _filled
+                        # PAPER CALIB Phase 2.5: prove this entry was executable at the live
+                        # book — records what the walk cost vs the signal mark + the book
+                        # state. Rides on order.execution -> journal entry.extra so the lane
+                        # fillability analyzer can separate signal wins from execution wins.
+                        _bids = sorted(
+                            (
+                                float(level.get("price"))
+                                for level in (_book.get("bids") or [])
+                                if level.get("price") is not None and float(level.get("size") or 0) > 0
+                            ),
+                            reverse=True,
+                        )
+                        _best_ask = _asks[0][0]
+                        _best_bid = _bids[0] if _bids else None
+                        _spread = (_best_ask - _best_bid) if _best_bid is not None else None
+                        _depth_at_limit = sum(sz for px, sz in _asks if px <= _limit_px)
+                        _paper_fill_quality = {
+                            "paper_fill_model": "book_walk",
+                            "requested_price": round(float(price), 4),
+                            "sim_fill_price": round(float(_fill_px), 4),
+                            "sim_filled_size": round(float(_filled), 4),
+                            "sim_fill_ratio": (round(float(_filled) / float(size), 4) if size else None),
+                            "entry_best_ask": round(float(_best_ask), 4),
+                            "entry_best_bid": (round(float(_best_bid), 4) if _best_bid is not None else None),
+                            "entry_spread": (round(float(_spread), 4) if _spread is not None else None),
+                            "entry_depth_at_limit": round(float(_depth_at_limit), 4),
+                            "fee_usdc": round(
+                                float(polymarket_taker_fee_usdc(_filled, _fill_px, self._paper_entry_fee_rate)), 4
+                            ),
+                        }
                 except Exception as exc:
+                    if self._paper_fresh_fill_no_fill_on_snapshot_fail:
+                        logger.info(
+                            "paper entry fresh-fill NO-FILL (strict): exception for %s: %s",
+                            token_id,
+                            exc,
+                        )
+                        return None
                     logger.warning(
                         "paper entry fresh-fill failed for %s; fail-open at signal price: %s",
                         token_id,
                         exc,
                     )
-            return await self.place_order(
+                    _paper_fill_quality = {
+                        "paper_fill_model": "signal_price_fail_open",
+                        "fail_reason": f"exception:{type(exc).__name__}",
+                        "requested_price": round(float(price), 4),
+                        "sim_fill_price": round(float(price), 4),
+                        "sim_filled_size": round(float(size), 4),
+                        "sim_fill_ratio": 1.0,
+                        "entry_best_ask": None,
+                        "entry_best_bid": None,
+                        "entry_spread": None,
+                        "entry_depth_at_limit": None,
+                        "fee_usdc": round(
+                            float(polymarket_taker_fee_usdc(size, price, self._paper_entry_fee_rate)), 4
+                        ),
+                    }
+            _paper_order = await self.place_order(
                 token_id=token_id, side=side, price=_eff_price, size=_eff_size,
                 post_only=False, order_type="FAK", dry_run=True, **meta,
             )
+            if _paper_order is not None and _paper_fill_quality is not None:
+                try:
+                    _paper_order.execution = {
+                        **(getattr(_paper_order, "execution", {}) or {}),
+                        "paper_fill_quality": _paper_fill_quality,
+                    }
+                except Exception:
+                    pass
+            return _paper_order
+
+        # data-loop A: one order_lifecycle.jsonl row per resolved order (live maker/FAK path).
+        def _lc(path, order, submit_mono=None, matched=None, fallback=None):
+            _order_lifecycle.record(
+                self._order_lifecycle_log_enabled, kind="entry", path=path,
+                token_id=token_id, side=side, requested_price=price, requested_size=size,
+                order=order, submit_monotonic=submit_mono, matched=matched,
+                fallback_reason=fallback, window=w, market_id=market_id,
+            )
+            return order
 
         if mode == "maker":
-            return await self.place_order(
+            _sm = time.monotonic()
+            return _lc("maker_only", await self.place_order(
                 token_id=token_id, side=side, price=price, size=size,
                 post_only=True, order_type="GTC", dry_run=False, **meta,
-            )
+            ), _sm)
         if mode != "hybrid":  # marketable (default)
-            return await self.place_order(
+            _sm = time.monotonic()
+            return _lc("marketable", await self.place_order(
                 token_id=token_id, side=side, price=price, size=size,
                 post_only=False, order_type="FAK", dry_run=False, **meta,
-            )
+            ), _sm)
 
         # hybrid: maker leg first
+        _sm = time.monotonic()
         maker = await self.place_order(
             token_id=token_id, side=side, price=price, size=size,
             post_only=True, order_type="GTC", dry_run=False, **meta,
         )
         if maker is None:
             logger.info("[entry hybrid] maker post failed/rejected; crossing to taker.")
-            return await self.place_order(
+            return _lc("maker_post_failed_fak", await self.place_order(
                 token_id=token_id, side=side, price=price, size=size,
                 post_only=False, order_type="FAK", dry_run=False, **meta,
-            )
+            ), _sm, fallback="maker_post_rejected")
         try:
             await asyncio.sleep(max(0.0, float(maker_wait_sec)))
         except Exception:
             pass
         status = await self.get_order_status(maker.order_id)
-        if status == OrderStatus.FILLED:
-            logger.info("[entry hybrid] filled as MAKER (no taker fee): %s", maker.order_id)
-            return maker
-        # Cancel whatever's resting; for PARTIAL keep the partial (never double-fill).
-        await self.cancel_order(maker.order_id)
-        if status == OrderStatus.PARTIAL:
+        # 2026-07-29 (Codex Phase-1 review x2): decide the maker leg from the ACTUAL matched
+        # share qty, and treat UNKNOWN (reconcile read failed) as neither filled nor empty.
+        # get_order_status is a coarse enum and maker.filled_size is the post-time value
+        # (0 for a rested leg), so a maker that FILLED or PARTIAL-filled during the wait
+        # would otherwise be recorded at the full requested size — the same partial-fill
+        # mis-accounting the exit-clamp/fill-capture fixes prevent. Rules: only trust
+        # positive matched evidence; only cross to taker on EXPLICIT zero; on unknown,
+        # record nothing and cross nothing (skip the entry) rather than double-fill or
+        # manufacture a phantom size. Phase-2 WS user-channel fills replace this REST read.
+        _sz = float(maker.size)
+        # Tolerance = one share quantum (4dp), NOT 1% of size: a 1% band would let a
+        # near-full partial (e.g. 99.2/100) take the fully-filled fast-path and leave the
+        # 0.8-share remainder resting live. maker.size is already floored to 4dp.
+        _tol = max(1e-6, float(_CLOB_SHARE_QUANTUM))
+        _matched = await self._reconcile_matched_size(maker.order_id)
+
+        # Fully filled as maker — positive confirmation only (no resting remainder to cancel).
+        if _matched is not None and _matched >= _sz - _tol:
+            maker.filled_size = float(_matched)
+            maker.status = OrderStatus.FILLED
             logger.info(
-                "[entry hybrid] maker PARTIAL on %s; keeping partial, not crossing "
-                "remainder (double-fill safety).", maker.order_id,
+                "[entry hybrid] filled as MAKER (no taker fee): %s filled=%.4f",
+                maker.order_id, float(maker.filled_size),
             )
-            return maker
-        logger.info(
-            "[entry hybrid] maker unfilled (status=%s) on %s; crossing full size to taker.",
-            status, maker.order_id,
+            return _lc("maker_full", maker, _sm, matched=_matched)
+
+        # Cancel the resting remainder, then reconcile ONCE more — cancel finalizes the
+        # matched qty, and trade history may have lagged the pre-cancel read.
+        await self.cancel_order(maker.order_id)
+        _final = await self._reconcile_matched_size(maker.order_id)
+        if _final is None:
+            _final = _matched  # fall back to the pre-cancel read
+
+        if _final is not None and _final > 0:
+            # Known partial (or full only now visible): keep exactly what filled; never cross.
+            maker.filled_size = float(_final)
+            maker.status = OrderStatus.FILLED if _final >= _sz - _tol else OrderStatus.PARTIAL
+            logger.info(
+                "[entry hybrid] maker %s on %s (filled=%.4f/%.4f); keeping, not crossing "
+                "remainder (double-fill safety).",
+                maker.status.name, maker.order_id, float(maker.filled_size), _sz,
+            )
+            return _lc("maker_partial_keep", maker, _sm, matched=_final)
+
+        if _final is not None and _final <= 0:
+            # EXPLICIT zero matched → safe to cross the full size to a taker fill.
+            logger.info(
+                "[entry hybrid] maker unfilled (matched=0, status=%s) on %s; crossing full "
+                "size to taker.", status, maker.order_id,
+            )
+            return _lc("maker_zero_cross_fak", await self.place_order(
+                token_id=token_id, side=side, price=price, size=size,
+                post_only=False, order_type="FAK", dry_run=False, **meta,
+            ), _sm, matched=0.0, fallback="maker_unfilled")
+
+        # UNKNOWN after cancel (both reconcile reads failed). Do NOT cross to taker
+        # (would double-fill if the maker actually filled) and do NOT manufacture a
+        # position. Skip this entry; the venue cross-check / reconciler catches any
+        # orphan. Missing one entry is cheaper than corrupting size or double-filling.
+        logger.warning(
+            "[entry hybrid] maker %s fill UNKNOWN after cancel (status=%s, reconcile "
+            "failed both reads); NOT crossing to taker and NOT recording a position to "
+            "avoid double-fill / size corruption. Reconciler/venue check advised.",
+            maker.order_id, status,
         )
-        return await self.place_order(
+        _lc("maker_unknown_skip", None, _sm, matched=_matched, fallback="reconcile_unknown")
+        return None
+
+    async def place_exit_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        window: Optional[str] = None,
+        market_id: str = None,
+        dry_run: bool = True,
+        taker_price: Optional[float] = None,
+        maker_wait_sec: float = 6.0,
+        hybrid_windows: Any = ("15m", "1h"),
+        market_title: Optional[str] = None,
+        market_slug: Optional[str] = None,
+        condition_id: Optional[str] = None,
+        outcome_label: Optional[str] = None,
+    ) -> Optional[Order]:
+        """Place a maker-first EXIT (hybrid) honoring the venue fee structure.
+
+        Mirrors ``place_entry_order`` but for the SELL/close leg, with one
+        deliberate asymmetry driven by venue mechanics:
+
+        - **Entries** must NEVER cross the remainder on an UNKNOWN reconcile (a
+          double-BUY would over-fill and corrupt size). **Exits SELL the held
+          token, and the venue caps a SELL at actual holdings** — you physically
+          cannot oversell. So the exit can be more aggressive about flattening.
+
+        Flow (hybrid, live only): post ``price`` as a post_only GTC maker leg (0
+        fee + maker rebate; the whole point — a mid-price exit taker fee is ~1.8%
+        of stake plus the 250ms taker delay + book-walk slippage, all eliminated
+        when the maker leg fills). Wait ``maker_wait_sec``, reconcile matched:
+        - fully filled  → return the maker leg (0 fee). Best case.
+        - partial known → cancel the resting remainder, KEEP the filled part, and
+          return PARTIAL. We do NOT auto-cross here; the caller's pending-exit
+          retry loop re-evaluates the smaller remaining position next tick (and
+          escalates to a marketable FAK if urgency has risen). This keeps per-leg
+          fill accounting exact — identical discipline to the entry hybrid.
+        - zero known    → cancel, cross the FULL size to a FAK taker at
+          ``taker_price`` (aggressive crossing limit supplied by the caller) so
+          the close is guaranteed. Saves nothing on fees but never rests a loser.
+        - UNKNOWN       → return None; the caller retries and the reconciler /
+          venue cross-check catches any orphan. Conservative, matches entries.
+
+        ``marketable`` (urgent / loss-cut / near-resolution) exits do NOT reach
+        this method — the caller keeps them on the existing FAK aggressive-cross
+        path. Paper/dry_run ALWAYS uses the conservative marketable taker path
+        (maker savings are pure live microstructure; never model paper optimism).
+        Only ``hybrid_windows`` (15m/1h) use the maker leg; other windows fall
+        back to marketable because resting rarely fills in fast markets.
+        """
+        meta = dict(
+            market_id=market_id,
+            order_outcome=None,
+            market_title=market_title,
+            market_slug=market_slug,
+            condition_id=condition_id,
+            outcome_label=outcome_label,
+        )
+        w = str(window or "").lower()
+        try:
+            _hybrid_ws = {str(x).lower() for x in (hybrid_windows or ())}
+        except TypeError:
+            _hybrid_ws = {"15m", "1h"}
+        # Aggressive crossing price for the taker fallback (caller supplies; else
+        # the maker price, which for an exit is already at/through the bid).
+        _tk_price = float(taker_price) if taker_price is not None else float(price)
+
+        # Paper: conservative taker fill regardless of mode (maker savings live-only).
+        if dry_run or w not in _hybrid_ws:
+            return await self.place_order(
+                token_id=token_id, side=side, price=_tk_price, size=size,
+                post_only=False, order_type="FAK", dry_run=dry_run, **meta,
+            )
+
+        # data-loop A: one order_lifecycle.jsonl row per resolved LIVE exit order.
+        def _lc(path, order, submit_mono=None, matched=None, fallback=None):
+            _order_lifecycle.record(
+                self._order_lifecycle_log_enabled, kind="exit", path=path,
+                token_id=token_id, side=side, requested_price=price, requested_size=size,
+                order=order, submit_monotonic=submit_mono, matched=matched,
+                fallback_reason=fallback, window=w, market_id=market_id,
+            )
+            return order
+
+        # hybrid maker leg first
+        _sm = time.monotonic()
+        maker = await self.place_order(
             token_id=token_id, side=side, price=price, size=size,
-            post_only=False, order_type="FAK", dry_run=False, **meta,
+            post_only=True, order_type="GTC", dry_run=False, **meta,
         )
+        if maker is None:
+            logger.info("[exit hybrid] maker post failed/rejected; crossing to taker.")
+            return _lc("maker_post_failed_fak", await self.place_order(
+                token_id=token_id, side=side, price=_tk_price, size=size,
+                post_only=False, order_type="FAK", dry_run=False, **meta,
+            ), _sm, fallback="maker_post_rejected")
+        try:
+            await asyncio.sleep(max(0.0, float(maker_wait_sec)))
+        except Exception:
+            pass
+        status = await self.get_order_status(maker.order_id)
+        _sz = float(maker.size)
+        _tol = max(1e-6, float(_CLOB_SHARE_QUANTUM))
+        _matched = await self._reconcile_matched_size(maker.order_id)
+
+        # Fully filled as maker — 0 fee, no resting remainder.
+        if _matched is not None and _matched >= _sz - _tol:
+            maker.filled_size = float(_matched)
+            maker.status = OrderStatus.FILLED
+            logger.info(
+                "[exit hybrid] filled as MAKER (0 fee + rebate): %s filled=%.4f",
+                maker.order_id, float(maker.filled_size),
+            )
+            return _lc("maker_full", maker, _sm, matched=_matched)
+
+        # Cancel resting remainder, then reconcile once more (cancel finalizes the
+        # matched qty; trade history may have lagged the pre-cancel read).
+        await self.cancel_order(maker.order_id)
+        _final = await self._reconcile_matched_size(maker.order_id)
+        if _final is None:
+            _final = _matched
+
+        if _final is not None and _final > 0:
+            # Known partial: keep exactly what filled at 0 fee; the caller's pending
+            # -exit loop re-evaluates the remaining position next tick.
+            maker.filled_size = float(_final)
+            maker.status = OrderStatus.FILLED if _final >= _sz - _tol else OrderStatus.PARTIAL
+            logger.info(
+                "[exit hybrid] maker %s on %s (filled=%.4f/%.4f); keeping, remainder "
+                "re-evaluated next tick.",
+                maker.status.name, maker.order_id, float(maker.filled_size), _sz,
+            )
+            return _lc("maker_partial_keep", maker, _sm, matched=_final)
+
+        if _final is not None and _final <= 0:
+            # EXPLICIT zero matched → cross the FULL size to a FAK taker to flatten.
+            logger.info(
+                "[exit hybrid] maker unfilled (matched=0, status=%s) on %s; crossing "
+                "full size to taker to flatten.", status, maker.order_id,
+            )
+            return _lc("maker_zero_cross_fak", await self.place_order(
+                token_id=token_id, side=side, price=_tk_price, size=size,
+                post_only=False, order_type="FAK", dry_run=False, **meta,
+            ), _sm, matched=0.0, fallback="maker_unfilled")
+
+        # UNKNOWN after cancel (both reconcile reads failed). Do NOT manufacture a
+        # fill; return None so the caller's pending-exit retry + reconciler/venue
+        # cross-check resolve it next tick. (A SELL can't oversell, but crossing on
+        # unknown would corrupt the returned filled_size accounting — same
+        # discipline as the entry hybrid.)
+        logger.warning(
+            "[exit hybrid] maker %s fill UNKNOWN after cancel (status=%s, reconcile "
+            "failed both reads); NOT recording a fill. Caller retry / reconciler advised.",
+            maker.order_id, status,
+        )
+        _lc("maker_unknown_skip", None, _sm, matched=_matched, fallback="reconcile_unknown")
+        return None
 
     async def cancel_order(self, order_id: str) -> bool:
         if not self.client:
@@ -1345,6 +2010,85 @@ class CLOBClient:
                         return OrderStatus.FILLED
         # No matching trade — order is resting/unmatched, not yet terminal.
         return OrderStatus.PENDING
+
+    async def _reconcile_matched_size(self, order_id: str) -> Optional[float]:
+        """Best-effort read of the ACTUAL matched share qty for an order.
+
+        The hybrid entry path needs this before classifying a maker leg: get_order_status
+        returns only a coarse enum, and maker.filled_size is the post-time value (0 for a
+        leg that rested), so a maker that FILLED or PARTIAL-filled during the wait would
+        otherwise be recorded at the full requested size — the exact partial-fill
+        mis-accounting the exit-clamp and fill-capture fixes exist to prevent.
+
+        Reads the still-active order's ``size_matched`` first (a resting partial carries
+        it), then falls back to summing matching /data/trades. Returns shares matched, or
+        None on any read error (caller fails open to its status-based path). Never raises.
+        """
+        if self.using_olympus() or not self.client:
+            return None
+        loop = asyncio.get_event_loop()
+        # 1) active order record — a resting order that partially filled shows size_matched.
+        try:
+            rec = await loop.run_in_executor(None, lambda: self.client.get_order(order_id))
+            if isinstance(rec, dict) and rec.get("size_matched") is not None:
+                try:
+                    val = float(rec.get("size_matched"))
+                    if val >= 0:
+                        return val
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            pass
+        # 2) trade history — sum matched size across trades referencing this order id.
+        try:
+            trades = await loop.run_in_executor(None, lambda: self.client.get_trades())
+        except Exception:
+            return None
+        id_keys = ("order_id", "maker_order_id", "taker_order_id")
+
+        def _num(v) -> Optional[float]:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        total = 0.0
+        found = False
+        for trade in trades or []:
+            if not isinstance(trade, dict):
+                continue
+            # Direct (top-level) match: the trade names our order id directly (we are the
+            # taker, or a single-order trade) — the top-level `size` is OUR fill.
+            if any(trade.get(k) == order_id for k in id_keys):
+                for sz_key in ("size", "matched_amount", "size_matched", "amount"):
+                    _v = _num(trade.get(sz_key))
+                    if _v is not None:
+                        total += _v
+                        found = True
+                        break
+                continue
+            # Nested match: our order is one entry inside maker_orders/taker_order. Use
+            # THAT entry's per-order matched amount — the top-level trade `size` is the
+            # AGGREGATE across all makers on the trade and would overcount our fill (Codex
+            # 2026-07-29; mirrors the apply_user_fill_event nested-maker fix).
+            _nested_sz = None
+            for nested_key in ("maker_orders", "taker_order"):
+                nested = trade.get(nested_key)
+                entries = nested if isinstance(nested, list) else [nested]
+                for e in entries:
+                    if isinstance(e, dict) and e.get("order_id") == order_id:
+                        for msz_key in ("matched_amount", "matchedAmount", "size", "size_matched", "amount"):
+                            _v = _num(e.get(msz_key))
+                            if _v is not None:
+                                _nested_sz = _v
+                                break
+                        break
+                if _nested_sz is not None:
+                    break
+            if _nested_sz is not None:
+                total += _nested_sz
+                found = True
+        return total if found else None
 
     async def _recover_recent_trade_after_order_error(
         self,
@@ -1858,6 +2602,30 @@ class RiskManager:
                 0.0,
                 f"Edge {current_edge:.2f} too low for {term} (min: {min_edge_map.get(term, 0.05)})",
             )
+
+        # 1.5 SAME-SIDE CONCENTRATION CAP (2026-07-30). The lanes are CORRELATED — crypto
+        # up/down markets move as one, so an all-one-side book is a single large directional
+        # bet, not N independent ones. When a shared directional call is wrong the WHOLE book
+        # loses at once (a live session went 7/8 BUY_NO into an up-move and lost together,
+        # -$14). Existing controls cap total count (max_concurrent) and per-market
+        # (max_topic_exposure) but NOT per side — this closes that hole. Counts OPEN positions
+        # whose held token (outcome YES/NO) matches the incoming side; blocks once at the cap.
+        # Config exposure.max_same_side_positions (0 = off). exposure is hot-reloadable.
+        _exp_cfg = self.config.get("exposure", {}) or {}
+        _max_same_side = int(_exp_cfg.get("max_same_side_positions", 0) or 0)
+        if _max_same_side > 0 and action in ("BUY_YES", "BUY_NO"):
+            _want_out = "YES" if action == "BUY_YES" else "NO"
+            _same_side_n = sum(
+                1
+                for p in self.active_positions.values()
+                if str(getattr(p, "outcome", "")).upper() == _want_out
+            )
+            if _same_side_n >= _max_same_side:
+                return (
+                    False,
+                    0.0,
+                    f"max_same_side_positions: {_same_side_n} {_want_out} open >= cap {_max_same_side}",
+                )
 
         # 2. Check if we have budget left for this category
         current_exposure_dict = {t: 0.0 for t in caps_map.keys()}

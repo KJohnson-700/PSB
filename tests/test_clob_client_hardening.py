@@ -547,6 +547,9 @@ async def test_entry_hybrid_15m_maker_fills_no_taker():
     c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
     c.get_order_status = AsyncMock(return_value=OrderStatus.FILLED)
     c.cancel_order = AsyncMock(return_value=True)
+    # 2026-07-29 hardening: the hybrid decides from ACTUAL matched size, not the coarse
+    # get_order_status enum. Full match => filled as maker, no cancel, no taker.
+    c._reconcile_matched_size = AsyncMock(return_value=10.0)
     out = await c.place_entry_order(
         token_id="t", side="BUY", price=0.5, size=10, window="15m",
         dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
@@ -564,6 +567,8 @@ async def test_entry_hybrid_15m_unfilled_crosses_to_taker():
     c.place_order = AsyncMock(side_effect=[_fake_order(oid="maker1"), _fake_order(oid="taker1")])
     c.get_order_status = AsyncMock(return_value=OrderStatus.PENDING)
     c.cancel_order = AsyncMock(return_value=True)
+    # Explicit-zero matched (both reconcile reads) => safe to cross full size to taker.
+    c._reconcile_matched_size = AsyncMock(return_value=0.0)
     out = await c.place_entry_order(
         token_id="t", side="BUY", price=0.5, size=10, window="1h",
         dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
@@ -582,6 +587,8 @@ async def test_entry_hybrid_partial_keeps_partial_no_double_fill():
     c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
     c.get_order_status = AsyncMock(return_value=OrderStatus.PARTIAL)
     c.cancel_order = AsyncMock(return_value=True)
+    # Known partial matched (4 of 10) => keep the partial, never cross the remainder.
+    c._reconcile_matched_size = AsyncMock(return_value=4.0)
     out = await c.place_entry_order(
         token_id="t", side="BUY", price=0.5, size=10, window="15m",
         dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
@@ -590,3 +597,93 @@ async def test_entry_hybrid_partial_keeps_partial_no_double_fill():
     assert c.place_order.await_count == 1
     c.cancel_order.assert_awaited_once()
     assert out.order_id == "maker1"
+    assert out.status == OrderStatus.PARTIAL and out.filled_size == 4.0
+
+
+# ── place_exit_order: maker-first exit policy (2026-07-30 PAPER CALIB / maker-first) ──
+
+
+@pytest.mark.asyncio
+async def test_exit_dry_run_is_marketable_taker():
+    # Paper/dry_run always conservative taker (FAK) at the taker_price, never a maker leg.
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+    await c.place_exit_order(
+        token_id="t", side="SELL", price=0.5, size=10, window="15m",
+        dry_run=True, taker_price=0.01, maker_wait_sec=0,
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["order_type"] == "FAK" and kw["post_only"] is False
+    assert kw["price"] == 0.01  # crosses at the aggressive taker price
+    assert c.place_order.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_exit_non_hybrid_window_marketable():
+    # 5m is not a hybrid window => straight FAK taker, no maker leg.
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+    await c.place_exit_order(
+        token_id="t", side="SELL", price=0.5, size=10, window="5m",
+        dry_run=False, taker_price=0.01, maker_wait_sec=0,
+        hybrid_windows=("15m", "1h"),
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["order_type"] == "FAK" and kw["post_only"] is False
+    assert c.place_order.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_exit_hybrid_maker_fills_no_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
+    c.get_order_status = AsyncMock(return_value=OrderStatus.FILLED)
+    c.cancel_order = AsyncMock(return_value=True)
+    c._reconcile_matched_size = AsyncMock(return_value=10.0)
+    out = await c.place_exit_order(
+        token_id="t", side="SELL", price=0.5, size=10, window="15m",
+        dry_run=False, taker_price=0.01, maker_wait_sec=0,
+    )
+    # maker leg only (0 fee); never cancelled, never crossed
+    assert c.place_order.await_count == 1
+    assert c.place_order.call_args.kwargs["post_only"] is True
+    c.cancel_order.assert_not_awaited()
+    assert out.order_id == "maker1" and out.status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_exit_hybrid_zero_matched_crosses_full_to_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(side_effect=[_fake_order(oid="maker1"), _fake_order(oid="taker1")])
+    c.get_order_status = AsyncMock(return_value=OrderStatus.PENDING)
+    c.cancel_order = AsyncMock(return_value=True)
+    c._reconcile_matched_size = AsyncMock(return_value=0.0)
+    out = await c.place_exit_order(
+        token_id="t", side="SELL", price=0.5, size=10, window="1h",
+        dry_run=False, taker_price=0.01, maker_wait_sec=0,
+    )
+    assert c.place_order.await_count == 2
+    first, second = c.place_order.call_args_list
+    assert first.kwargs["post_only"] is True and first.kwargs["order_type"] == "GTC"
+    assert second.kwargs["post_only"] is False and second.kwargs["order_type"] == "FAK"
+    assert second.kwargs["price"] == 0.01 and second.kwargs["size"] == 10
+    c.cancel_order.assert_awaited_once()
+    assert out.order_id == "taker1"
+
+
+@pytest.mark.asyncio
+async def test_exit_hybrid_partial_keeps_partial_no_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
+    c.get_order_status = AsyncMock(return_value=OrderStatus.PARTIAL)
+    c.cancel_order = AsyncMock(return_value=True)
+    c._reconcile_matched_size = AsyncMock(return_value=4.0)
+    out = await c.place_exit_order(
+        token_id="t", side="SELL", price=0.5, size=10, window="15m",
+        dry_run=False, taker_price=0.01, maker_wait_sec=0,
+    )
+    # kept the partial maker fill; did NOT cross a taker (caller retries remainder next tick)
+    assert c.place_order.await_count == 1
+    c.cancel_order.assert_awaited_once()
+    assert out.order_id == "maker1"
+    assert out.status == OrderStatus.PARTIAL and out.filled_size == 4.0

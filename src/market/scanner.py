@@ -497,6 +497,10 @@ class MarketScanner:
         _ws = _tr.get("clob_ws", {}) or {}
         self._ws_drive_prices = bool(_ws.get("drive_scanner_prices", False))
         self._ws_price_max_age_sec = float(_ws.get("price_max_age_sec", 8.0) or 8.0)
+        # 2026-07-30 WS-STALENESS tertiary price fallback: tokens still unpriced after
+        # WS + CLOB /midpoint would be dropped -> fail-closed rejected (a MISSED trade).
+        # When on, recover them with a fresh top-of-book mid from GET /book. Fail-safe.
+        self._rest_book_price_fallback = bool(_ws.get("rest_book_price_fallback", True))
         # 2026-07-18 batch REST midpoints: collapse per-token GET /midpoint fan-out
         # into chunked POST /midpoints (verified endpoint) -> kills the 429 storm from
         # WS-flap REST fallback. Opt-out: trading.clob_ws.rest_batch_midpoints=false.
@@ -1033,6 +1037,62 @@ class MarketScanner:
                     len(prices), len(token_ids), len(token_ids) - len(remaining),
                     timeouts, errors, misses,
                 )
+            # WS-STALENESS tertiary fallback: tokens STILL unpriced after WS + /midpoint
+            # would be dropped -> fail-closed rejected (a MISSED trade, not a bad one).
+            # Recover them with a fresh top-of-book mid from GET /book. Bounded to the
+            # still-unpriced set, shares the price semaphore, fully fail-safe (any error
+            # leaves the token unpriced = prior behavior). Gated: clob_ws.rest_book_price_fallback.
+            if self._rest_book_price_fallback:
+                _unpriced = [t for t in remaining if t not in prices]
+                if _unpriced:
+
+                    async def _book_mid(token_id: str):
+                        async with sem:
+                            book = await self._fetch_order_book(session, token_id)
+                        if not book:
+                            return token_id, None
+                        def _px(row):
+                            # Parse a level's price ONCE, defensively — a malformed row
+                            # yields 0.0 (skipped) instead of throwing and dropping the
+                            # whole token's fallback.
+                            try:
+                                return float((row or {}).get("price", 0) or 0)
+                            except (TypeError, ValueError, AttributeError):
+                                return 0.0
+                        try:
+                            bids = book.get("bids") or []
+                            asks = book.get("asks") or []
+                            _bid_prices = [p for p in (_px(b) for b in bids) if p > 0]
+                            _ask_prices = [p for p in (_px(a) for a in asks) if p > 0]
+                            best_bid = max(_bid_prices) if _bid_prices else 0.0
+                            best_ask = min(_ask_prices) if _ask_prices else 0.0
+                        except Exception:
+                            return token_id, None
+                        if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
+                            return token_id, (best_bid + best_ask) / 2.0
+                        return token_id, None
+
+                    try:
+                        _book_results = await asyncio.gather(
+                            *[_book_mid(t) for t in _unpriced]
+                        )
+                        _bnow = asyncio.get_event_loop().time()
+                        _recovered = 0
+                        for tid, mid in _book_results:
+                            if isinstance(mid, float) and mid > 0:
+                                prices[tid] = mid
+                                self._last_price_src[tid] = ("rest_book", _bnow, 0.0)
+                                _recovered += 1
+                        if _recovered:
+                            self._ws_price_stats["rest_book_fallback"] = (
+                                self._ws_price_stats.get("rest_book_fallback", 0) + _recovered
+                            )
+                            logger.debug(
+                                "Scanner.fetch_prices: recovered %d/%d unpriced via /book fallback",
+                                _recovered, len(_unpriced),
+                            )
+                    except Exception as _be:  # never let the fallback break pricing
+                        logger.debug("book-price fallback failed (non-fatal): %s", _be)
             return prices
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")

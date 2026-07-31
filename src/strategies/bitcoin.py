@@ -48,8 +48,15 @@ from src.analysis.rejected_candidate_log import (
     build_market_context,
     build_threshold_probe_variants,
     log_rejected_candidate,
+    DEFAULT_CALIBRATION_DIR,
 )
+
+# 2026-07-29: neutral_resolver shadow writes to its OWN file (NOT rejected_candidates.jsonl)
+# so it can never pollute or double-count in the live ghost/Ghost-Lab aggregates. Settled
+# offline by joining condition_id to outcomes.
+_BTC_NR_SHADOW_LOG = DEFAULT_CALIBRATION_DIR / "btc_neutral_resolver_shadow.jsonl"
 from src.analysis.math_utils import PositionSizer
+from src.analysis.window_watch import log_window_reject
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.strategies._scan_timeout import analysis_with_timeout
 from src.analysis.btc_1h_regime import (
@@ -142,6 +149,9 @@ class BTCDirectionDecision:
     htf_side: str
     quant_side: Optional[str] = None
     momentum_side: Optional[str] = None
+    suppressed: bool = False
+    suppress_reason: str = ""
+    adm_down: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -431,6 +441,7 @@ class BitcoinStrategy:
         raw_est_prob: Optional[float] = None,
         mom: Any = None,
         current: Optional[BTCDirectionDecision] = None,
+        tf: str = "15m",
     ) -> BTCDirectionDecision:
         """Resolve BTC side in one compact path with explicit suppression rules."""
         htf_side = "LONG" if htf_bias == "BULLISH" else "SHORT" if htf_bias == "BEARISH" else allowed_side
@@ -485,6 +496,39 @@ class BitcoinStrategy:
                     conflict_type = f"{base_side.lower()}_to_{quant_side.lower()}_quant_disagree"
                     resolver_path = f"{base_path}__quant_{quant_side.lower()}"
 
+        # 2026-07-29 (live loss audit, operator GO) — DYNAMIC neutral-resolver short guard.
+        # A fast-tf short that contradicts a BULLISH slower htf (conflict=neutral_resolver)
+        # is -EV when the LIVE tape is up: it shorts straight into the up-spike (live btc
+        # -5.35 / -1.93; htf_bias=BULLISH, m5=SPIKE_UP). The existing conflict handling only
+        # added a STATIC 0.03 confidence penalty and never consulted momentum — the exact
+        # "static, ignores the tape" failure the operator flagged. Fix is DYNAMIC on two
+        # axes: (1) it reads LIVE momentum_side, and (2) it self-tunes off the lane's
+        # REALIZED down admission delta (same lane_tape_adapter the RSI floor uses) — if btc
+        # down-shorts are actually winning, the delta rises past the escape and we STOP
+        # suppressing. Sit out (skip), never force an un-validated long. Config-gated on.
+        _suppressed = False
+        _suppress_reason = ""
+        _adm_down = None
+        if conflict_type == "neutral_resolver" and final_side == "SHORT" and htf_side == "LONG":
+            try:
+                _adm_down = float(get_tape_admission_delta("bitcoin", tf, "down") or 0.0)
+            except Exception:
+                _adm_down = 0.0
+            if (
+                momentum_side == "LONG"
+                and bool(self.config.get("btc_neutral_resolver_short_guard_enabled", True))
+            ):
+                # adapter delta > escape ⇒ realized shorts winning ⇒ admit; else suppress the
+                # short-into-up-spike. Default escape 0.02: with no adapter data (delta 0.0) we
+                # suppress (safe), and loosen only once the tape earns it.
+                _escape = float(self.config.get("btc_neutral_resolver_guard_tape_escape", 0.02) or 0.02)
+                if _adm_down < _escape:
+                    _suppressed = True
+                    _suppress_reason = "btc_short_against_bull_upspike"
+                    reason_parts.append(
+                        f"neutral_resolver_short_suppressed(mom=LONG,htf=BULLISH,adm_down={_adm_down:.3f})"
+                    )
+
         action, direction, effective_side = self._btc_action_for_side(final_side)
         return BTCDirectionDecision(
             action=action,
@@ -496,7 +540,54 @@ class BitcoinStrategy:
             htf_side=htf_side,
             quant_side=quant_side,
             momentum_side=momentum_side,
+            suppressed=_suppressed,
+            suppress_reason=_suppress_reason,
+            adm_down=_adm_down,
         )
+
+    def _log_neutral_resolver_shadow(self, decision: Any, market: Any, yes_price: float, tf: str) -> None:
+        """LOG-ONLY shadow (2026-07-29 operator GO): record every btc neutral_resolver
+        decision — the entry-tf side fighting the 4H 'THE LAW' bias — as a settled ghost,
+        so we can measure whether counter-4H-law fast trades are actually +EV, bucketed by
+        tf / side / momentum / suppressed. Reuses the existing ghost settle+rotate pipeline
+        (log_rejected_candidate, reason=btc_neutral_resolver_shadow) so no new settler.
+        NEVER raises and NEVER affects a trade. Gated btc_neutral_resolver_shadow_enabled
+        (default on). Analyze via data/calibration/rejected_candidates_settled.jsonl filtered
+        to reason=btc_neutral_resolver_shadow.
+        """
+        try:
+            if not bool(self.config.get("btc_neutral_resolver_shadow_enabled", True)):
+                return
+            if getattr(decision, "conflict_type", None) != "neutral_resolver":
+                return
+            log_rejected_candidate(
+                strategy="bitcoin",
+                window=str(tf),
+                side=str(getattr(decision, "effective_side", "") or ""),
+                action=str(getattr(decision, "action", "") or ""),
+                reason="btc_neutral_resolver_shadow",
+                market=market,
+                yes_price=float(yes_price),
+                est_prob_up=None,
+                side_source=getattr(decision, "side_source", None),
+                resolver_path=getattr(decision, "resolver_path", None),
+                log_path=_BTC_NR_SHADOW_LOG,
+                context={
+                    "shadow": "btc_neutral_resolver",
+                    "htf_law_side": getattr(decision, "htf_side", None),
+                    "entry_tf_side": getattr(decision, "effective_side", None),
+                    "momentum_side": getattr(decision, "momentum_side", None),
+                    "adm_down": getattr(decision, "adm_down", None),
+                    "suppressed": bool(getattr(decision, "suppressed", False)),
+                    "suppress_reason": getattr(decision, "suppress_reason", "") or "",
+                    # resolver_path distinguishes the resolution stage; dedupe analysis by
+                    # (market_id, window) so a market logged at >1 resolver stage counts once.
+                    "resolver_path": getattr(decision, "resolver_path", None),
+                    "tf": str(tf),
+                },
+            )
+        except Exception as _e:  # never break the scan on a shadow-log failure
+            logger.debug("neutral_resolver shadow log skipped: %r", _e)
 
     def _btc_window_delta_flip(
         self, ta: Any, tf: str, mins_left: float, action: str
@@ -1734,6 +1825,11 @@ class BitcoinStrategy:
 
         # ── Fetch full technical analysis ONCE per cycle ──
         # Off-loop with a hard timeout so a slow data fetch can't wedge the cycle.
+        # 2026-07-31: reuse-shared_btc_ta for BTC's own scan was REVERTED (Codex NO-GO) —
+        # get_full_analysis is time-sensitive (calc_candle_momentum reads datetime.utcnow for
+        # candle-age / prediction-window flags), so a moments-old shared value could diverge
+        # from a fresh compute at window boundaries. `ta` is BTC's DECISION input, so it must
+        # be computed fresh here, not reused. (Alts reuse it because there btc_ta is diagnostic.)
         _scan_to = float(self.config.get("scan_analysis_timeout_sec", 15.0) or 15.0)
         ta = await analysis_with_timeout(
             self.btc_service.get_full_analysis, lane="bitcoin", timeout_sec=_scan_to
@@ -2023,7 +2119,17 @@ class BitcoinStrategy:
                     macd_4h=macd_4h,
                     reason_parts=reason_parts,
                     mom=mom,
+                    tf=_updown_tf,
                 )
+                if direction_decision.conflict_type == "neutral_resolver":
+                    self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
+                if direction_decision.suppressed:
+                    _bump_skip(direction_decision.suppress_reason)
+                    logger.info(
+                        "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
+                        market.question[:40], direction_decision.suppress_reason,
+                    )
+                    continue
                 action = direction_decision.action
                 direction = direction_decision.direction
                 effective_side = direction_decision.effective_side
@@ -2319,7 +2425,17 @@ class BitcoinStrategy:
                         raw_est_prob=raw_est_prob,
                         mom=mom,
                         current=direction_decision,
+                        tf=_updown_tf,
                     )
+                    if direction_decision.conflict_type == "neutral_resolver":
+                        self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
+                    if direction_decision.suppressed:
+                        _bump_skip(direction_decision.suppress_reason)
+                        logger.info(
+                            "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
+                            market.question[:40], direction_decision.suppress_reason,
+                        )
+                        continue
                     action = direction_decision.action
                     direction = direction_decision.direction
                     effective_side = direction_decision.effective_side
@@ -2841,7 +2957,17 @@ class BitcoinStrategy:
                         raw_est_prob=raw_est_prob,
                         mom=mom,
                         current=direction_decision,
+                        tf=_updown_tf,
                     )
+                    if direction_decision.conflict_type == "neutral_resolver":
+                        self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
+                    if direction_decision.suppressed:
+                        _bump_skip(direction_decision.suppress_reason)
+                        logger.info(
+                            "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
+                            market.question[:40], direction_decision.suppress_reason,
+                        )
+                        continue
                     action = direction_decision.action
                     direction = direction_decision.direction
                     effective_side = direction_decision.effective_side
@@ -3299,6 +3425,18 @@ class BitcoinStrategy:
                 continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
+                log_window_reject(
+                    self.full_config, market=market,
+                    strategy=getattr(self, "_signal_strategy_name", "bitcoin"),
+                    window=_updown_tf, side=lane_side, action=action,
+                    side_source=locals().get("side_source"),
+                    eval_mins_left=_eval_left,
+                    entry_window_min=lane_policy.entry_window_min,
+                    entry_window_max=lane_policy.entry_window_max,
+                    yes_price=locals().get("yes_price"),
+                    est_prob=locals().get("estimated_prob"),
+                    edge=locals().get("edge"),
+                )
                 logger.debug(
                     "  BTC skip '%s' — %.1fm left (eval %.2f), lane=%s needs %.2f–%.2fm",
                     market.question[:40],

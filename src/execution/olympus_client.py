@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -194,29 +195,89 @@ class OlympusClient:
             whitelisted[key] = cls.redact_diagnostic_text(value)
         return json.dumps(whitelisted or {"error": "redacted"}, sort_keys=True)
 
+    @staticmethod
+    def _parse_retry_after(value: Any, *, default: float = 2.0, cap: float = 30.0) -> float:
+        """Parse an HTTP Retry-After header (delta-seconds OR HTTP-date) into a bounded
+        sleep in seconds. Falls back to `default` on anything unparseable; never exceeds
+        `cap` (so a hostile/huge header can't stall the bot)."""
+        if value is None or str(value).strip() == "":
+            return default
+        text = str(value).strip()
+        try:
+            return max(0.0, min(float(text), cap))  # delta-seconds form
+        except (TypeError, ValueError):
+            pass
+        try:
+            from email.utils import parsedate_to_datetime
+            import datetime as _dt
+
+            dt = parsedate_to_datetime(text)
+            if dt is not None:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=_dt.timezone.utc)
+                delta = (dt - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+                return max(0.0, min(delta, cap))
+        except Exception:
+            pass
+        return default
+
     def _request_json(
         self,
         method: str,
         path: str,
         payload: Optional[dict[str, Any]] = None,
+        *,
+        _max_429_retries: int = 3,
     ) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         parsed = urllib.parse.urlparse(self.base_url)
         if parsed.scheme != "https":
             raise RuntimeError("Olympus base_url must use https.")
-        request = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=body,
-            headers=self._headers(),
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:  # nosec B310
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            error_body = self.safe_error_body(exc.read().decode("utf-8", "replace"))
-            raise RuntimeError(f"Olympus HTTP {exc.code}: {error_body}") from exc
-        return json.loads(raw)
+        # Sync method (runs inside run_in_executor). Olympus rate limits:
+        # GET /v1/portfolio 30/min, GET /v1/trades/:id 100/min, POST /v1/trade 60/min.
+        # On 429 we respect Retry-After and back off a BOUNDED number of times rather
+        # than surfacing a hard error on a transient throttle. Only IDEMPOTENT GETs are
+        # retried; POST /v1/trade is NOT auto-retried (no idempotency key) to avoid a
+        # possible double-submit — its 429 raises and the entry re-evaluates next cycle.
+        attempt = 0
+        while True:
+            request = urllib.request.Request(
+                f"{self.base_url}{path}",
+                data=body,
+                headers=self._headers(),
+                method=method,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:  # nosec B310
+                    raw = response.read().decode("utf-8")
+                return json.loads(raw)
+            except urllib.error.HTTPError as exc:
+                # Only auto-retry 429 for IDEMPOTENT GETs (portfolio, trade-status).
+                # POST /v1/trade is NOT idempotent and Olympus does not document that a
+                # 429 is guaranteed rejected-before-side-effect, so re-submitting could
+                # double-place. Let POST 429 raise -> the entry fails this tick cleanly
+                # and the signal re-evaluates next cycle (safer than a possible double fill).
+                if (
+                    exc.code == 429
+                    and attempt < _max_429_retries
+                    and str(method).upper() == "GET"
+                ):
+                    retry_after = self._parse_retry_after(
+                        exc.headers.get("Retry-After") if exc.headers else None
+                    )
+                    attempt += 1
+                    logger.warning(
+                        "Olympus 429 rate-limited on %s %s; backing off %.1fs (retry %d/%d)",
+                        method,
+                        path,
+                        retry_after,
+                        attempt,
+                        _max_429_retries,
+                    )
+                    time.sleep(retry_after)
+                    continue
+                error_body = self.safe_error_body(exc.read().decode("utf-8", "replace"))
+                raise RuntimeError(f"Olympus HTTP {exc.code}: {error_body}") from exc
 
     async def get_portfolio(self) -> dict[str, Any]:
         loop = asyncio.get_event_loop()
@@ -318,12 +379,32 @@ class OlympusClient:
             )
         # Smoke-band sizing: shrink only the LIVE BUY notional into the configured
         # band (paper sizing upstream is untouched). No-op when scaling/smoke off.
-        if str(payload.get("side") or "").upper() == "BUY":
+        _side = str(payload.get("side") or "").upper()
+        _requested_amount_usd: Optional[float] = None
+        if _side == "BUY":
             raw_notional = float(payload.get("amountUsd") or 0.0)
+            _requested_amount_usd = raw_notional  # true (pre-smoke-scale) requested notional
             scaled = self._smoke_scaled_buy_notional(raw_notional)
             if scaled != raw_notional:
                 payload["amountUsd"] = round(scaled, 6)
         self._enforce_smoke_limits(payload)
+        # P1 preflight telemetry: log the EXACT order fields sent to Olympus so every
+        # live submit is auditable, and record BOTH the true requested notional and the
+        # SUBMITTED (smoke-scaled) notional so smoke scaling can't hide true Kelly sizing.
+        # tokenId/conditionId are public Polymarket market ids (not secrets) — logged plainly.
+        logger.info(
+            "OLYMPUS_PREFLIGHT side=%s tokenId=%s conditionId=%s slug=%s outcome=%s "
+            "maxPrice=%s minPrice=%s requested_amountUsd=%s submitted_amountUsd=%s",
+            _side,
+            payload.get("tokenId"),
+            payload.get("conditionId"),
+            payload.get("marketSlug"),
+            payload.get("outcomeLabel"),
+            payload.get("maxPrice"),
+            payload.get("minPrice"),
+            _requested_amount_usd,
+            payload.get("amountUsd"),
+        )
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(
             None, lambda: self._request_json("POST", "/v1/trade", payload)

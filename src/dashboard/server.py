@@ -2354,7 +2354,15 @@ def _get_status_payload_sync(_force: bool = False):
         realized_pnl = float(_js.get("realized_pnl", 0) or 0)
         total_pnl = float(_js.get("total_pnl", 0) or 0)
         unrealized_pnl = total_pnl - realized_pnl
-        bankroll = round(float(bankroll_cash) + unrealized_pnl, 2)
+        # In LIVE, bankroll_cash is already venue equity (open marks included, set by
+        # refresh_live_wallet_bankroll → bankroll_source="live_wallet"), so re-adding
+        # unrealized double-counts (2026-07-29 fix). In paper it's cash → equity = cash +
+        # unrealized.
+        _bankroll_is_equity = getattr(bot, "bankroll_source", None) == "live_wallet"
+        bankroll = round(
+            float(bankroll_cash) if _bankroll_is_equity else float(bankroll_cash) + unrealized_pnl,
+            2,
+        )
         portfolio = (
             bot.risk_manager.get_portfolio_summary(bankroll_cash) if bankroll_cash else None
         )
@@ -3934,6 +3942,31 @@ async def shutdown_live_bot(request: Request):
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_active = kill_switch_file.exists()
 
+    # 2026-07-29 SHUTDOWN GUARD (fail-closed): a bare/unconfirmed POST to this endpoint
+    # SIGINT'd a running --live session (the operator did not click Stop; the dashboard is
+    # tunnel-exposed, so any stray/errant/reopened-tab request reaches it). Require an
+    # explicit confirm=STOP token (JSON body or query param) to send ANY shutdown signal.
+    # Fail-closed for EVERY target (no live/paper detection to get wrong): without the
+    # token, refuse and send NO signal. The dashboard button sends the token after a
+    # type-to-confirm; no other legitimate caller of this endpoint exists.
+    _confirm = ""
+    try:
+        _body = await request.json()
+        _confirm = str((_body or {}).get("confirm") or "")
+    except Exception:
+        _confirm = ""
+    if not _confirm:
+        _confirm = str(request.query_params.get("confirm") or "")
+    if _confirm.strip().upper() != "STOP":
+        logger.warning(
+            "SHUTDOWN GUARD: refused /api/live/shutdown without confirm=STOP (no signal sent)"
+        )
+        return {
+            "status": "confirmation_required",
+            "detail": "Shutdown requires confirm=STOP; no signal sent.",
+            "kill_switch_active": kill_switch_active,
+        }
+
     if _bot_process is not None and _bot_process.poll() is None:
         _bot_process.send_signal(signal.SIGINT)
         return {
@@ -5007,12 +5040,21 @@ def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = No
                     upnl = float(o.get("unrealized_pnl") or 0)
                 except (TypeError, ValueError):
                     continue
-                # 2026-07-18 REALIZED-ONLY: v = paper start (500) + realized_pnl only.
-                # Excludes unrealized so open-position mark-to-market noise no longer
-                # zig-zags the trace; the curve is a clean staircase that steps only when
-                # a trade actually banks. (upnl still parsed above but intentionally unused.)
-                # v = realized-only (solid staircase); v2 = total incl unrealized (faint ghost)
-                points.append({"t": epoch_ms, "v": round(base, 4), "v2": round(base + upnl, 4)})  # 2026-07-20 v=bankroll (clean realized equity); realized_pnl field is total-unrealized -> zigzag
+                # v = REALIZED equity (clean staircase, steps only when a trade banks);
+                # v2 = total equity incl unrealized (faint ghost).
+                # 2026-07-29: use the ops row's `equity` field (correct in BOTH live+paper)
+                # and subtract unrealized to get realized equity. Fixes the live zigzag: in
+                # live bankroll=full equity, so the old v=base moved on open marks. Legacy
+                # rows (no `equity` field) keep the old paper behavior (base=realized equity).
+                _eq_field = o.get("equity")
+                if _eq_field is not None:
+                    try:
+                        _eq = float(_eq_field)
+                        points.append({"t": epoch_ms, "v": round(_eq - upnl, 4), "v2": round(_eq, 4)})
+                    except (TypeError, ValueError):
+                        points.append({"t": epoch_ms, "v": round(base, 4), "v2": round(base + upnl, 4)})
+                else:
+                    points.append({"t": epoch_ms, "v": round(base, 4), "v2": round(base + upnl, 4)})
     except OSError:
         return {"points": [], "session_id": getattr(j, "session_id", None) if j else None}
     if len(points) > limit:

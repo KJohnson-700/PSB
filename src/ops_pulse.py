@@ -18,6 +18,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.analysis import window_watch as _window_watch
+
+
+def _window_watch_ops_stats(bot: Any) -> Dict[str, Any]:
+    """PHASE 5: near-window registry stats for OPS_JSON (fail-safe — never breaks pulse)."""
+    try:
+        return _window_watch.registry_stats(getattr(bot, "config", {}) or {})
+    except Exception:  # noqa: BLE001
+        return {}
+
 from src.ai_status import compute_ai_status
 
 OPS_PREFIX = "OPS_JSON"
@@ -489,7 +499,12 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
     _accounting_error = None
     try:
         _unreal = float(summary["unrealized_pnl"] or 0)
-        _equity = round(_cash_bankroll + _unreal, 4)
+        # In LIVE, bot.bankroll is refreshed to venue EQUITY (cash + open positions, set by
+        # refresh_live_wallet_bankroll → bankroll_source="live_wallet"), so unrealized is
+        # ALREADY inside it — adding it again double-counts (2026-07-29 fix). In paper,
+        # bankroll is sizing CASH, so equity = cash + unrealized.
+        _bankroll_is_equity = getattr(bot, "bankroll_source", None) == "live_wallet"
+        _equity = round(_cash_bankroll if _bankroll_is_equity else _cash_bankroll + _unreal, 4)
     except (KeyError, TypeError, ValueError):
         _accounting_error = "invalid_unrealized_pnl"
     return {
@@ -546,6 +561,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
             "note": "Journal/log lines may use mixed TZ — compare using ops_ts or convert explicitly",
         },
         "regime": _regime_hint(trading, btc_spot_f),
+        "window_watch": _window_watch_ops_stats(bot),
         "scan_interval_sec": getattr(bot, "scan_interval", None),
         "dashboard_url": public_dashboard_url(),
     }

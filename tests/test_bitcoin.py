@@ -230,6 +230,35 @@ def test_bitcoin_direction_resolver_suppresses_quant_flip_without_momentum():
     assert any("quant_flip_suppressed=no_down_momentum" in part for part in reason_parts)
 
 
+def test_bitcoin_neutral_resolver_suppresses_bullish_htf_short_into_up_momentum():
+    cfg = _make_config()
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    macd_4h = MagicMock(histogram_rising=True)
+    mom = MagicMock(m15_direction="NONE", m5_direction="SPIKE_UP")
+    reason_parts = []
+
+    with patch("src.strategies.bitcoin.get_tape_admission_delta", return_value=0.0):
+        decision = strat._resolve_btc_direction(
+            htf_bias="BULLISH",
+            allowed_side="SHORT",
+            macd_4h=macd_4h,
+            reason_parts=reason_parts,
+            raw_est_prob=0.507,
+            mom=mom,
+            tf="15m",
+        )
+
+    assert decision.action == "BUY_NO"
+    assert decision.effective_side == "SHORT"
+    assert decision.conflict_type == "neutral_resolver"
+    assert decision.htf_side == "LONG"
+    assert decision.momentum_side == "LONG"
+    assert decision.suppressed is True
+    assert decision.suppress_reason == "btc_short_against_bull_upspike"
+    assert decision.adm_down == 0.0
+    assert any("neutral_resolver_short_suppressed" in part for part in reason_parts)
+
+
 def test_bitcoin_direction_guard_blocks_quant_flip_buy_no_by_default():
     cfg = _make_config()
     strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())

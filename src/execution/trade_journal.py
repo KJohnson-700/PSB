@@ -75,6 +75,25 @@ def infer_entry_leg(pos: Dict[str, Any]) -> str:
     return "YES"
 
 
+def _is_yes_token_flip(leg: str, entry_price: float, exit_price: float) -> bool:
+    """True when a YES-leg exit looks like a token-ordering bug (exit ≈ 1 - entry).
+
+    NEAR-EVEN EXEMPTION (2026-07-29): entries in [0.42, 0.58] are exempt. There a legit
+    small-move exit (e.g. 0.50→0.49) also sums to ~1.0, so the flip signature is a false
+    positive AND a real flip is ~$0 / undetectable by price alone. Only skewed entries
+    carry a distinguishable, material flip signature. Explicit < / > bounds (not
+    abs(ep-0.5)>0.08) to avoid float-boundary asymmetry at 0.42/0.58 (Codex 2026-07-29).
+    Centralized so log_exit / is_phantom_exit_row / _build_closed_stats stay in lock-step.
+    51 false blocks on 2026-07-29 (all ep 0.50–0.54, -$10.13 hidden) drove this.
+    """
+    return (
+        leg == "YES"
+        and entry_price > 0
+        and (entry_price < 0.42 or entry_price > 0.58)
+        and abs(entry_price + exit_price - 1.0) < 0.02
+    )
+
+
 def is_phantom_exit_row(row: Dict[str, Any], max_plausible_pnl: float = 200.0) -> bool:
     """Detect legacy phantom exits without dropping valid long-NO closes."""
     try:
@@ -90,11 +109,7 @@ def is_phantom_exit_row(row: Dict[str, Any], max_plausible_pnl: float = 200.0) -
         leg_row["entry_leg"] = extra["entry_leg"]
     leg = infer_entry_leg(leg_row)
 
-    is_token_flip = (
-        leg == "YES"
-        and entry_price > 0
-        and abs(entry_price + current_price - 1.0) < 0.02
-    )
+    is_token_flip = _is_yes_token_flip(leg, entry_price, current_price)
     return is_token_flip or abs(pnl) > max_plausible_pnl
 
 
@@ -103,7 +118,7 @@ class JournalEntry:
     """Single trade journal entry — immutable once written."""
 
     timestamp: str
-    event: str  # ENTRY, PRICE_UPDATE, EXIT, SNAPSHOT, SKIP, ERROR
+    event: str  # ENTRY, PRICE_UPDATE, EXIT, SNAPSHOT, SKIP, ERROR, RECONCILE_DROP
     trade_id: str
     market_id: str
     market_question: str
@@ -134,6 +149,11 @@ class PortfolioSnapshot:
     realized_pnl: float
     unrealized_pnl: float
     strategies: Dict[str, Dict[str, Any]]  # per-strategy breakdown
+    # True total account equity, computed unambiguously at write time (2026-07-29). The
+    # `bankroll` field is CASH in paper but venue EQUITY in live, so the equity-history
+    # trace can't tell them apart from `bankroll` alone; `equity` removes the ambiguity.
+    # Default 0.0 keeps old rows deserializable (they fall back to legacy trace handling).
+    equity: float = 0.0
 
 
 class TradeJournal:
@@ -271,6 +291,11 @@ class TradeJournal:
         self.closed_trades: List[Dict[str, Any]] = []
         self.total_entries = 0
         self.total_exits = 0
+        # Venue-absent positions dropped without PnL booking. Kept VISIBLE in the summary
+        # (2026-07-29) so drops stop silently vanishing from total_entries/win_rate — a
+        # reconcile-drop is an integrity signal (position gone from venue), not a no-op.
+        self.reconcile_drops = 0
+        self.reconcile_drop_strats: Dict[str, int] = {}
         self.realized_pnl = 0.0
         self._last_snapshot_time = 0.0
         self._last_summary_save_time = 0.0
@@ -465,6 +490,7 @@ class TradeJournal:
         bankroll: float,
         reason: str = "manual",
         exit_telemetry: Optional[dict] = None,
+        realized_pnl: Optional[float] = None,
     ):
         """Log a trade exit with realized PnL.
 
@@ -477,37 +503,45 @@ class TradeJournal:
             logger.warning(f"Cannot exit unknown trade: {trade_id}")
             return
 
+        # GROSS price-delta PnL — used only for the phantom guards below (token-flip /
+        # oversized price-bug detection), NOT necessarily what gets booked (see truth fix).
         if pos["side"] == "BUY":
-            pnl = (exit_price - pos["entry_price"]) * pos["size"]
+            gross_pnl = (exit_price - pos["entry_price"]) * pos["size"]
         else:
-            pnl = (pos["entry_price"] - exit_price) * pos["size"]
+            gross_pnl = (pos["entry_price"] - exit_price) * pos["size"]
 
         # Phantom exit guard: token-ordering bug (YES exit price logged against YES entry)
         # produces exit_price ≈ 1 - entry_price. Only apply in YES-quote coordinates;
-        # long-NO legs often have entry_no + exit_no ≈ 1 legitimately.
+        # long-NO legs often have entry_no + exit_no ≈ 1 legitimately. Near-even entries
+        # are exempt — see _is_yes_token_flip (shared with the summary/display paths so a
+        # real near-even exit is never written here yet hidden by stats). Runs on GROSS
+        # price delta on purpose — it detects price bugs, not fee/fill drift.
         _ep = pos["entry_price"]
         leg = infer_entry_leg(pos)
-        _is_token_flip = (
-            leg == "YES"
-            and _ep > 0
-            and abs(_ep + exit_price - 1.0) < 0.02
-        )
-        _is_oversized = abs(pnl) > 200.0
+        _is_token_flip = _is_yes_token_flip(leg, _ep, exit_price)
+        _is_oversized = abs(gross_pnl) > 200.0
         if _is_token_flip or _is_oversized:
             logger.warning(
-                f"PHANTOM EXIT blocked: {pos['strategy']} ep={_ep:.4f} exit={exit_price:.4f} pnl={pnl:+.2f} | {pos['market_question'][:50]}"
+                f"PHANTOM EXIT blocked: {pos['strategy']} ep={_ep:.4f} exit={exit_price:.4f} pnl={gross_pnl:+.2f} | {pos['market_question'][:50]}"
             )
             return
 
-        # Net out the taker fee so the journal's realized PnL matches the cash that
-        # actually hit the bankroll. main.py already debits the round-trip fee from
-        # bankroll (via ExitDecision.unrealized_pnl) and passes it here as
-        # fill_fee_usdc; recomputing pnl from prices alone is GROSS and overstates
-        # edge by the fee. Phantom guards above run on the gross price delta on
-        # purpose (they detect token-flip/oversized price bugs, not fee drift).
-        _fill_fee = (exit_telemetry or {}).get("fill_fee_usdc")
-        if isinstance(_fill_fee, (int, float)) and _fill_fee > 0:
-            pnl -= float(_fill_fee)
+        # 2026-07-30 PnL TRUTH FIX (Codex debug sweep): book the SAME realized cash delta
+        # that main.py already applied to bankroll / exposure / kelly (ExitDecision.
+        # unrealized_pnl, passed as realized_pnl) instead of a mark-based price recompute.
+        # Root cause of the journal-vs-bankroll gap: log_exit recomputed pnl from the MARK
+        # exit_price + ENTRY size, ignoring the actual fill economics the ledger used
+        # (live: journal -3.65 vs bankroll credit -2.43; session -7.63 vs -14.11). The
+        # realized value already nets fees, so this path does NOT re-subtract fill_fee.
+        if realized_pnl is not None:
+            pnl = float(realized_pnl)
+        else:
+            # Paper / no realized economics available: fall back to the gross price
+            # recompute, net of the taker fee (prior behaviour, byte-identical).
+            pnl = gross_pnl
+            _fill_fee = (exit_telemetry or {}).get("fill_fee_usdc")
+            if isinstance(_fill_fee, (int, float)) and _fill_fee > 0:
+                pnl -= float(_fill_fee)
 
         # Build exit extra: carry entry signal context + append outcome analysis
         # so every closed trade (win or loss) has full context for pattern learning.
@@ -565,6 +599,14 @@ class TradeJournal:
             for _k, _v in exit_telemetry.items():
                 if _v is not None:
                     pos[_k] = _v
+        # PAPER CALIB Phase 2.5: lift the ENTRY executability proof onto the closed trade
+        # so the lane-fillability analyzer is single-source (trades.jsonl) — no fragile
+        # entries.jsonl join. None on live / non-fresh-fill entries.
+        _entry_sig = pos.get("entry_signal")
+        if isinstance(_entry_sig, dict):
+            _efq = _entry_sig.get("paper_fill_quality")
+            if isinstance(_efq, dict):
+                pos["entry_paper_fill_quality"] = _efq
         self.closed_trades.append(pos)
         del self.open_positions[trade_id]
         self.total_entries = len(self.open_positions) + len(self.closed_trades)
@@ -576,6 +618,67 @@ class TradeJournal:
         logger.info(
             f"JOURNAL EXIT: {pos['strategy']}/{pos['action']} PnL=${pnl:+.2f} | reason={reason} | {pos['market_question'][:50]}"
         )
+
+    def log_reconcile_drop(
+        self,
+        trade_id: str,
+        bankroll: float,
+        reason: str = "venue_absent_reconcile_drop",
+        extra: Optional[dict] = None,
+    ) -> bool:
+        """Drop a venue-absent open position without booking realized PnL."""
+        pos = self.open_positions.get(trade_id)
+        if not pos:
+            logger.warning(f"Cannot reconcile-drop unknown trade: {trade_id}")
+            return False
+
+        entry_signal = pos.get("entry_signal", {})
+        drop_extra = {
+            **entry_signal,
+            "reconcile_action": "drop_open_position_without_exit",
+            "entry_edge": pos.get("edge"),
+            "entry_confidence": pos.get("confidence"),
+        }
+        if extra:
+            drop_extra.update(extra)
+
+        entry = JournalEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            event="RECONCILE_DROP",
+            trade_id=trade_id,
+            market_id=pos["market_id"],
+            market_question=pos["market_question"],
+            strategy=pos["strategy"],
+            action=pos["action"],
+            side=pos["side"],
+            outcome=pos["outcome"],
+            size=pos["size"],
+            entry_price=pos["entry_price"],
+            current_price=pos.get("current_price", pos["entry_price"]),
+            pnl=0.0,
+            bankroll=bankroll,
+            edge=pos.get("edge") or 0.0,
+            confidence=pos.get("confidence") or 0.0,
+            reason=reason,
+            extra=drop_extra,
+        )
+        self._append_entry(entry)
+        del self.open_positions[trade_id]
+        self.reconcile_drops += 1
+        _rd_strat = pos.get("strategy") or "?"
+        self.reconcile_drop_strats[_rd_strat] = self.reconcile_drop_strats.get(_rd_strat, 0) + 1
+        self.total_entries = len(self.open_positions) + len(self.closed_trades)
+        self._summary_cache = None
+        self._save_positions()
+        self._save_summary()
+        logger.info(
+            "JOURNAL RECONCILE_DROP: %s/%s removed without PnL booking | reason=%s | %s",
+            pos["strategy"],
+            pos["action"],
+            reason,
+            pos["market_question"][:50],
+        )
+        return True
 
     def log_skip(
         self,
@@ -697,6 +800,12 @@ class TradeJournal:
                 "pnl", 0
             )
 
+        # Equity = true account value, disambiguating the paper/live `bankroll` meaning.
+        # In live, _live_pnl_override is set (bankroll is already venue equity), so equity
+        # = bankroll. In paper, bankroll is cash, so equity = cash + unrealized. Same
+        # invariant the summary/ops/server split uses (bankroll_source=="live_wallet").
+        _is_live_equity = getattr(self, "_live_pnl_override", None) is not None
+        _equity = round(float(bankroll) if _is_live_equity else float(bankroll) + unrealized, 4)
         snap = PortfolioSnapshot(
             timestamp=datetime.now().isoformat(),
             bankroll=bankroll,
@@ -706,6 +815,7 @@ class TradeJournal:
             realized_pnl=round(self.realized_pnl, 4),
             unrealized_pnl=round(unrealized, 4),
             strategies=strats,
+            equity=_equity,
         )
         self._append_snapshot(snap)
 
@@ -788,11 +898,7 @@ class TradeJournal:
                 xv = 0.0
             pnl = float(ct.get("pnl") or 0)
             leg = infer_entry_leg(ct)
-            is_yes_flip = (
-                leg == "YES"
-                and ep > 0
-                and abs(ep + xv - 1.0) < 0.02
-            )
+            is_yes_flip = _is_yes_token_flip(leg, ep, xv)
             oversized = abs(pnl) > 200.0
             if not is_yes_flip and not oversized:
                 real_trades.append(ct)
@@ -878,6 +984,8 @@ class TradeJournal:
             "win_rate": round(wins / (wins + losses), 3) if (wins + losses) > 0 else 0,
             "wins": wins,
             "losses": losses,
+            "reconcile_drops": self.reconcile_drops,
+            "reconcile_drop_strats": dict(self.reconcile_drop_strats),
             "strategy_stats": closed["strategy_stats"],
         }
         # Live runs: the journal only sees trades IT recorded — it misses manual
@@ -889,9 +997,33 @@ class TradeJournal:
         if ov is not None:
             try:
                 ov = round(float(ov), 2)
-                out["realized_pnl"] = ov
-                out["unrealized_pnl"] = 0.0
+                # ov = venue equity − run-start anchor = TOTAL P&L (source of truth).
+                # 2026-07-29 FIX: previously this set realized_pnl=ov and unrealized_pnl=0.0,
+                # folding open-position mark-to-market INTO realized — so the headline
+                # realized number swung every tick an open position moved (operator's
+                # long-standing Command Center complaint: e.g. +7.13→+4.76 with NO trade
+                # closed, purely the open BTC marking down). Split it: total stays equity-
+                # truth, open marks go under unrealized, realized = equity delta − open
+                # marks so realized only changes when a trade actually CLOSES.
+                # unreal_rounded is the journal's live open-position pnl (positions carry a
+                # maintained mark), consistent basis with ov's open-position component.
                 out["total_pnl"] = ov
+                out["unrealized_pnl"] = unreal_rounded
+                out["realized_pnl"] = round(ov - unreal_rounded, 2)
+                # 2026-07-29 accounting reconciliation (Codex live readout: headline,
+                # strategy, and wallet PnL used different sources of truth and diverged
+                # silently — e.g. summary +0.61 vs strategy_stats -3.13 vs wallet -4.10).
+                # Surface BOTH sources + the gap so the divergence is VISIBLE, not hidden:
+                #   equity_realized  = wallet truth (ov − open marks) — the authoritative #.
+                #   journal_realized = sum of per-strategy journal exits (= strategy_stats).
+                #   accounting_gap   = equity_realized − journal_realized = unattributed
+                #                      execution cost (broker fee, slippage, manual/on-chain
+                #                      settle) the per-lane journal can't see. strategy_stats
+                #                      stays journal-truth (best per-lane attribution); the
+                #                      gap is reported alongside rather than smeared into it.
+                out["equity_realized"] = out["realized_pnl"]
+                out["journal_realized"] = round(realized_raw, 2)
+                out["accounting_gap"] = round(out["realized_pnl"] - realized_raw, 2)
             except (TypeError, ValueError):
                 pass
         src = (
@@ -1265,6 +1397,9 @@ class TradeJournal:
             rpnl = 0.0
             closed = []
             _exited_ids: set[str] = set()
+            _recon_drops = 0
+            _recon_strats: Dict[str, int] = {}
+            _recon_ids: set[str] = set()
             # Phantom exits from the pre-fix token-ordering bug produced PnL of
             # -$26 to -$466 per record on $3-$5 positions.  Cap at $200 to exclude
             # them from the summary so the dashboard shows accurate numbers even
@@ -1322,18 +1457,30 @@ class TradeJournal:
                                 "extra": e.get("extra", {}),  # preserve signal features for coach
                             }
                         )
+                    elif e.get("event") == "RECONCILE_DROP":
+                        _recon_drops += 1
+                        _rs = e.get("strategy") or "?"
+                        _recon_strats[_rs] = _recon_strats.get(_rs, 0) + 1
+                        _rid = e.get("trade_id")
+                        if _rid:
+                            _recon_ids.add(_rid)
             self.total_exits = exits_count
             self.realized_pnl = rpnl
             self.closed_trades = closed
+            self.reconcile_drops = _recon_drops
+            self.reconcile_drop_strats = _recon_strats
 
             # Cross-reference: remove any positions.json entries that already have
-            # an EXIT event in entries.jsonl.  This prevents re-settlement after a
-            # crash that left positions.json stale.
+            # an EXIT or RECONCILE_DROP event in entries.jsonl.  This prevents
+            # re-settlement / re-drop after a crash that left positions.json stale.
+            # (RECONCILE_DROP ids included 2026-07-29: a crash between _append_entry and
+            # _save_positions would otherwise resurrect the position and drop it again =
+            # double-count of reconcile_drops — Codex must-fix.)
             exited_ids = {ct["trade_id"] for ct in closed if ct.get("trade_id")}
-            stale = [tid for tid in exited_ids if tid in self.open_positions]
+            stale = [tid for tid in (exited_ids | _recon_ids) if tid in self.open_positions]
             if stale:
                 logger.warning(
-                    f"Removing {len(stale)} stale open-position(s) that already have EXIT events: {stale}"
+                    f"Removing {len(stale)} stale open-position(s) that already have EXIT/RECONCILE_DROP events: {stale}"
                 )
                 for tid in stale:
                     del self.open_positions[tid]
@@ -1345,6 +1492,10 @@ class TradeJournal:
 
         # Only flush a summary when the session has meaningful activity.
         # This suppresses empty stub sessions from being promoted into history.
-        if (self.total_entries > 0 or self.total_exits > 0 or self.open_positions) \
+        # reconcile_drops counts too (2026-07-29 Codex must-fix): a drop-only session
+        # (0 open, 0 closed, N drops) is the exact "everything vanished" case that must
+        # still rewrite summary.json so the drops are visible on resume.
+        if (self.total_entries > 0 or self.total_exits > 0 or self.open_positions
+                or self.reconcile_drops > 0) \
                 and not _JOURNAL_READONLY:
             self._save_summary()

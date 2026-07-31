@@ -80,8 +80,20 @@ class ExitDecision:
     # microstructure fill problem, not a stop-threshold problem.
     secs_to_expiry_at_exit: Optional[float] = None
     exit_book_spread: Optional[float] = None
+    # data-loop C (2026-07-30): exit book-quality symmetric to entry_paper_fill_quality.
+    exit_best_bid: Optional[float] = None
+    exit_best_ask: Optional[float] = None
+    exit_depth_at_limit: Optional[float] = None
+    exit_fill_ratio: Optional[float] = None
     exit_mark_src: Optional[str] = None
     exit_mark_age_ms: Optional[float] = None
+    # 2026-07-30 PAPER CALIB Phase 3.6: separate SIGNAL wins from EXECUTION wins.
+    # raw_signal_pnl = mark-to-mark PnL with NO exit slippage and NO fee (what the
+    # signal "earned"); execution_adjusted_pnl = the realized PnL actually booked
+    # (book-walked exit fill minus taker fees). Their gap = execution drag. Judge
+    # strategies by execution_adjusted_pnl. Both None when realistic_paper_fills is off.
+    raw_signal_pnl: Optional[float] = None
+    execution_adjusted_pnl: Optional[float] = None
 
 
 @dataclass
@@ -170,6 +182,14 @@ class PositionExitManager:
         # +$19.62. 0.0 = OFF (fires exactly as before, backward-compatible).
         self.never_green_cut_min_loss_pct = float(exit_cfg.get("never_green_cut_min_loss_pct", 0.0) or 0.0)
         self.updown_time_stop_min_loss_pct = float(exit_cfg.get("updown_time_stop_min_loss_pct", 0.0) or 0.0)
+        # 2026-07-29 HOLD MEANS HOLD (operator GO + Codex proof). A true hold-to-resolution
+        # lane must ride to resolution — the soft exits (stop/trail/in-profit/time/flatten/
+        # never-green) were cutting hold lanes early (sol 5m down: wins 11/11 +$252 when
+        # resolved but only 8.6% get there; early cuts -$84). When enforced, hold lanes
+        # suppress every premature exit, leaving ONLY expiry/resolution and a CATASTROPHIC
+        # stop. hold_means_hold_enforce hot-reloads OFF; catastrophic pct is fraction (0.5=-50%).
+        self._hold_means_hold_enforce = bool(exit_cfg.get("hold_means_hold_enforce", True))
+        self._hold_catastrophic_stop_pct = float(exit_cfg.get("hold_catastrophic_stop_pct", 0.5) or 0.0)
         # Optional BUY_YES bid-depth deterioration exit (default OFF). See settings.yaml
         # trading.exit_rules.bid_depth_exit and _maybe_bid_depth_exit below.
         self._bid_depth_exit = exit_cfg.get("bid_depth_exit", {}) or {}
@@ -727,6 +747,48 @@ class PositionExitManager:
             ):
                 reason = "never_green_cut"
 
+            # 2026-07-29 HOLD MEANS HOLD (operator GO + Codex proof). The hold flag only
+            # blocked take_profit; stop/trail/in-profit/time/flatten/never-green kept cutting
+            # hold lanes early (sol 5m down: 8.6% reach resolution, resolved +$252 / early
+            # -$84). For a TRUE hold-to-resolution lane, suppress EVERY premature exit and
+            # ride to resolution — leaving only expiry (updown_expired / updown_time_limit)
+            # and a CATASTROPHIC drawdown. Single override covering all leak paths at once.
+            if (
+                is_updown
+                and resolved.updown_hold_winners_to_resolution
+                and getattr(self, "_hold_means_hold_enforce", True)
+                and reason in (
+                    "updown_stop_loss",
+                    "updown_time_stop",
+                    # 2026-07-30 (operator GO, Codex-found): take_profit_late is EXEMPT from
+                    # hold-enforce. It is a TIME-GATED bank that fires ONLY in the final
+                    # take_profit_late_gate_mins of the window (a fade near resolution, NOT a
+                    # premature exit) and ONLY above take_profit_late_pct — the designed fix for
+                    # 1h-up round-trip giveback on hold lanes (btc 1h up TP0.40/gate5, memory
+                    # reference_1h_giveback_time_gated_tp). Leaving it in the list nulled it out
+                    # and defeated the whole mechanism, so a green >=+40% in the last 5 min rode
+                    # to the catastrophic stop instead of banking. Only lanes that SET
+                    # take_profit_late_pct>0 (currently btc 1h up alone) are affected.
+                    "updown_flatten_pre_resolution",
+                    "never_green_cut",
+                    # 2026-07-29 (Codex hold-fix review): bid-depth exit is disabled today
+                    # but must also be suppressed on hold lanes if ever enabled.
+                    "buy_yes_bid_depth_drop",
+                )
+            ):
+                _cat = getattr(self, "_hold_catastrophic_stop_pct", 0.5) or 0.0
+                if _cat > 0.0 and pnl_pct <= -_cat:
+                    setattr(pos, "_hold_policy_applied", "catastrophic_stop")
+                    reason = "hold_catastrophic_stop"
+                else:
+                    logger.info(
+                        "HOLD-TO-RESOLUTION: suppressed premature '%s' on %s (pnl=%.1f%%) — riding to resolution",
+                        reason, pos.market_id, pnl_pct * 100.0,
+                    )
+                    setattr(pos, "_hold_policy_applied", "hold_to_resolution")
+                    setattr(pos, "_hold_suppressed_exit_reason", reason)
+                    reason = None
+
             # Phantom-exit floor: suppress the EARLY % stop/TP until the position has
             # aged past the min-hold. Leaves the late-window cents/time/expiry stops
             # untouched (they only fire near resolution). Resets the stop-confirm
@@ -809,12 +871,23 @@ class PositionExitManager:
                     "updown_flatten_pre_resolution",
                     "updown_expired",
                     "updown_time_stop",
+                    # 2026-07-29 (live evidence, session 180002): a regular take_profit was
+                    # placed marketable=False -> resting GTC that sat ~20s unfilled then
+                    # decayed (XRP 15m trade 0x02b450, the winner's gains handed back). A TP
+                    # that HIT must cross the bid NOW (FAK) like take_profit_late and the
+                    # loss-cutting exits, not rest a limit that may never fill in a fast
+                    # binary. Same reasoning as take_profit_late immediately below.
+                    "take_profit",
                     # 2026-07-17 (Codex catch): the time-gated late TP fires INSIDE the
                     # final gate window, so it must take the bid NOW (FAK) like the other
                     # near-resolution exits. Left as a resting GTC it would not fill at the
                     # qualifying tick — which is exactly the execution gap the sim assumed
                     # away and where the previous 3 give-back attempts died.
                     "take_profit_late",
+                    # 2026-07-29 (Codex hold-fix review): the catastrophic stop is the ONLY
+                    # exit left on a hold lane — it fires on a deep drawdown and must cross
+                    # NOW (FAK), not rest as a GTC limit that hands back more.
+                    "hold_catastrophic_stop",
                 ):
                     # Loss-cutting / near-resolution: take the bid NOW (FAK) rather than
                     # resting a limit that won't fill into a one-sided book and lets the
@@ -835,6 +908,14 @@ class PositionExitManager:
                 fill_slippage_pct = None
                 fill_fee_usdc = None
                 fill_fee_rate = None
+                # PAPER CALIB Phase 3.6: reset per position so raw_signal_pnl can never
+                # inherit a prior iteration's value if the walk block is ever skipped.
+                _mark_pnl = None
+                # data-loop C: same discipline for the exit book-walk outputs so
+                # exit_fill_ratio / exit_depth_at_limit can never carry a prior position's
+                # walk when realistic_paper_fills is off or a branch is skipped.
+                _filled = None
+                _levels = None
                 if self._realistic_paper_fills:
                     _mark_price = exit_price
                     _mark_pnl = unrealized_pnl
@@ -938,13 +1019,45 @@ class PositionExitManager:
                         )
                 except Exception:
                     _secs_to_expiry = None
-                _bb = locals().get("_best_bid")
-                _ba = locals().get("_best_ask")
+                # data-loop C (2026-07-30): exit book-quality symmetric to the entry side
+                # (entry_paper_fill_quality has best_ask/best_bid/spread/depth/fill_ratio).
+                # Previously _best_bid/_best_ask were never assigned, so exit_book_spread was
+                # ALWAYS None. Compute best bid/ask from the YES book at exit (paper AND live),
+                # plus fill-ratio + depth from the book-walk when realistic_paper_fills ran.
+                _exit_liq = (market_liquidity or {}).get(pos.market_id) or {}
+                _yes_bids = [b.get("price") for b in (_exit_liq.get("bids") or []) if b.get("price") is not None]
+                _yes_asks = [a.get("price") for a in (_exit_liq.get("asks") or []) if a.get("price") is not None]
+                _best_bid = max(_yes_bids) if _yes_bids else None
+                _best_ask = min(_yes_asks) if _yes_asks else None
                 _exit_spread = (
-                    round(float(_ba) - float(_bb), 4)
-                    if _bb is not None and _ba is not None
+                    round(float(_best_ask) - float(_best_bid), 4)
+                    if _best_bid is not None and _best_ask is not None
                     else None
                 )
+                _exit_best_bid = round(float(_best_bid), 4) if _best_bid is not None else None
+                _exit_best_ask = round(float(_best_ask), 4) if _best_ask is not None else None
+                _walk_filled = locals().get("_filled")
+                _exit_fill_ratio = (
+                    round(float(_walk_filled) / float(pos.size), 4)
+                    if _walk_filled is not None and pos.size
+                    else None
+                )
+                _walk_levels = locals().get("_levels")
+                _exit_depth_at_limit = (
+                    round(sum(float(s) for _p, s in _walk_levels if s), 4)
+                    if _walk_levels
+                    else None
+                )
+
+                # PAPER CALIB Phase 3.6: raw (mark, no slippage/fee) vs execution-adjusted
+                # (realized) PnL. _mark_pnl exists only when realistic_paper_fills walked
+                # the book; without it we cannot separate the two, so leave both None.
+                _raw_signal_pnl = locals().get("_mark_pnl")
+                _exec_adj_pnl = (
+                    round(unrealized_pnl, 2) if _raw_signal_pnl is not None else None
+                )
+                if _raw_signal_pnl is not None:
+                    _raw_signal_pnl = round(float(_raw_signal_pnl), 2)
 
                 exits.append(
                     ExitDecision(
@@ -973,8 +1086,14 @@ class PositionExitManager:
                         fill_fee_rate=fill_fee_rate,
                         secs_to_expiry_at_exit=_secs_to_expiry,
                         exit_book_spread=_exit_spread,
+                        exit_best_bid=_exit_best_bid,
+                        exit_best_ask=_exit_best_ask,
+                        exit_depth_at_limit=_exit_depth_at_limit,
+                        exit_fill_ratio=_exit_fill_ratio,
                         exit_mark_src=((market_liquidity or {}).get(pos.market_id) or {}).get("mark_src"),
                         exit_mark_age_ms=((market_liquidity or {}).get(pos.market_id) or {}).get("mark_age_ms"),
+                        raw_signal_pnl=_raw_signal_pnl,
+                        execution_adjusted_pnl=_exec_adj_pnl,
                     )
                 )
 

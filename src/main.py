@@ -14,6 +14,10 @@ import signal
 import sys
 import threading
 import time
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - local bot runs on Unix/macOS.
+    fcntl = None
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
@@ -29,7 +33,7 @@ from src.market.scanner import (
     is_crypto_updown_market,
     resolved_updown_window_minutes,
 )
-from src.market.websocket import WebSocketClient
+from src.market.websocket import WebSocketClient, UserWebSocketClient
 from src.analysis.ai_agent import AIAgent
 from src.analysis.ai_decision_broker import AIDecisionBroker
 from src.analysis.math_utils import PositionSizer
@@ -88,6 +92,7 @@ KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITC
 RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
+TRADING_PROCESS_LOCK_FILE = RUNTIME_DIR / "trading_bot.lock"
 _HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management"})
 
 # Strategy modules for CODE hot-reload (option 1, 2026-07-11), in dependency order:
@@ -132,6 +137,47 @@ HEARTBEAT_FILE = RUNTIME_DIR / "bot_heartbeat.json"
 DEATH_MARKER_FILE = RUNTIME_DIR / "bot_last_death.json"
 _FAULT_HANDLER_STREAM = None
 _DEATH_MARKER_WRITTEN = False
+
+
+def _acquire_trading_process_lock(dry_run: bool):
+    """Prevent paper/live trading loops from sharing runtime files in one workspace."""
+    if fcntl is None:
+        logging.warning("Trading process lock unavailable on this platform; continuing unlocked.")
+        return None
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    lock_fh = open(TRADING_PROCESS_LOCK_FILE, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_fh.seek(0)
+        owner = lock_fh.read().strip() or "unknown owner"
+        print(
+            "Another trading bot is already running in this workspace. "
+            f"Lock={TRADING_PROCESS_LOCK_FILE} owner={owner}"
+        )
+        _write_runtime_status(
+            phase="startup_blocked",
+            clean_shutdown=True,
+            detail=f"trading process lock held by {owner}",
+        )
+        lock_fh.close()
+        sys.exit(99)
+    lock_fh.seek(0)
+    lock_fh.truncate()
+    lock_fh.write(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "mode": "paper" if dry_run else "live",
+                "argv": sys.argv[1:],
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+            sort_keys=True,
+        )
+    )
+    lock_fh.flush()
+    os.fsync(lock_fh.fileno())
+    return lock_fh
 
 
 def _select_hot_reload_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -742,6 +788,16 @@ class PolyBot:
         self.ws_client = WebSocketClient(self.config)
         # Let the scanner read pushed WS mids first (REST fallback inside fetch_prices).
         self.market_scanner.ws_client = self.ws_client
+        # 2026-07-29 (Phase-2 ④): authenticated USER channel for real fill events →
+        # order.filled_size becomes venue truth. creds_provider reads live creds each
+        # reconnect (survives re-derivation); callback is observe-only fill accounting.
+        # Lazy callbacks: self.clob_client is constructed later in __init__, so both
+        # callbacks must defer the attribute access to call time (not construction).
+        self.user_ws_client = UserWebSocketClient(
+            self.config,
+            creds_provider=lambda: self.clob_client.get_ws_creds(),
+            on_user_event=lambda event: self.clob_client.apply_user_fill_event(event),
+        )
         self.ai_agent = AIAgent(self.config)
         # Async-decoupled AI decision broker: strategies enqueue here instead of
         # awaiting the provider in their per-market loop. See the broker module
@@ -841,24 +897,24 @@ class PolyBot:
         # Resume only if PAPER_SESSION_ID is explicitly set to an existing session name.
         _forced_session = os.environ.get("PAPER_SESSION_ID")
         _resume_session = os.environ.get("PAPER_RESUME_SESSION", "false").lower() in ("1", "true", "yes")
-        # LIVE mode resumes the latest session so a restart never ORPHANS open
-        # positions (they're reconciled against the venue right after startup). dry_run
-        # isn't applied to config until after __init__, so detect live via argv here.
+        # Live launches default to a fresh journal/anchor so each operator live test has
+        # clean PnL and daily counters. Resume a live journal only when explicitly asked;
+        # otherwise stale closed trades from the previous run can make a "new" session
+        # look down/trade-capped before it has placed anything.
         _live_mode = "--live" in sys.argv
-        # LIVE_FRESH_SESSION=1 forces a live run to start a BRAND-NEW session anchored at
-        # the real wallet (0 realized), instead of resuming the latest. Use this when the
-        # latest session carries a stale P&L anchor you do not want dragged forward (e.g.
-        # a prior run's -$72.73 wallet-drift showing on a 0-trade fresh launch). Only safe
-        # when the venue has NO real open positions to adopt — a fresh journal will not
-        # inherit resumed positions. 2026-07-27.
+        _live_resume = os.environ.get("LIVE_RESUME_SESSION", "false").lower() in ("1", "true", "yes")
+        # Backward-compatible escape hatch: LIVE_FRESH_SESSION=1 forces fresh even if
+        # LIVE_RESUME_SESSION was accidentally left on.
         _live_fresh = os.environ.get("LIVE_FRESH_SESSION", "false").lower() in ("1", "true", "yes")
-        if _forced_session and not _resume_session:
-            # Explicit session name given — use it (e.g. PAPER_SESSION_ID=reset_20260416)
+        if _forced_session and not _resume_session and (not _live_mode or _live_resume):
+            # Explicit session name given — use it (e.g. PAPER_SESSION_ID=reset_20260416).
+            # In live mode this must also opt into LIVE_RESUME_SESSION; a stale paper
+            # env var should not drag live tests into an old journal/anchor.
             self.journal = TradeJournal(session_id=_forced_session, resume_latest=False)
             self._fresh_session_created = False
             logging.info(f"Forced session via PAPER_SESSION_ID={_forced_session}")
-        elif (_resume_session or _live_mode) and not _live_fresh:
-            # Resume latest: PAPER_RESUME_SESSION=true, or any live run (no orphans).
+        elif (_resume_session or (_live_mode and _live_resume)) and not _live_fresh:
+            # Resume latest only by explicit opt-in.
             self.journal = TradeJournal(resume_latest=True)
             self._fresh_session_created = False
             logging.info(
@@ -868,9 +924,8 @@ class PolyBot:
             )
         else:
             # Default: fresh session every restart (process lifecycle = test cycle).
-            # Also the live-fresh path (LIVE_FRESH_SESSION=1): new session, but leave the
-            # bankroll for refresh_live_wallet_bankroll() so it anchors at the real wallet
-            # instead of the paper 500 default (which would flash $500 until refresh).
+            # Live fresh path: leave bankroll for refresh_live_wallet_bankroll() so it
+            # anchors at the real wallet instead of the paper 500 default.
             new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
             self._fresh_session_created = True
@@ -1189,6 +1244,26 @@ class PolyBot:
             "maker_wait_sec": float(t.get("entry_maker_wait_sec", 8.0) or 8.0),
             "hybrid_windows": tuple(
                 str(x).lower() for x in (t.get("entry_hybrid_windows") or ["15m", "1h"])
+            ),
+        }
+
+    def _exit_exec_params(self) -> dict:
+        """Resolve the EXIT execution policy from config.
+
+        trading.exit_mode: marketable | hybrid (default marketable).
+        - marketable (default): today's exact behavior — non-marketable exits rest
+          as a plain GTC and urgent exits FAK aggressive-cross. Nothing changes.
+        - hybrid: NON-marketable (take-profit / mark-based) exits on
+          exit_hybrid_windows go maker-first (post_only GTC 0-fee -> FAK fallback)
+          via clob_client.place_exit_order. URGENT (marketable) exits are ALWAYS
+          FAK aggressive-cross regardless of this flag — they can't rest.
+        """
+        t = self.config.get("trading") or {}
+        return {
+            "exit_mode": str(t.get("exit_mode") or "marketable").lower(),
+            "maker_wait_sec": float(t.get("exit_maker_wait_sec", 6.0) or 6.0),
+            "hybrid_windows": tuple(
+                str(x).lower() for x in (t.get("exit_hybrid_windows") or ["15m", "1h"])
             ),
         }
 
@@ -2404,7 +2479,16 @@ class PolyBot:
                 continue
             _absent.pop(tid, None)
             dropped += 1
-            self.journal.open_positions.pop(tid, None)
+            self.journal.log_reconcile_drop(
+                tid,
+                bankroll=float(getattr(self, "bankroll", 0.0) or 0.0),
+                reason="venue_absent_reconcile_drop",
+                extra={
+                    "absent_rounds": _cnt,
+                    "confirm_rounds": _confirm_rounds,
+                    "condition_id": _cid(pos),
+                },
+            )
             try:
                 self.risk_manager.active_positions.pop(tid, None)
             except Exception:
@@ -2806,7 +2890,22 @@ class PolyBot:
         return out
 
     async def _sync_clob_ws_book_subscriptions(self, channel: str) -> None:
-        """Subscribe WS to books for open-position tokens; unsubscribe stale ids."""
+        """Subscribe WS to books for open-position tokens; unsubscribe stale ids.
+
+        PRIORITY-FIRST + PACED (2026-07-29). _wanted_clob_book_token_ids() returns
+        an ORDERED list (open-position tokens first, then imminence-ranked universe).
+        The old code did `set(wanted)` and a set-difference, which DISCARDED that
+        order — so on a reconnect the whole ~400-token universe re-added in arbitrary
+        hash order and open-position/near-expiry books were NOT subscribed first.
+        Diagnosed churn driver (session 180002): unsubscribed sockets die ~6s idle,
+        subscribed sockets live ~21s — so getting book frames flowing FAST after a
+        reconnect is what keeps the socket up. Fix: preserve priority order so the
+        first chunk (which becomes the initial type:market subscription) carries open
+        positions + nearest-expiry, and PACE the remaining chunks with a small sleep
+        so a full re-add streams as a gentle feed instead of a back-to-back burst.
+        Breadth is NOT reduced (coverage keeps sockets alive); only ORDER + PACING
+        change. Chunk/pause are config-tunable.
+        """
         ws = self.ws_client
         if ws.ws is None:
             return
@@ -2823,21 +2922,34 @@ class PolyBot:
                 if not _priced:
                     logging.info("clob_ws: deferring initial market subscription until scanner universe primes (avoid partial type:market replace)")
                     return
-        want = set(self._wanted_clob_book_token_ids())
+        wanted = self._wanted_clob_book_token_ids()  # ORDERED: open positions, then imminence
         have = set(ws.subscriptions.get(channel, set()))
-        to_add = [t for t in want - have if t]
-        to_remove = [t for t in have - want if t]
+        # Preserve priority order (a set-difference would lose it): first-seen wins.
+        to_add: List[str] = []
+        _add_seen: Set[str] = set()
+        for t in wanted:
+            if t and t not in have and t not in _add_seen:
+                _add_seen.add(t)
+                to_add.append(t)
+        want_set = set(wanted)
+        to_remove = [t for t in have - want_set if t]
         # 2026-07-11 Codex hardening: send subscriptions in chunks — a single
         # ~400-asset frame could be silently dropped server-side, leaving
         # ws_cov at 0 while bookkeeping says subscribed.
         _cw = (self.config.get("trading") or {}).get("clob_ws") or {}
-        _chunk = max(1, int(_cw.get("subscribe_chunk_size", 100) or 100))
+        _chunk = max(1, int(_cw.get("subscribe_chunk_size", 50) or 50))
+        _pause = float(_cw.get("subscribe_chunk_pause_sec", 0.4) or 0.0)
         if to_add:
             for _i in range(0, len(to_add), _chunk):
                 try:
                     await ws.subscribe(channel, to_add[_i:_i + _chunk])
                 except Exception as e:
                     logging.debug("clob ws subscribe: %s", e)
+                # Pace between chunks so the socket streams a gentle feed — the
+                # priority batch (open positions + nearest-expiry) already went in
+                # chunk 1. No pause after the last chunk; skipped if _pause<=0.
+                if _pause > 0 and (_i + _chunk) < len(to_add):
+                    await asyncio.sleep(_pause)
         if to_remove:
             for _i in range(0, len(to_remove), _chunk):
                 try:
@@ -2849,13 +2961,44 @@ class PolyBot:
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         channel = str(ws_cfg.get("book_channel", "market"))
         interval = float(ws_cfg.get("subscribe_interval_sec", 15))
+        _fast = float(ws_cfg.get("subscribe_fast_resub_sec", 2.0) or 0.0)
         await asyncio.sleep(3)
         while self.running:
             try:
                 await self._sync_clob_ws_book_subscriptions(channel)
             except Exception as e:
                 logging.debug("clob ws subscription loop: %s", e)
-            await asyncio.sleep(max(5.0, interval))
+            # 2026-07-29 ADAPTIVE CADENCE — root fix for the market-WS 1006 churn.
+            # connect() clears the subscription set on every (re)connect, and an
+            # UNSUBSCRIBED socket idle-dies in ~6s (measured: idle sockets die median
+            # 5.7s vs 20.8s once subscribed). The fixed 15s loop re-subscribed too late —
+            # the socket was already dead — so the loop never caught a live socket to feed,
+            # a self-sustaining reconnect cycle (~106 reconnects/hr, ws_cov stuck ~0.50).
+            # Poll FAST (~2s) while the channel has NO live subscriptions so a reconnect
+            # re-subscribes before the idle-death window, then fall back to the steady 15s
+            # delta cadence once subscribed. Fresh re-reads config so it's tunable/off (0).
+            _delay = max(5.0, interval)
+            _reason = "steady"
+            if _fast > 0:
+                _ws = getattr(self, "ws_client", None)
+                _live = _ws is not None and getattr(_ws, "ws", None) is not None
+                _has_subs = bool((getattr(_ws, "subscriptions", {}) or {}).get(channel))
+                if _live and not _has_subs:
+                    _delay = _fast
+                    _reason = "fast_resub_unsubscribed"
+                elif not _live:
+                    _reason = "no_ws"
+            # 2026-07-29 diagnostic (log-only): stamp the cadence decision onto the ws
+            # client so its WS_RECV_ENDED death line shows whether fast-resub was active
+            # when the socket died (proves the loop-phase race Codex flagged).
+            _wsc = getattr(self, "ws_client", None)
+            if _wsc is not None:
+                try:
+                    _wsc._last_subloop_delay = _delay
+                    _wsc._last_subloop_reason = _reason
+                except Exception:
+                    pass
+            await asyncio.sleep(_delay)
 
     def _spawn_bg(self, coro, name: str = ""):
         """Create a tracked background task.
@@ -2915,6 +3058,22 @@ class PolyBot:
 
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("enabled", True):
+            # 2026-07-29 Fix B: wire subscribe-on-open + cold-start connect deferral so the
+            # market socket never idles unsubscribed (Polymarket 1006-kills those ~9s).
+            # on_connect_subscribe: subscribe the instant the socket opens (also speeds
+            # reconnect re-subscribe). subscription_ready_check: gate the FIRST connect
+            # until the scanner token universe primes. Market channel only; user channel
+            # keeps connect-immediately. Fail-open via connect_defer_max_sec in websocket.py.
+            try:
+                _mkt_chan = str(ws_cfg.get("book_channel", "market"))
+                self.ws_client.on_connect_subscribe = (
+                    lambda _c=_mkt_chan: self._sync_clob_ws_book_subscriptions(_c)
+                )
+                self.ws_client.subscription_ready_check = (
+                    lambda: bool(getattr(self.market_scanner, "_last_priced_token_ids", None))
+                )
+            except Exception as _e:
+                logging.debug("clob_ws Fix-B wiring skipped: %s", _e)
             self._spawn_bg(self.ws_client.listen())
             _ws_wd = getattr(self.ws_client, "silence_watchdog", None)
             if callable(_ws_wd):
@@ -2929,6 +3088,26 @@ class PolyBot:
                     self._spawn_bg(_wcf.get_feed().run(), name="ws_candle_feed")
             except Exception as _e:
                 logging.warning("ws_candle_feed spawn failed (REST fallback): %s", _e)
+
+            # 2026-07-29 (Phase-2 ④): user-channel fills — LIVE only (paper has no L2
+            # creds), config-gated, and only when creds are actually present. Observe /
+            # correctness-only; fails open (REST fill inference still runs if WS is down).
+            _dry = self.config.get("trading", {}).get("dry_run", True)
+            if (
+                ws_cfg.get("user_channel_enabled", True)
+                and not _dry
+                and getattr(self, "user_ws_client", None) is not None
+                and self.clob_client.get_ws_creds() is not None
+            ):
+                self._spawn_bg(self.user_ws_client.listen(), name="user_ws_listen")
+                self._spawn_bg(self.user_ws_client.keepalive(), name="user_ws_keepalive")
+                logging.info("Phase-2 ④ user-channel WS started (real fill events → filled_size truth)")
+            elif not _dry and ws_cfg.get("user_channel_enabled", True):
+                logging.warning(
+                    "user-channel WS not started: creds_present=%s — fill accounting "
+                    "falls back to REST inference.",
+                    self.clob_client.get_ws_creds() is not None,
+                )
 
         from src.ops_pulse import log_ops_startup
 
@@ -3086,6 +3265,13 @@ class PolyBot:
             record = build_record_from_closed_trade(
                 closed_row, session_id=self.journal.session_id
             )
+            # 2026-07-30: stamp live-vs-paper so the Lane Pocket Lab can isolate LIVE-realized
+            # rows (decisions = live realized only). dry_run True => paper; the lab further splits
+            # paper into old_paper/live_like_paper by execution-field presence. Fail-safe: this
+            # whole method is wrapped in try/except, and a missing key falls back to the heuristic.
+            record["mode"] = (
+                "paper" if self.config.get("trading", {}).get("dry_run", True) else "live"
+            )
             cal = getattr(self, "lane_calibrator", None)
             if cal is not None:
                 try:
@@ -3231,6 +3417,52 @@ class PolyBot:
                     )
         except Exception as _e:  # never break execution on a sizing helper
             logging.error("[tape-adapter] size apply error: %s", _e, exc_info=True)
+        return final_size
+
+    def _apply_adaptive_realized_size(
+        self, final_size: float, strategy: str, window_size, action: str
+    ) -> float:
+        """Scale an entry's notional by the per-lane REALIZED-ROI multiplier (2c).
+
+        Reads adaptive_lane_sizer.resolve_size_mult, which returns 1.0 unless
+        trading.adaptive_sizer.mode == 'live'. So this is a NO-OP in shadow/off — safe
+        to ship dark; it only moves size once the operator flips mode:live (2d). In
+        live it applies the EMA-smoothed [floor,ceil] per-lane multiplier learned from
+        recent realized ROI, then RE-CLAMPS the UP side to max_position_size /
+        max_exposure_per_trade (a >1.0 mult must never blow past the risk caps). The
+        DOWN side is allowed to shrink to the venue floor (~$1) — that IS the intended
+        de-size of a losing lane. Fully guarded so a sizing edit can never raise inside
+        the execute path. Applied AFTER _apply_tape_adapter_size (which is off) so the
+        realized sizer is the single per-lane outcome layer (see 2b consolidation).
+        """
+        try:
+            from src.analysis.adaptive_lane_sizer import resolve_size_mult
+            mult = float(resolve_size_mult(
+                self.config, strategy=strategy,
+                window=str(window_size or ""), action=action or "",
+            ) or 1.0)
+            if mult == 1.0:
+                return final_size
+            new_size = final_size * mult
+            # De-size venue floor FIRST (~$1)...
+            new_size = max(1.0, new_size)
+            # ...then the RISK CAPS are authoritative and ALWAYS win over the floor
+            # (Codex 2c review b/c: a cap resolving below $1 — incl bankroll None/0 =>
+            # max_exposure cap 0 — must NOT be overridden back up to $1).
+            t = self.config.get("trading", {}) or {}
+            _max = float(t.get("max_position_size", 0.0) or 0.0)
+            _max_exp = float(t.get("max_exposure_per_trade", 0.0) or 0.0)
+            if _max > 0:
+                new_size = min(new_size, _max)
+            if _max_exp > 0:
+                new_size = min(new_size, float(self.bankroll or 0.0) * _max_exp)
+            logging.info(
+                "[adaptive-sizer:live] %s %s %s size %.2f -> %.2f (mult=%.2f)",
+                strategy, window_size, action, final_size, new_size, mult,
+            )
+            return new_size
+        except Exception as _e:  # never break execution on a sizing helper
+            logging.error("[adaptive-sizer] size apply error: %s", _e, exc_info=True)
         return final_size
 
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
@@ -3758,7 +3990,23 @@ class PolyBot:
                     # GRADUATED 2026-07-26: in LIVE mode, actually CUT 5m/15m never-green
                     # positions (1h stays shadow — its slow winners get false-cut). The
                     # close is executed by exit_manager.check_exits, which reads this set.
-                    if self._never_green_mode == "live" and str(win) in ("5m", "15m"):
+                    # 2026-07-29 per-lane exemption: some (strategy, window, side) lanes
+                    # recover to resolution and the cut destroys them. ETH 5m BUY_NO settled
+                    # 10/13 in-favor (+$61.66 left on the table by cutting). Config key
+                    # never_green_cut.exempt_lanes = ["strategy|window|LEG"], LEG in {YES,NO}
+                    # (YES=BUY_YES, NO=BUY_NO). Read live so it hot-reloads. Exempt lanes fall
+                    # through to normal exit logic instead of the never-green cut.
+                    _ngc_exempt = {
+                        str(x) for x in (
+                            (self.config.get("never_green_cut", {}) or {}).get("exempt_lanes", []) or []
+                        )
+                    }
+                    _ng_lane_key = f"{strat}|{win}|{entry_leg}"
+                    if (
+                        self._never_green_mode == "live"
+                        and str(win) in ("5m", "15m")
+                        and _ng_lane_key not in _ngc_exempt
+                    ):
                         _cpk = getattr(pos, "peak_token_price", None)
                         _cpk = float(_cpk) if _cpk else entry
                         if entry <= 0 or ((_cpk - entry) / entry) < _ng_green_thr:
@@ -4585,20 +4833,96 @@ class PolyBot:
                             _limit_price = _tick
                         else:  # BUY close
                             _limit_price = round(1.0 - _tick, 4)
-                    order = await self.clob_client.place_order(
-                        token_id=exit_decision.token_id,
-                        side=exit_decision.action,
-                        price=_limit_price,
-                        size=exit_decision.size,
-                        market_id=exit_decision.market_id,
-                        dry_run=dry_run,
-                        # Loss-cutting/near-resolution exits are marketable -> FAK (take
-                        # the bid now). Other exits keep the GTC default.
-                        order_type="FAK" if _marketable else "GTC",
-                        market_title=getattr(pos, "market_question", None),
-                        market_slug=getattr(pos, "market_slug", None),
-                        condition_id=getattr(pos, "condition_id", None),
+                    # 2026-07-30 MAKER-FIRST EXIT (operator GO; default OFF via
+                    # trading.exit_mode: marketable). ONLY non-marketable (take-profit /
+                    # mark-based) exits on exit_hybrid_windows divert to the maker-first
+                    # path; urgent/marketable exits keep the FAK aggressive-cross above
+                    # UNCHANGED. When exit_mode != hybrid this branch is never taken, so
+                    # behavior is byte-identical to before until the operator flips it.
+                    _exit_params = self._exit_exec_params()
+                    _exit_hybrid = (
+                        not _marketable
+                        and not dry_run
+                        and _exit_params["exit_mode"] == "hybrid"
                     )
+                    if _exit_hybrid:
+                        # Aggressive taker fallback price so the FAK leg is guaranteed to
+                        # cross if the maker leg doesn't fill (same crossing logic as the
+                        # marketable path). The maker leg itself rests at the mark limit.
+                        try:
+                            _xtick = float(
+                                await self.clob_client.fetch_tick_size(exit_decision.token_id)
+                            )
+                        except (TypeError, ValueError):
+                            _xtick = 0.01
+                        if not _xtick or _xtick <= 0:
+                            _xtick = 0.01
+                        _taker_px = (
+                            _xtick
+                            if "SELL" in str(exit_decision.action).upper()
+                            else round(1.0 - _xtick, 4)
+                        )
+                        order = await self.clob_client.place_exit_order(
+                            token_id=exit_decision.token_id,
+                            side=exit_decision.action,
+                            price=_limit_price,
+                            size=exit_decision.size,
+                            window=(getattr(pos, "window_size", "") or None),
+                            market_id=exit_decision.market_id,
+                            dry_run=dry_run,
+                            taker_price=_taker_px,
+                            maker_wait_sec=_exit_params["maker_wait_sec"],
+                            hybrid_windows=_exit_params["hybrid_windows"],
+                            market_title=getattr(pos, "market_question", None),
+                            market_slug=getattr(pos, "market_slug", None),
+                            condition_id=getattr(pos, "condition_id", None),
+                        )
+                    else:
+                        order = await self.clob_client.place_order(
+                            token_id=exit_decision.token_id,
+                            side=exit_decision.action,
+                            price=_limit_price,
+                            size=exit_decision.size,
+                            market_id=exit_decision.market_id,
+                            dry_run=dry_run,
+                            # Loss-cutting/near-resolution exits are marketable -> FAK
+                            # (take the bid now). Other exits keep the GTC default.
+                            order_type="FAK" if _marketable else "GTC",
+                            market_title=getattr(pos, "market_question", None),
+                            market_slug=getattr(pos, "market_slug", None),
+                            condition_id=getattr(pos, "condition_id", None),
+                        )
+                    # 2026-07-30 (Codex HIGH fix): a maker-first exit can return an EXPLICIT
+                    # PARTIAL (some shares sold at 0 fee, resting remainder already cancelled
+                    # inside place_exit_order). The coarse get_order_status() recheck below
+                    # returns FILLED on ANY trade-history match, so without this guard a
+                    # PARTIAL would fall through to full-close accounting (realized PnL for
+                    # the whole size, journal exit, position deleted) = phantom flat while
+                    # the venue still holds size-filled. Treat PARTIAL as "position NOT
+                    # flat": clear the (already-cancelled) pending id and keep the position
+                    # open so the exit checker re-evaluates and works the remainder next tick
+                    # (escalating to a marketable FAK if urgency rises). Do NOT book a close.
+                    if (
+                        _exit_hybrid
+                        and order is not None
+                        and not isinstance(order, bool)
+                        and getattr(order, "status", None) == OrderStatus.PARTIAL
+                        and not dry_run
+                    ):
+                        # Scoped to _exit_hybrid: place_exit_order ALWAYS cancels the resting
+                        # remainder before returning PARTIAL, so clearing pending_exit_order_id
+                        # is correct here. A plain (non-hybrid) GTC partial may still be resting
+                        # live and keeps its existing pending_exit_order_id tracking below.
+                        setattr(pos, "pending_exit_order_id", "")
+                        setattr(pos, "exit_pending_ticks", 0)
+                        logging.warning(
+                            "Maker exit PARTIAL for %s (filled=%.4f/%.4f); position NOT "
+                            "flat, keeping open, remainder retried next tick (no close booked).",
+                            exit_decision.position_id,
+                            float(getattr(order, "filled_size", 0.0) or 0.0),
+                            float(exit_decision.size or 0.0),
+                        )
+                        return
                     if order and not dry_run:
                         status = await self.clob_client.get_order_status(order.order_id)
                         if status != OrderStatus.FILLED:
@@ -4660,6 +4984,10 @@ class PolyBot:
                         exit_price=exit_decision.exit_price,
                         bankroll=self.bankroll,
                         reason=exit_decision.reason,
+                        # 2026-07-30 PnL TRUTH FIX (Codex): book the same realized cash
+                        # delta already applied to bankroll/exposure/kelly, not a mark
+                        # recompute — closes the journal-vs-bankroll accounting gap.
+                        realized_pnl=exit_pnl,
                         exit_telemetry={
                             "mae_pct": exit_decision.mae_pct,
                             "mfe_pct": exit_decision.mfe_pct,
@@ -4672,8 +5000,16 @@ class PolyBot:
                             "fill_slippage_pct": getattr(exit_decision, "fill_slippage_pct", None),
                             "fill_fee_usdc": getattr(exit_decision, "fill_fee_usdc", None),
                             "fill_fee_rate": getattr(exit_decision, "fill_fee_rate", None),
+                            # PAPER CALIB Phase 3.6: signal vs execution PnL split (gap =
+                            # exit slippage + fees). Judge lanes on execution_adjusted_pnl.
+                            "raw_signal_pnl": getattr(exit_decision, "raw_signal_pnl", None),
+                            "execution_adjusted_pnl": getattr(exit_decision, "execution_adjusted_pnl", None),
                             "secs_to_expiry_at_exit": getattr(exit_decision, "secs_to_expiry_at_exit", None),
                             "exit_book_spread": getattr(exit_decision, "exit_book_spread", None),
+                            "exit_best_bid": getattr(exit_decision, "exit_best_bid", None),
+                            "exit_best_ask": getattr(exit_decision, "exit_best_ask", None),
+                            "exit_depth_at_limit": getattr(exit_decision, "exit_depth_at_limit", None),
+                            "exit_fill_ratio": getattr(exit_decision, "exit_fill_ratio", None),
                             "exit_mark_src": getattr(exit_decision, "exit_mark_src", None),
                             "exit_mark_age_ms": getattr(exit_decision, "exit_mark_age_ms", None),
                             **order_execution,
@@ -5419,6 +5755,15 @@ class PolyBot:
         # Instrumented (Codex condition): log reclaimed MB + call ms for the first 12
         # cycles and every 20th after, so we can confirm it lowers the plateau without
         # adding scan latency; if relief_ms is ever non-trivial, revert to adaptive gating.
+        # 2026-07-31 (Codex root-cause): the relief above reclaimed 0.0MB EVERY cycle because
+        # this cycle's heavy scan locals (Market lists, pandas TA frames, signal lists) are all
+        # DEAD by here (last refs <=5657) yet stay BOUND to function scope until return — so
+        # malloc_zone_pressure_relief found no idle pages and RSS pinned near the per-cycle
+        # pandas/native peak (macOS never trims). Drop the refs FIRST so the freed pages become
+        # reclaimable. Rebind-to-None (never raises, unlike del on a maybe-unbound name); all
+        # confirmed unused after this point. This is the cure for the RSS ratchet, not the
+        # deeper per-scan pandas churn (that needs TA caching / no ws-candle .copy()).
+        strategy_markets = scan_results = strategy_signals = strategy_tasks = shared_btc_ta = None  # noqa: F841
         _rel_rss0 = _self_rss_mb()
         _rel_t0 = time.monotonic()
         _release_memory_to_os()
@@ -5713,7 +6058,14 @@ class PolyBot:
         self._last_fresh_entry_token_id = None
         if not cfg.get("enabled", True):
             return True
-        if self.config.get("trading", {}).get("dry_run", True):
+        # 2026-07-30 PAPER CALIB Phase 2.4 (operator): the guard was dry_run-bypassed so
+        # paper never felt live's fillability discipline (overstating frequency + PnL).
+        # When slippage_guard.apply_in_paper is set, run the SAME guard in paper; the
+        # effective mode becomes paper_mode (default = mirror live `mode`). Live behavior
+        # is unchanged when dry_run is False. _paper_guard drives the empty-book skip below.
+        _dry = bool(self.config.get("trading", {}).get("dry_run", True))
+        _paper_guard = _dry and bool(cfg.get("apply_in_paper", False))
+        if _dry and not _paper_guard:
             return True
         if side != "BUY":
             return True
@@ -5731,6 +6083,10 @@ class PolyBot:
             # agnostic: signal.edge already encodes YES/NO. Fail-open if edge unknown.
             edge_floor = float(cfg.get("min_residual_edge", 0.0))
             mode = str(cfg.get("mode", "observe")).strip().lower()
+            if _paper_guard:
+                # In paper, honor paper_mode (default: mirror live `mode`) so paper
+                # fill-rate reflects live fillability.
+                mode = str(cfg.get("paper_mode", mode)).strip().lower()
             max_spread = float(cfg.get("max_spread_cents", 0.03))
             require_full_depth = bool(cfg.get("require_full_depth", True))
             depth_ceiling = float(cfg.get("depth_price_ceiling_cents", 0.0))
@@ -5759,6 +6115,13 @@ class PolyBot:
                 default=None,
             )
             if best_ask is None:
+                # Fail-OPEN on empty asks in BOTH live and paper. In live a transient REST
+                # hiccup must not starve a real entry. In paper (Codex 2026-07-30): skipping
+                # here would make paper frequency reflect public-book READ QUALITY, not true
+                # venue fillability — the confound we're trying to remove. Genuine no-liquidity
+                # is already caught downstream by the paper fresh-fill layer (clob_client:1435:
+                # empty ask book / sub-$1 notional -> no-fill, logged), so the guard defers the
+                # empty_book case to it and only enforces the read-robust spread/edge signals.
                 logging.warning(
                     "%s slippage-guard: no live asks for token=%s — proceeding (fail-open)",
                     strategy,
@@ -5776,11 +6139,26 @@ class PolyBot:
             block_reason = None
             block_detail = ""
             if signal_edge is not None:
-                residual_edge = float(signal_edge) - slip
+                # 2026-07-30 FEE-GATE FRESH-BOOK FIX (Codex HIGH). The fee-aware SCAN gate
+                # (sol/eth) admits on NET-of-fee edge, but this fresh-book re-check used RAW
+                # edge - slip, so an adverse ask move between scan and entry could let a
+                # fee-negative trade through (raw-slip>0 while raw-slip-fee<0). Re-subtract the
+                # taker-fee hurdle at the FRESH ask for the fee-aware lanes (all except btc,
+                # which is intentionally fee-deferred). fee_aware_edge_hurdle is venue/config
+                # gated → returns 0.0 on olympus or when fee_aware_edge is disabled, so this is
+                # a pure no-op unless the fee gate is on.
+                _fee_hurdle = 0.0
+                if str(strategy or "").lower() != "bitcoin":
+                    try:
+                        from src.strategies.fee_util import fee_aware_edge_hurdle
+                        _fee_hurdle = float(fee_aware_edge_hurdle(self.config, best_ask) or 0.0)
+                    except Exception:
+                        _fee_hurdle = 0.0
+                residual_edge = float(signal_edge) - slip - _fee_hurdle
                 if residual_edge < edge_floor:
                     block_reason = "buy_edge_eroded"
                     block_detail = (
-                        f"slip={slip:+.4f} edge={float(signal_edge):.4f} "
+                        f"slip={slip:+.4f} edge={float(signal_edge):.4f} fee={_fee_hurdle:.4f} "
                         f"residual_edge={residual_edge:.4f} floor={edge_floor:.4f}"
                     )
             elif slip > tol:
@@ -5864,7 +6242,18 @@ class PolyBot:
         lane_id = str(lane_meta.get("lane_id") or "").strip()
         dry_run = bool(self.config.get("trading", {}).get("dry_run", True))
         allowed, reason, state, matched_key = self.lane_manager.can_execute(lane_id, dry_run=dry_run)
-        lane_meta["promotion_state"] = state
+        lane_meta["lane_config_state"] = state
+        lane_meta["lane_state_matched_key"] = matched_key
+        lane_meta["lane_enforcement_enabled"] = bool(
+            getattr(self.lane_manager, "execution_enforcement_enabled", False)
+        )
+        # In advisory mode, config.default_state="paper" should not make live fills look
+        # paper-scoped. Preserve the config state separately and label actual live
+        # execution as live.
+        if not dry_run and not lane_meta["lane_enforcement_enabled"]:
+            lane_meta["promotion_state"] = "live"
+        else:
+            lane_meta["promotion_state"] = state
         if allowed:
             return True
         self.journal.log_skip(
@@ -6136,6 +6525,9 @@ class PolyBot:
         final_size = self._apply_tape_adapter_size(
             final_size, "bitcoin", signal.window_size, signal.action
         )
+        final_size = self._apply_adaptive_realized_size(
+            final_size, "bitcoin", signal.window_size, signal.action
+        )
 
         intent = self._resolve_execution_intent(signal, strategy="bitcoin")
         if intent is None:
@@ -6223,6 +6615,33 @@ class PolyBot:
             **entry_params,
         )
 
+        # P0 (Olympus async entry confirmation): Olympus queues trades async
+        # (QUEUED -> PROCESSING -> SUCCEEDED/FAILED). If the fill has not reached a
+        # terminal SUCCEEDED within the poll window, place_order returns the order
+        # still PENDING with filled_size=0. Journaling THAT as an active position
+        # creates a phantom (or mis-sized/mis-priced) position if the fill completes
+        # later or FAILS. Require a terminal FILLED before journaling on the live
+        # Olympus path; the unconfirmed trade stays in clob_client.pending_orders and
+        # is reconciled by reconcile_open_positions_with_venue. Paper fills are
+        # synchronous, so this guard is a no-op in dry_run.
+        if (
+            order is not None
+            and hasattr(order, "order_id")
+            and not self.config.get("trading", {}).get("dry_run", True)
+            and self.clob_client.using_olympus()
+            and getattr(order, "status", None) != OrderStatus.FILLED
+        ):
+            _pend_status = getattr(order, "status", None)
+            logging.warning(
+                "Olympus entry accepted but NOT terminally filled (status=%s) — NOT "
+                "journaling as active position (phantom-guard); trade_id=%s size_req=%s. "
+                "Left in pending_orders for venue reconciliation.",
+                _pend_status.value if isinstance(_pend_status, OrderStatus) else _pend_status,
+                order.order_id,
+                order_size,
+            )
+            return
+
         if order and hasattr(order, "order_id"):
             # Record the ACTUAL filled share count, not the requested size. Olympus
             # (and marketable CLOB) can fill at a better price -> more shares; using
@@ -6296,6 +6715,10 @@ class PolyBot:
                 condition_id=str(getattr(signal, "condition_id", "") or ""),
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
                 extra={
+                    # PAPER CALIB Phase 2.5: entry executability proof (book_walk fill vs
+                    # signal mark + book state). None on live/non-fresh-fill entries ->
+                    # such rows are lower-confidence for the fillability analyzer.
+                    "paper_fill_quality": order_execution.get("paper_fill_quality"),
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
@@ -6479,6 +6902,9 @@ class PolyBot:
         final_size = self._apply_tape_adapter_size(
             final_size, strat, signal.window_size, signal.action
         )
+        final_size = self._apply_adaptive_realized_size(
+            final_size, strat, signal.window_size, signal.action
+        )
 
         intent = self._resolve_execution_intent(signal, strategy=strat)
         if intent is None:
@@ -6579,6 +7005,33 @@ class PolyBot:
             **entry_params,
         )
 
+        # P0 (Olympus async entry confirmation): Olympus queues trades async
+        # (QUEUED -> PROCESSING -> SUCCEEDED/FAILED). If the fill has not reached a
+        # terminal SUCCEEDED within the poll window, place_order returns the order
+        # still PENDING with filled_size=0. Journaling THAT as an active position
+        # creates a phantom (or mis-sized/mis-priced) position if the fill completes
+        # later or FAILS. Require a terminal FILLED before journaling on the live
+        # Olympus path; the unconfirmed trade stays in clob_client.pending_orders and
+        # is reconciled by reconcile_open_positions_with_venue. Paper fills are
+        # synchronous, so this guard is a no-op in dry_run.
+        if (
+            order is not None
+            and hasattr(order, "order_id")
+            and not self.config.get("trading", {}).get("dry_run", True)
+            and self.clob_client.using_olympus()
+            and getattr(order, "status", None) != OrderStatus.FILLED
+        ):
+            _pend_status = getattr(order, "status", None)
+            logging.warning(
+                "Olympus entry accepted but NOT terminally filled (status=%s) — NOT "
+                "journaling as active position (phantom-guard); trade_id=%s size_req=%s. "
+                "Left in pending_orders for venue reconciliation.",
+                _pend_status.value if isinstance(_pend_status, OrderStatus) else _pend_status,
+                order.order_id,
+                order_size,
+            )
+            return
+
         if order and hasattr(order, "order_id"):
             # Record the ACTUAL filled share count, not the requested size. Olympus
             # (and marketable CLOB) can fill at a better price -> more shares; using
@@ -6656,6 +7109,10 @@ class PolyBot:
                 condition_id=str(getattr(signal, "condition_id", "") or ""),
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
                 extra={
+                    # PAPER CALIB Phase 2.5: entry executability proof (book_walk fill vs
+                    # signal mark + book state). None on live/non-fresh-fill entries ->
+                    # such rows are lower-confidence for the fillability analyzer.
+                    "paper_fill_quality": order_execution.get("paper_fill_quality"),
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
@@ -6755,6 +7212,12 @@ class PolyBot:
 
         await self.market_scanner.close()
         await self.ws_client.disconnect()
+        _user_ws = getattr(self, "user_ws_client", None)
+        if _user_ws is not None:
+            try:
+                await _user_ws.disconnect()
+            except Exception as _e:
+                logging.debug("user WS disconnect on shutdown: %r", _e)
         await self.notifier.close()
         if self.ai_broker is not None:
             try:
@@ -7100,6 +7563,10 @@ async def main():
         backtest_args = [a for a in sys.argv[1:] if a != "--backtest"]
         args = [sys.executable, str(script_path)] + backtest_args
         sys.exit(subprocess.run(args).returncode)
+
+    trading_lock = None
+    if "--dashboard-only" not in sys.argv:
+        trading_lock = _acquire_trading_process_lock(bool(dry_run))
 
     def _bootstrap_config() -> Dict[str, Any]:
         """Lightweight settings load so the dashboard can bind before PolyBot journal I/O."""

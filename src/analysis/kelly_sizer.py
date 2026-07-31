@@ -251,10 +251,19 @@ class KellySizer:
         if not cfg:
             return self._global_kelly_fraction
         frac = cfg.base_kelly_fraction
-        if streak_multiplier is None:
+        # 2026-07-30 2c consolidation: when the realized adaptive sizer is LIVE it becomes
+        # THE per-lane outcome-adaptive layer (main.py._apply_adaptive_realized_size).
+        # Neutralize kelly's OWN recent-outcome multipliers (streak, drift) so the same
+        # recent-P&L signal is not compounded 2-3x (a win-streak lane would otherwise get
+        # streak x realized upsize). mode shadow/off => byte-identical to before.
+        _as = ((self._root_config or {}).get("trading") or {}).get("adaptive_sizer") or {}
+        _realized_live = bool(_as.get("enabled")) and str(_as.get("mode", "")).lower() == "live"
+        if _realized_live:
+            streak_multiplier = 1.0
+        elif streak_multiplier is None:
             streak_multiplier = self.get_streak_multiplier(strategy, window)
         frac = frac * streak_multiplier
-        frac = frac * get_drift_kelly_mult(strategy, self._root_config)
+        frac = frac * (1.0 if _realized_live else get_drift_kelly_mult(strategy, self._root_config))
         return max(cfg.min_kelly_fraction, min(frac, 1.0))
 
     def size_from_edge(

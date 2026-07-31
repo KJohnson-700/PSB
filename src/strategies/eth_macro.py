@@ -16,7 +16,9 @@ from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import CandleMomentum, MACDResult, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.strategies._scan_timeout import analysis_with_timeout
+from src.strategies.fee_util import fee_aware_edge_hurdle
 from src.analysis.sol_btc_service import SOLBTCService
+from src.analysis.window_watch import log_window_reject
 from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market, is_tradably_priced, resolved_updown_window_minutes, updown_timeframe_label
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -370,6 +372,22 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             if rsi_14 >= max_rsi:
                 return "eth_15m_overbought_long_vs_btc"
+
+        # 2026-07-30 ETH SETUP — 15m BUY_YES is a COUNTER-TREND reversal long, not a
+        # bull-follow (operator "create the eth setup"). Across the full paper history
+        # (n=266) ETH 15m BUY_YES splits cleanly by ETH's OWN 1h tape: BEARISH +$107.71
+        # (53% WR, n=62) vs NEUTRAL -$42.98 and BULLISH -$47.16 (bull-chasing bleed).
+        # RSI does NOT separate (winners span RSI 30-79) — tape does. Gate the long to
+        # the bearish-tape reversal only; ETH-NATIVE (own 1h, no BTC dependency, per
+        # "alts decided by alt-native indicators"). Side-isolated (BUY_YES), 15m only
+        # (5m stays a collection lane). Opt-in: eth_15m_buy_yes_bearish_tape_only_enabled.
+        if (
+            window_size == "15m"
+            and decision.action == "BUY_YES"
+            and bool(self.config.get("eth_15m_buy_yes_bearish_tape_only_enabled", False))
+        ):
+            if str(alt_h1_trend or "").upper() != "BEARISH":
+                return "eth_15m_long_not_bearish_tape"
 
         return None
 
@@ -1404,6 +1422,41 @@ class ETHMacroStrategy(SolMacroStrategy):
                     f"rising:{btc_htf_details['macd_4h_histogram_rising']}"
                 )
 
+            # 2026-07-29 (Codex) SHORT-THE-BULL 5m gate — placed OUTSIDE the
+            # enforce_alt_1h_alignment wrapper (which is False for eth, so an inside block
+            # would never fire). Hard-block 5m BUY_NO into a BULLISH eth 1h — the
+            # eth_5m_native short-into-bull leak. NARROW: 5m only; 15m/1h unaffected.
+            # Opt-out: short_the_bull_5m_guard_enabled: false.
+            if (
+                action == "BUY_NO"
+                and mtt.h1_trend == "BULLISH"
+                and _updown_tf == "5m"
+                and bool(self.config.get("short_the_bull_5m_guard_enabled", True))
+            ):
+                _sb_src = str(side_source or "")
+                if _sb_src.endswith("_vs_slower") or "5m_native" in _sb_src:
+                    _bump_skip("eth_5m_short_against_h1")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason="eth_5m_short_against_h1",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_1h_trend": mtt.h1_trend,
+                            "window_size": _updown_tf,
+                            "side_source": side_source,
+                        },
+                    )
+                    logger.info(
+                        "  ETH skip BUY_NO on '%s' — ETH 1H BULLISH blocks 5m short "
+                        "(short-the-bull)",
+                        market.question[:40],
+                    )
+                    continue
+
             if self.enforce_alt_1h_alignment:
                 _alt_1h_block_reason = self._alt_1h_alignment_blocks_entry(
                     action=action,
@@ -1537,7 +1590,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                         ),
                     )
                     continue
-            _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, eth.rsi_14)
+            _own_rsi, _own_macd = self._own_tf_rsi_macd(eth, _updown_tf)
+            _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
             if _rsi_hard_block:
                 _bump_skip("rsi_hard_blocked")
                 if action == "BUY_NO":
@@ -2086,6 +2140,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 market_allowed_side = "LONG"
                 side_source = f"{side_source or ''}+eth_5m_no_to_yes_flip"
                 reason_parts.append("eth_5m_no_to_yes_flip")
+            # 2026-07-30 WRONG-DIRECTION FIX (P0): re-gate the FINAL post-flip action. The gate above
+            # ran on the pre-flip side; flips (fresh-cross/window-delta/posterior/5m-to-yes) can turn a
+            # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
+            # _post_flip_disabled_side re-check.
+            _pf_rsi, _pf_macd = self._own_tf_rsi_macd(eth, _updown_tf)
+            _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+            if _pf_hard:
+                _bump_skip("rsi_hard_blocked_postflip")
+                continue
             # 2026-07-03 ETH port of admission shrink (sol/btc: _admission_prob):
             # deflate overconfident est toward 0.5 for the min_edge comparison only;
             # estimated_prob itself stays raw for floors/logging.
@@ -2173,6 +2236,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
             if _eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max:
                 _bump_skip("lane_entry_window")
+                log_window_reject(
+                    self.full_config, market=market, strategy=self._signal_strategy_name,
+                    window=_updown_tf, side=market_allowed_side, action=action,
+                    side_source=locals().get("side_source") or locals().get("_reject_side_source"),
+                    eval_mins_left=_eval_left,
+                    entry_window_min=lane_policy.entry_window_min,
+                    entry_window_max=lane_policy.entry_window_max,
+                    yes_price=yes_price, est_prob=estimated_prob, edge=locals().get("edge"),
+                )
                 _log_skip_reject(
                     market=market,
                     window=_updown_tf,
@@ -2714,8 +2786,17 @@ class ETHMacroStrategy(SolMacroStrategy):
             _admit_marginal_no_ai = self._admit_marginal_quant_short(
                 edge, action, _timing_window_open, window=_updown_tf
             )
-            if edge < effective_min_edge and not _admit_marginal_no_ai:
-                if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
+            # 2026-07-29 FEE-AWARE GATE (mirror of sol_macro): subtract the venue taker-fee
+            # hurdle so admission is net-of-fee, and drop the marginal rescue if the net edge
+            # no longer clears the marginal floor. No-op when fee_aware_edge.enabled=false.
+            _fee_hurdle = fee_aware_edge_hurdle(self.config, yes_price)
+            _net_edge = edge - _fee_hurdle
+            if _admit_marginal_no_ai and _fee_hurdle > 0.0 and _net_edge < float(
+                self.config.get("ai_updown_marginal_min_edge", 0.03)
+            ):
+                _admit_marginal_no_ai = False
+            if _net_edge < effective_min_edge and not _admit_marginal_no_ai:
+                if rsi_soft_penalty > 0 and (_net_edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
                 _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
                 _reject_reason = "beta_vetoed" if _vetoed else "lane_min_edge"
@@ -2733,6 +2814,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                     context={
                         "edge": round(float(edge), 6),
                         "effective_min_edge": round(float(effective_min_edge), 6),
+                        "fee_hurdle": round(float(_fee_hurdle), 6),
+                        "net_edge": round(float(_net_edge), 6),
                         "raw_est_prob": round(float(raw_est_prob), 6),
                         "estimated_prob": round(float(estimated_prob), 6),
                         "confidence": round(float(confidence), 6),
@@ -3341,4 +3424,45 @@ class ETHMacroStrategy(SolMacroStrategy):
                     _st["signals"] = len(signals)
             except Exception:
                 pass
+        # 2026-07-29 per-pulse fan-out dedup (PORTED from sol_macro — eth_macro's
+        # duplicated scan loop never had it). eth 15m UP was firing the SAME (window,side)
+        # signal on EVERY open future 15m market in one scan (e.g. 4 entries on the
+        # 8:15/8:30/8:45/9:00 windows within 6s), betting one coin-flip 4-6x in parallel
+        # then never-green-cutting the whole batch. Collapse to ONE market per
+        # (window_size, action): the nearest-resolving. Same config key as sol; opt-out,
+        # default on.
+        if bool(self.config.get("dedup_concurrent_window_signals", True)):
+            def _end_ts(sig):
+                end = getattr(sig, "end_date", None)
+                try:
+                    return end.timestamp() if end is not None else None
+                except Exception:
+                    return None
+            best: Dict[tuple, Any] = {}
+            passthrough = []
+            for s in signals:
+                w = getattr(s, "window_size", None)
+                a = getattr(s, "action", None)
+                ts = _end_ts(s)
+                if w is None or a is None or ts is None:
+                    passthrough.append(s)  # can't key/rank → keep (fail-safe)
+                    continue
+                k = (w, a)
+                cur = best.get(k)
+                if cur is None or ts < cur[0]:
+                    best[k] = (ts, s)
+            deduped = passthrough + [v[1] for v in best.values()]
+            if len(deduped) != len(signals):
+                logger.info(
+                    "%s fan-out dedup: %d -> %d signals (collapsed duplicate "
+                    "(window,side) markets; kept nearest-resolving)",
+                    self._signal_strategy_name, len(signals), len(deduped),
+                )
+                try:
+                    _st = self.last_scan_stats
+                    if isinstance(_st, dict) and "signals" in _st:
+                        _st["signals"] = len(deduped)
+                except Exception:
+                    pass
+            signals = deduped
         return signals

@@ -48,6 +48,10 @@ DEFAULT_SETTLED_INDEX = DEFAULT_CALIBRATION_DIR / "settled_index.txt"
 DEFAULT_REGIME_LOG = DEFAULT_CALIBRATION_DIR / "market_regime.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
 RESOLVED_BUFFER_SEC = 90
+# Backstop bound on the incremental pending queue: drop a row after this many failed
+# re-check passes even if its ts is unparseable (age-based drop can't apply). At a
+# 15-min loop that's ~5 days of retries; the 3-day age drop normally fires first.
+PENDING_MAX_RETRIES = 480
 
 # Pooled session for per-market resolution fetches. A raw requests.get() per
 # market opens a new TCP/TLS connection (new OpenSSL context) every call — native
@@ -158,6 +162,55 @@ def _iter_raw_lines(path: Path) -> Iterable[str]:
                     yield line
     except OSError as exc:
         logger.warning("rejected-candidate raw read failed (%s): %s", path, exc)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write ALL bytes to ``fd``, looping over POSIX short writes. os.write() may write
+    fewer bytes than requested without raising; a partially-written settled row would
+    corrupt the JSONL and (in incremental mode) let the offset advance past a row that
+    was never fully persisted. Loop until done or raise OSError on a stuck write."""
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError("short/zero-length write to settled log")
+        view = view[n:]
+
+
+def _iter_log_tail(path: Path, start_offset: int, offset_holder: List[int]) -> Iterable[str]:
+    """Stream stripped non-empty lines from byte ``start_offset`` to EOF, yielding ONLY
+    complete ``\\n``-terminated records and advancing ``offset_holder[0]`` to the byte
+    offset AFTER the last complete line consumed.
+
+    The incremental-settle optimization (2026-07-30): instead of re-reading the whole
+    ~788MB rejected log every pass (the RSS churn that got ghost-settle severed from the
+    hot path on 07-13), the caller checkpoints this offset and next pass reads only new
+    appends. A partial trailing line (writer mid-append) is NOT consumed — the offset
+    stops before it, so the completed row is read whole next pass (no skip). Binary +
+    line-at-a-time = memory-bounded even on the first full-backlog pass (offset 0).
+    """
+    if not path.exists():
+        return
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            off = start_offset if 0 <= start_offset <= size else 0  # rotation/truncation reset
+            offset_holder[0] = off
+            fh.seek(off)
+            while True:
+                raw = fh.readline()
+                if not raw:
+                    break
+                if not raw.endswith(b"\n"):
+                    break  # partial trailing line — stop BEFORE it; re-read whole next pass
+                off += len(raw)
+                offset_holder[0] = off
+                s = raw.decode("utf-8", "replace").strip()
+                if s:
+                    yield s
+    except OSError as exc:
+        logger.warning("rejected-candidate offset read failed (%s): %s", path, exc)
 
 
 def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -832,10 +885,21 @@ def settle_rejected_candidates(
     throttle_sec: float = 0.0,
     calibrator: Optional[Any] = None,
     ghost_weight: float = 0.5,
+    start_offset: Optional[int] = None,
+    pending_path: Optional[Path] = None,
+    pending_max_age_sec: float = 3 * 86400.0,
 ) -> Dict[str, Any]:
     """Settle any newly resolvable ghost candidates.
 
     Idempotent: previously settled rows are skipped via ``ghost_id``.
+
+    INCREMENTAL MODE (2026-07-30, opt-in via ``start_offset`` / ``pending_path``):
+    Instead of re-reading the whole 788MB rejected log every pass, read only NEW bytes
+    since ``start_offset`` and re-check a small ``pending_path`` queue of previously
+    unresolvable rows (``too_recent`` / ``unresolved_or_api``). Rows that still can't
+    settle are re-queued; rows past ``pending_max_age_sec`` are dropped (market will
+    never resolve). Summary gains ``end_offset`` (new tail) + ``pending`` (queue size).
+    Legacy full-scan behavior is unchanged when both are None.
 
     When ``calibrator`` is supplied, each newly-settled record's would-have-been
     outcome is fed to ``calibrator.record_ghost(lane_id, win, weight=ghost_weight)``
@@ -869,7 +933,39 @@ def settle_rejected_candidates(
     newly_settled_ids: List[str] = []
     ts_now = now or datetime.now(timezone.utc)
 
-    for _line in _iter_raw_lines(input_path):
+    # ---- incremental mode: offset checkpoint + pending re-check queue ----
+    new_pending: List[Dict[str, Any]] = []
+    _new_pending_ids: set[str] = set()
+    _offset_holder: List[int] = [start_offset or 0]
+
+    def _iter_input_lines() -> Iterable[str]:
+        # Re-check the SMALL pending queue first (rows that were too_recent / API-down).
+        if pending_path is not None and pending_path.exists():
+            for _prec in _iter_jsonl(pending_path):
+                yield json.dumps(_prec, separators=(",", ":"))
+        # Then only the NEW appended bytes of the (huge) reject log since last checkpoint.
+        if start_offset is not None:
+            yield from _iter_log_tail(input_path, start_offset, _offset_holder)
+        else:
+            yield from _iter_raw_lines(input_path)
+
+    def _requeue(rec: Dict[str, Any], gid: str) -> None:
+        """Keep an unresolved row for a later pass. Bounded two ways: drop when older
+        than ``pending_max_age_sec``, AND drop after PENDING_MAX_RETRIES re-checks (so a
+        row with a malformed/missing ts can't be re-queued forever)."""
+        if pending_path is None or gid in _new_pending_ids:
+            return
+        _dt = _parse_dt(rec.get("ts"))
+        if _dt is not None and (ts_now - _dt).total_seconds() > pending_max_age_sec:
+            return  # market will never resolve — stop re-checking it
+        _tries = int(rec.get("_settle_retries", 0) or 0) + 1
+        if _tries > PENDING_MAX_RETRIES:
+            return  # backstop for unparseable ts / permanently-stuck rows
+        rec["_settle_retries"] = _tries
+        _new_pending_ids.add(gid)
+        new_pending.append(rec)
+
+    for _line in _iter_input_lines():
         # Cheap pre-filter: skip already-settled rows WITHOUT a full json.loads of
         # the fat nested row. Most rows are already settled, so this avoids ~95%
         # of the per-settle parse churn that was ratcheting RSS toward OOM.
@@ -899,6 +995,7 @@ def settle_rejected_candidates(
                 end_dt = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
                 if (ts_now - end_dt).total_seconds() < RESOLVED_BUFFER_SEC:
                     summary["too_recent"] += 1
+                    _requeue(rec, gid)
                     continue
             except ValueError:
                 pass
@@ -908,6 +1005,7 @@ def settle_rejected_candidates(
             time.sleep(throttle_sec)
         if outcome is None:
             summary["unresolved_or_api"] += 1
+            _requeue(rec, gid)
             continue
 
         wb = compute_would_be(
@@ -961,6 +1059,9 @@ def settle_rejected_candidates(
             summary["regime_unmatched"] += 1
         settle_records.append(settled_rec)
         newly_settled_ids.append(gid)
+        settled_ids.add(gid)  # same-pass dedup: a gid appearing twice this pass (pending
+        # + new bytes, or a dup log line) is now caught by the `gid in settled_ids` guard
+        # above instead of being written twice.
         summary["newly_settled"] += 1
 
         # Self-healing: feed ghost outcome into calibrator β at reduced weight,
@@ -986,28 +1087,54 @@ def settle_rejected_candidates(
             except Exception as _gpe:  # noqa: BLE001 — telemetry must not block settle
                 logger.warning("ghost calibrator update skipped: %s", _gpe)
 
+    # Checkpoint integrity: the tail offset may ONLY advance if BOTH the settled append
+    # and the pending rewrite this pass succeeded. If either fails, the caller must keep
+    # the old offset and re-read these bytes next pass (idempotent) rather than skip them.
+    _checkpoint_ok = True
     if not dry_run and settle_records:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(output_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
             try:
                 for rec in settle_records:
-                    os.write(
+                    _write_all(
                         fd,
                         (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8"),
                     )
-                    summary["written"] += 1
+                    summary["written"] += 1  # incremented only after FULL persistence
             finally:
                 os.close(fd)
             # Keep the idempotency index in lock-step with the settled jsonl so
-            # the next cycle does not re-settle these rows, and advance the tail
-            # offset to the new EOF. Best-effort: a failure here only costs a
-            # future rebuild (the index self-heals), never correctness.
+            # the next cycle does not re-settle these rows. Best-effort: a failure
+            # here only costs a future rebuild (the index self-heals).
             if use_index and newly_settled_ids:
                 _append_settled_index(index_path, newly_settled_ids)
                 _write_settled_index_meta(index_path, output_path)
         except OSError as exc:
             logger.warning("rejected_candidate_tracker append failed (%s): %s", output_path, exc)
+            _checkpoint_ok = False  # settled rows not persisted -> do NOT advance offset
+
+    # Persist the (small) pending re-check queue: rows seen this pass that still
+    # could not settle (too_recent / API-down) and are young enough to retry. This
+    # replaces the file wholesale — resolved rows simply fall out of the queue.
+    if not dry_run and pending_path is not None:
+        try:
+            pending_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = pending_path.with_suffix(pending_path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for rec in new_pending:
+                    fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+            os.replace(tmp, pending_path)
+        except OSError as exc:
+            logger.warning("ghost pending-queue write failed (%s): %s", pending_path, exc)
+            _checkpoint_ok = False  # requeued rows not persisted -> do NOT advance offset
+        summary["pending"] = len(new_pending)
+
+    # Only expose the advanced offset when the checkpoint is safe to persist; on any
+    # write failure report the ORIGINAL offset so the caller re-reads (never skips).
+    if start_offset is not None:
+        summary["checkpoint_ok"] = _checkpoint_ok
+        summary["end_offset"] = _offset_holder[0] if _checkpoint_ok else start_offset
 
     return summary
 
