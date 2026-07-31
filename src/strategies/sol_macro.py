@@ -1987,36 +1987,9 @@ class SolMacroStrategy:
         )
         return side, policy
 
-    def _pocket_rsi_floor_tape_adjusted(self, base_floor, tf: str):
-        """Tape-adaptive pocket RSI floor (2026-07-26 operator GO, dynamic 'A').
-
-        Moves the FROZEN buy_no pocket RSI floor with the lane's tape signal — the RSI
-        axis Codex flagged that the min_edge admission delta cannot cover:
-          - losing never-green short lane -> RAISE the floor (block more oversold shorts)
-          - winning lane -> LOWER the floor (admit more oversold shorts = frequency)
-        Derived from the SAME per-lane admission delta (get_tape_admission_delta, edge
-        units) scaled to RSI points, so RSI adapts in lockstep with min_edge — no adapter
-        change, so this hot-reloads (sol_macro is a code-reload module; keys via
-        self.config.get). Clamped to a sane band. Guarded -> base_floor on any error.
-        """
-        try:
-            # keys live under ROOT lane_tape_adapter (self.config is the per-strategy
-            # sub-dict; read full_config like get_loosen_min_edge_mult does — hot-reloads).
-            _lta = self.full_config.get("lane_tape_adapter", {}) if isinstance(self.full_config, dict) else {}
-            _lta = _lta or {}
-            if not bool(_lta.get("pocket_rsi_tape_enabled", True)):
-                return base_floor
-            _adm = get_tape_admission_delta(self._signal_strategy_name, tf, "down")
-            if not _adm:
-                return base_floor
-            _max_pts = float(_lta.get("pocket_rsi_tape_max_points", 8.0) or 8.0)
-            # admission tighten_max ~0.05 edge -> full RSI points; loosen scales the same
-            _pts = max(-_max_pts, min(_max_pts, _adm / 0.05 * _max_pts))
-            _fmin = float(_lta.get("pocket_rsi_tape_floor_min", 15.0) or 15.0)
-            _fmax = float(_lta.get("pocket_rsi_tape_floor_max", 60.0) or 60.0)
-            return max(_fmin, min(_fmax, float(base_floor) + _pts))
-        except Exception:
-            return base_floor
+    # _pocket_rsi_floor_tape_adjusted REMOVED 2026-07-31 (Phase-1): orphaned — it read a
+    # root lane_tape_adapter.pocket_rsi_tape_* config block that no longer exists, so it was
+    # always a pass-through. Pocket-floor admission now lives in _resolve_rsi_gate.
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
@@ -2262,19 +2235,46 @@ class SolMacroStrategy:
         _macd = getattr(asset, _macd_attr, None) if _macd_attr else None
         return _rsi, _macd
 
-    def _resolve_rsi_gate(self, action: str, rsi: float, *, macd=None) -> tuple[bool, float]:
-        """Return (hard_block, est_prob_delta) for RSI-based suppression policy.
+    def _resolve_rsi_gate(
+        self,
+        action: str,
+        rsi: float,
+        *,
+        macd=None,
+        window=None,
+    ) -> tuple[bool, float, float]:
+        """Return (hard_block, est_prob_delta, min_edge_add) — the SINGLE BUY_NO/BUY_YES
+        RSI admission policy (2026-07-31 Phase-1 consolidation).
 
-        2026-07-30 Fix B — OVERSOLD-SHORT EXHAUSTION GATE. An oversold RSI means the
-        down-move is already stretched; shorting there only makes sense if momentum is
-        STILL confirming down (real downtrend continuation). If the RSI is oversold AND
-        the own-tf MACD is flattening / rising / bullish-crossing (exhaustion -> bounce),
-        BLOCK the short — that oversold-bounce is what repeatedly cost us. This preserves
-        real-downtrend shorts (momentum still falling) while cutting the bounce shorts, so
-        it beats a blanket RSI floor (which was regime-dependent and cut winners in strong
-        downtrends). Default-on, opt-out via oversold_short_exhaustion_gate: false."""
+        Folds three formerly-scattered mechanisms into one place:
+          1. exhaustion gate: rsi<=rsi_sell_block_below (BUY_NO) / >=rsi_buy_block_above
+             (BUY_YES). Oversold short is HARD-blocked unless own-tf MACD still confirms the
+             down-move (real continuation) — that preserves real downtrends and cuts the
+             exhaustion-bounce shorts, without a blanket floor (the +800 winner-cut risk).
+          2. hard/soft rsi penalty (rsi_hard_gate_enabled / rsi_soft_penalty_*).
+          3. per-TF pocket floor buy_no_{window}_pocket_rsi_min (the RSI 30-35 band the
+             exhaustion gate leaks): if a soft penalty is set -> return min_edge_add (weak
+             low-RSI shorts must clear a higher bar, strong continuation still passes);
+             if NO soft penalty is set -> preserve the legacy HARD pocket reject (BNB)."""
         if rsi is None:
-            return False, 0.0
+            return False, 0.0, 0.0
+
+        # Legacy HARD pocket reject (BNB): buy_no_{window}_pocket_rsi_min set with NO soft
+        # penalty => hard-block the WHOLE band rsi < pocket_min, MACD-INDEPENDENT (reproduces
+        # the deleted early block's `continue`). Evaluated BEFORE the exhaustion gate so an
+        # oversold rsi<=sell_floor with a still-falling MACD can't slip through as
+        # "continuation" (Codex review 2026-07-31). Soft-penalty lanes (XRP) skip this and
+        # fall through to the exhaustion gate + per-TF soft floor below.
+        if action == "BUY_NO" and window is not None:
+            _pf_min = self.config.get(f"buy_no_{window}_pocket_rsi_min")
+            if _pf_min is not None and rsi < float(_pf_min):
+                _pf_pen = max(
+                    0.0,
+                    float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0),
+                )
+                if _pf_pen <= 0.0:
+                    return True, 0.0, 0.0
+
         buy_ceiling = self.config.get("rsi_buy_block_above")
         sell_floor = self.config.get("rsi_sell_block_below")
         hit = (
@@ -2286,32 +2286,46 @@ class SolMacroStrategy:
             and sell_floor is not None
             and rsi <= float(sell_floor)
         )
-        if not hit:
-            return False, 0.0
 
-        # Fix B: oversold + momentum-not-confirming-down => bounce risk => hard block.
-        if (
-            action == "BUY_NO"
-            and macd is not None
-            and bool(self.config.get("oversold_short_exhaustion_gate", True))
-        ):
-            _hist = float(getattr(macd, "histogram", 0.0) or 0.0)
-            _rising = bool(getattr(macd, "histogram_rising", False))
-            _cross = str(getattr(macd, "crossover", "") or "")
-            _still_falling = (_hist < 0.0) and (not _rising) and (_cross != "BULLISH_CROSS")
-            if not _still_falling:
-                return True, 0.0
+        if hit:
+            # Fix B: oversold + momentum-not-confirming-down => bounce risk => hard block.
+            if (
+                action == "BUY_NO"
+                and macd is not None
+                and bool(self.config.get("oversold_short_exhaustion_gate", True))
+            ):
+                _hist = float(getattr(macd, "histogram", 0.0) or 0.0)
+                _rising = bool(getattr(macd, "histogram_rising", False))
+                _cross = str(getattr(macd, "crossover", "") or "")
+                _still_falling = (_hist < 0.0) and (not _rising) and (_cross != "BULLISH_CROSS")
+                if not _still_falling:
+                    return True, 0.0, 0.0
 
-        if self.rsi_hard_gate_enabled:
-            return True, 0.0
-        if not self.rsi_soft_penalty_enabled:
-            return False, 0.0
+            if self.rsi_hard_gate_enabled:
+                return True, 0.0, 0.0
+            if not self.rsi_soft_penalty_enabled:
+                return False, 0.0, 0.0
 
-        if action == "BUY_YES":
-            penalty = max(0.0, self.rsi_soft_penalty_buy_yes)
-            return False, -penalty
-        penalty = max(0.0, self.rsi_soft_penalty_buy_no)
-        return False, penalty
+            if action == "BUY_YES":
+                penalty = max(0.0, self.rsi_soft_penalty_buy_yes)
+                return False, -penalty, 0.0
+            penalty = max(0.0, self.rsi_soft_penalty_buy_no)
+            return False, penalty, 0.0
+
+        # Per-TF SOFT pocket floor for the band ABOVE the exhaustion sell_floor (e.g.
+        # 30<rsi<35). Soft-penalty lanes only (XRP); the no-soft-penalty HARD case was already
+        # handled MACD-independently at the top of this function.
+        if action == "BUY_NO" and window is not None:
+            soft_floor = self.config.get(f"buy_no_{window}_pocket_rsi_min")
+            if soft_floor is not None and rsi < float(soft_floor):
+                _pen = max(
+                    0.0,
+                    float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0),
+                )
+                if _pen > 0.0:
+                    return False, 0.0, _pen  # soft: raise the edge bar (XRP)
+
+        return False, 0.0, 0.0
 
     def _oracle_basis_blocks_entry(self, oracle_basis_bps: Optional[float]) -> bool:
         """Optional hard gate when spot diverges too far from the oracle reference."""
@@ -3002,19 +3016,15 @@ class SolMacroStrategy:
             elif rsi > self.ep_rsi_ob_crash:  rsi_adj =  0.04   # Overbought crash potential
             # Removed: mirror of removed UP bonus
 
-        # BTC-alt lag — REMOVED from alt est_prob calculation 2026-05-22.
-        # Per "alts decided by alt-native indicators" rule, BTC lag must not
-        # adjust alt edge. The prior nudge was data-supported as harmful anyway
-        # (live: lag=None = 63% WR, lag=value = 50% WR — lag arrives after the
-        # market has already priced in the move). Kept as zero for downstream
-        # arithmetic compatibility.
-        lag_adj = 0.0
+        # BTC-alt lag adjustment removed 2026-05-22 (alts decided by alt-native
+        # indicators; live: lag=None 63% WR vs lag=value 50% WR). 2026-07-31 Phase-1
+        # cleanup: the dead `lag_adj = 0.0` term was deleted from the est sum below.
 
         # ATR-based volatility context
         vol_adj = 0.0
         atr_pct = ta.sol.atr_14 / sol_price if sol_price > 0 else 0
-        if atr_pct > self.ep_atr_high_pct:  # High vol for this asset
-            vol_adj = 0.02 if direction == "UP" else 0.02  # More room to move
+        if atr_pct > self.ep_atr_high_pct:  # High vol: more room to reach threshold
+            vol_adj = 0.02  # 2026-07-31: was `0.02 if UP else 0.02` (identical branches)
         elif atr_pct < self.ep_atr_low_pct:
             vol_adj = -0.03  # Low vol, harder to reach threshold
 
@@ -3023,7 +3033,7 @@ class SolMacroStrategy:
             time_factor = min(1.0, days_to_resolution / 60.0)
             base_prob = base_prob * (1 - time_factor * 0.3) + 0.50 * (time_factor * 0.3)
 
-        final = base_prob + ltf_adj + timing_adj + rsi_adj + lag_adj + vol_adj
+        final = base_prob + ltf_adj + timing_adj + rsi_adj + vol_adj
         return max(0.05, min(0.95, final))
 
     # ──────────────────────────────────────────────────────────────
@@ -3473,6 +3483,11 @@ class SolMacroStrategy:
                 else "15m"
             )
             window_label = _updown_tf
+            # 2026-07-31 Phase-1: per-candidate default for the consolidated RSI pocket-floor
+            # min-edge add (set by _resolve_rsi_gate at the gate call sites; applied at the
+            # final edge block). Bound here so no path can hit it undefined or carry a stale
+            # value from the previous candidate.
+            rsi_min_edge_add = 0.0
             # Threshold-market-only locals. Up/down markets never assign these, but the
             # shared AI-tiebreaker context path below reads them. Bind safe defaults so
             # up/down candidates can't raise UnboundLocalError on the AI path (regression
@@ -3651,37 +3666,9 @@ class SolMacroStrategy:
                         context={"side_source": side_source, "rsi_14": _alt_rsi},
                     )
                     continue
-            # 2026-06-16: per-window BUY_NO POCKET restriction (RSI floor). For a short lane
-            # whose low-RSI shorts are -EV (chasing oversold dips that bounce) while RSI>=min
-            # is +EV: admit BUY_NO only when alt RSI >= `buy_no_<window>_pocket_rsi_min`.
-            # BNB 1h: RSI<45 -EV, 45-55 +0.408 -> min 45. BNB 15m: RSI<35 -0.098, >=35 +EV
-            # -> min 35. Opt-in (key unset = off); ghost-logs the rejected rest.
-            _bn_pocket_rsi_min = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_min")
-            if _bn_pocket_rsi_min is not None:
-                _bn_pocket_rsi_min = self._pocket_rsi_floor_tape_adjusted(
-                    _bn_pocket_rsi_min, _updown_tf
-                )
-            if is_updown and action == "BUY_NO" and _bn_pocket_rsi_min is not None:
-                _alt_rsi = getattr(sol, "rsi_14", None)
-                if _alt_rsi is not None and float(_alt_rsi) < float(_bn_pocket_rsi_min):
-                    if float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0) > 0.0:
-                        # DYNAMIC soft mode (per-lane opt-in): do NOT hard-reject the oversold
-                        # short on the EARLY action -- defer to a min-edge bump on the FINAL
-                        # post-flip action at the edge gate below. sol left hard (+$88 winner).
-                        pass
-                    else:
-                        _bump_skip(f"buy_no_{_updown_tf}_pocket_off")
-                        _log_skip_reject(
-                            market=market,
-                            window=_updown_tf,
-                            side=allowed_side,
-                            action=action,
-                            reason=f"buy_no_{_updown_tf}_pocket_off",
-                            yes_price=yes_price,
-                            htf_bias=primary_htf_bias,
-                            context={"side_source": side_source, "rsi_14": _alt_rsi},
-                        )
-                        continue
+            # 2026-07-31 Phase-1: the early per-window BUY_NO pocket RSI floor moved into the
+            # consolidated _resolve_rsi_gate (hard reject when no soft penalty = BNB; soft
+            # min_edge_add when a penalty is set = XRP). This duplicated block is deleted.
             # 2026-07-28: per-window BUY_NO POCKET CEILING (RSI max) — mirror of the
             # buy_yes pocket_rsi_max but for shorts on FAST windows where the RSI dynamic
             # INVERTS vs 1h/15m. 5m shorts are +EV only when genuinely oversold (low RSI,
@@ -4333,7 +4320,12 @@ class SolMacroStrategy:
                             f"alt 1H BEARISH retained as diagnostic only"
                         )
                 _own_rsi, _own_macd = self._own_tf_rsi_macd(sol, _updown_tf if is_updown else "15m")
-                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
+                _rsi_hard_block, _rsi_soft_delta, rsi_min_edge_add = self._resolve_rsi_gate(
+                    action,
+                    _own_rsi,
+                    macd=_own_macd,
+                    window=_updown_tf if is_updown else "15m",
+                )
                 if _rsi_hard_block:
                     _bump_skip("rsi_hard_blocked")
                     if action == "BUY_NO":
@@ -4853,7 +4845,12 @@ class SolMacroStrategy:
                     # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
                     # _post_flip_disabled_side re-check.
                     _pf_rsi, _pf_macd = self._own_tf_rsi_macd(sol, _updown_tf if is_updown else "15m")
-                    _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+                    _pf_hard, _, rsi_min_edge_add = self._resolve_rsi_gate(
+                        action,
+                        _pf_rsi,
+                        macd=_pf_macd,
+                        window=_updown_tf if is_updown else "15m",
+                    )
                     if _pf_hard:
                         _bump_skip("rsi_hard_blocked_postflip")
                         continue
@@ -5169,7 +5166,12 @@ class SolMacroStrategy:
                     # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
                     # _post_flip_disabled_side re-check.
                     _pf_rsi, _pf_macd = self._own_tf_rsi_macd(sol, _updown_tf)
-                    _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+                    _pf_hard, _, rsi_min_edge_add = self._resolve_rsi_gate(
+                        action,
+                        _pf_rsi,
+                        macd=_pf_macd,
+                        window=_updown_tf,
+                    )
                     if _pf_hard:
                         _bump_skip("rsi_hard_blocked_postflip")
                         continue
@@ -5248,7 +5250,12 @@ class SolMacroStrategy:
                 )
 
                 _own_rsi, _own_macd = self._own_tf_rsi_macd(sol, _updown_tf)
-                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
+                _rsi_hard_block, _rsi_soft_delta, rsi_min_edge_add = self._resolve_rsi_gate(
+                    action,
+                    _own_rsi,
+                    macd=_own_macd,
+                    window=_updown_tf,
+                )
                 if _rsi_hard_block:
                     _bump_skip("rsi_hard_blocked")
                     logger.info(
@@ -5993,24 +6000,15 @@ class SolMacroStrategy:
                         "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
                     }
 
-            # DYNAMIC pocket-RSI soft penalty (2026-07-24) — on the FINAL post-flip action.
-            # An oversold BUY_NO must clear effective_min_edge + penalty; weak low-RSI shorts
-            # (they bleed in a bounce) fall out, strong-edge ones pass, and the lane self-admits
-            # again when low-RSI shorts win. Per-lane opt-in; pairs with the pocket gate which
-            # skips its static hard reject when this is set. Replaces static floor w/ dynamic bar.
+            # 2026-07-31 Phase-1: pocket-RSI soft penalty now comes from the consolidated
+            # _resolve_rsi_gate (rsi_min_edge_add), computed on the FINAL post-flip action
+            # above. Apply it here to the edge bar. Weak low-RSI BUY_NO shorts must clear
+            # effective_min_edge + add; strong-edge continuation still passes.
             _pkt_soft_applied = False
-            _pkt_soft = float(self.config.get("buy_no_pocket_rsi_soft_penalty", 0.0) or 0.0)
-            if _pkt_soft > 0.0 and is_updown and action == "BUY_NO":
-                _pkt_min = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_min")
-                if _pkt_min is not None:
-                    _pkt_min = self._pocket_rsi_floor_tape_adjusted(_pkt_min, _updown_tf)
-                _pkt_rsi = getattr(sol, "rsi_14", None)
-                if _pkt_min is not None and _pkt_rsi is not None and float(_pkt_rsi) < float(_pkt_min):
-                    effective_min_edge = float(effective_min_edge) + _pkt_soft
-                    _pkt_soft_applied = True  # Codex 2026-07-24: block the AI-off marginal bypass below
-                    reason_parts.append(
-                        f"pocket_rsi_soft={_pkt_soft:.3f}(rsi={float(_pkt_rsi):.1f}<{float(_pkt_min):.0f})"
-                    )
+            if rsi_min_edge_add > 0.0:
+                effective_min_edge = float(effective_min_edge) + rsi_min_edge_add
+                _pkt_soft_applied = True  # block the AI-off marginal bypass below
+                reason_parts.append(f"pocket_rsi_soft={rsi_min_edge_add:.3f}")
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             _ai_updown_observe_only = bool(

@@ -147,7 +147,11 @@ trading:
     min_n_down: 4     # 2026-07-30 2a: was 6 — downsize losing lanes sooner (protective; asymmetric, up stays 12)
     min_n_up: 12      # keep conservative — never grow a lane on <12 recent trades
     mult_floor: 0.40
-    mult_ceil: 1.60
+    mult_ceil: 1.00   # 2026-07-31 (Codex sizing consolidation, Phase 0): was 1.60. CAP the
+    # realized upsize at 1.0 — do NOT grow "winning" lanes while est_prob is AUC~0.50/inverted
+    # (a lane winning by variance would get 1.6x right before it reverts). Loser-downsizing
+    # (mult_floor 0.40) preserved = the operator's "downsize losers only, never winners" rule.
+    # Hot-reload, trivially reverted to 1.60 once est_prob is repaired.
     roi_scale: 0.22   # 2026-07-30 2a: was 0.35 — smaller scale => tanh saturates faster => a given loss moves the mult more (was too timid: all mults stuck ~1.0)
     sensitivity: 0.80 # 2026-07-30 2a: was 0.6 — move the mult more per unit signal
     ema_alpha: 0.50   # 2026-07-30 2a: was 0.3 — faster convergence to target (still smoothed; also see state RESET so stale +prior inertia no longer sizes a 0%-WR lane UP)
@@ -1798,6 +1802,15 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
+    # 2026-07-31 PHASE 0 (operator GO, Codex round-1/2) — XRP 5m oversold-short leak.
+    # PROVEN: xrp 5m BUY_NO at RSI<35 went 0/4 held-win (oversold-shorts-into-bounce).
+    # Exhaustion gate only hard-blocks rsi<=rsi_sell_block_below(30), leaking 30-35.
+    # SOFT floor: when 5m RSI < 35, _resolve_rsi_gate raises effective_min_edge by 0.04
+    # so weak low-RSI shorts fall out while genuine high-edge continuation still clears.
+    # NOT applied to SOL (n=2, a 35 floor would cut the one SOL winner). Superseded by
+    # the Phase-1 buy_no_oversold_admission consolidation at next restart.
+    buy_no_5m_pocket_rsi_min: 35.0
+    buy_no_pocket_rsi_soft_penalty: 0.04
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45

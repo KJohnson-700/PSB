@@ -88,13 +88,13 @@ def test_optional_rsi_buy_ceiling_soft_penalty_by_default():
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    hard, delta = strategy._resolve_rsi_gate("BUY_YES", 84.8)
+    hard, delta, _ = strategy._resolve_rsi_gate("BUY_YES", 84.8)
     assert hard is False
     assert delta < 0
-    hard2, delta2 = strategy._resolve_rsi_gate("BUY_YES", 79.9)
+    hard2, delta2, _ = strategy._resolve_rsi_gate("BUY_YES", 79.9)
     assert hard2 is False
     assert delta2 == 0.0
-    hard3, delta3 = strategy._resolve_rsi_gate("BUY_NO", 84.8)
+    hard3, delta3, _ = strategy._resolve_rsi_gate("BUY_NO", 84.8)
     assert hard3 is False
     assert delta3 == 0.0
 
@@ -214,7 +214,7 @@ def test_optional_rsi_buy_ceiling_hard_block_when_enabled():
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
     cfg["strategies"]["sol_macro"]["rsi_hard_gate_enabled"] = True
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
-    assert strategy._resolve_rsi_gate("BUY_YES", 84.8) == (True, 0.0)
+    assert strategy._resolve_rsi_gate("BUY_YES", 84.8) == (True, 0.0, 0.0)
 
 
 def test_buy_no_rsi_penalty_can_be_disabled():
@@ -222,7 +222,7 @@ def test_buy_no_rsi_penalty_can_be_disabled():
     cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 40.0
     cfg["strategies"]["sol_macro"]["rsi_soft_penalty_buy_no"] = 0.0
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
-    hard, delta = strategy._resolve_rsi_gate("BUY_NO", 35.0)
+    hard, delta, _ = strategy._resolve_rsi_gate("BUY_NO", 35.0)
     assert hard is False
     assert delta == 0.0
 
@@ -1893,3 +1893,66 @@ def test_macd_bearish_momentum_ok_rejects_bull_rising():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── 2026-07-31 Phase-1: consolidated BUY_NO oversold admission (pocket floor folded
+# into _resolve_rsi_gate; 3-tuple return = (hard_block, est_delta, min_edge_add)) ──
+
+def test_buy_no_soft_pocket_floor_adds_min_edge():
+    """XRP path: pocket floor set + soft penalty => min_edge_add in the 30-35 band."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 30.0
+    cfg["strategies"]["sol_macro"]["buy_no_5m_pocket_rsi_min"] = 35.0
+    cfg["strategies"]["sol_macro"]["buy_no_pocket_rsi_soft_penalty"] = 0.04
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._resolve_rsi_gate("BUY_NO", 33.0, window="5m") == (False, 0.0, 0.04)
+
+
+def test_buy_no_pocket_floor_no_soft_penalty_hard_blocks():
+    """BNB path (regression guard): pocket floor set, NO soft penalty => HARD block in
+    the 30-35 band. This is the behavior the deleted early pocket block used to enforce."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 30.0
+    cfg["strategies"]["sol_macro"]["buy_no_15m_pocket_rsi_min"] = 35.0
+    # no buy_no_pocket_rsi_soft_penalty configured
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._resolve_rsi_gate("BUY_NO", 33.0, window="15m") == (True, 0.0, 0.0)
+
+
+def test_buy_no_at_or_above_soft_floor_passes_clean():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 30.0
+    cfg["strategies"]["sol_macro"]["buy_no_5m_pocket_rsi_min"] = 35.0
+    cfg["strategies"]["sol_macro"]["buy_no_pocket_rsi_soft_penalty"] = 0.04
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._resolve_rsi_gate("BUY_NO", 35.0, window="5m") == (False, 0.0, 0.0)
+
+
+def test_buy_no_soft_floor_ignored_without_window():
+    """Back-compat: no window (legacy callers) => pocket floor not applied."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 30.0
+    cfg["strategies"]["sol_macro"]["buy_no_5m_pocket_rsi_min"] = 35.0
+    cfg["strategies"]["sol_macro"]["buy_no_pocket_rsi_soft_penalty"] = 0.04
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._resolve_rsi_gate("BUY_NO", 33.0) == (False, 0.0, 0.0)
+
+
+def test_buy_no_pocket_no_soft_penalty_hard_blocks_below_sell_floor_even_with_confirming_macd():
+    """Codex review 2026-07-31: BNB (pocket floor, no soft penalty) must HARD-block the
+    WHOLE band rsi<pocket_min — including rsi<=rsi_sell_block_below with a still-falling
+    MACD. The exhaustion-gate continuation exception must NOT let that oversold short
+    through when the lane has no soft penalty (reproduces the deleted early block)."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 30.0
+    cfg["strategies"]["sol_macro"]["buy_no_15m_pocket_rsi_min"] = 35.0
+    # no buy_no_pocket_rsi_soft_penalty
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    macd = SimpleNamespace(histogram=-0.03, histogram_rising=False, crossover="BEARISH_CROSS")
+    # rsi 28 is <= sell_floor AND MACD confirms down (continuation) -> old code hard-blocked
+    assert strategy._resolve_rsi_gate("BUY_NO", 28.0, macd=macd, window="15m") == (True, 0.0, 0.0)
+    # and XRP-style soft-penalty lane still uses the exhaustion gate (not hard pocket) below 30
+    cfg["strategies"]["sol_macro"]["buy_no_pocket_rsi_soft_penalty"] = 0.04
+    strat2 = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    hard, delta, add = strat2._resolve_rsi_gate("BUY_NO", 28.0, macd=macd, window="15m")
+    assert hard is False and add == 0.0  # confirming-down continuation allowed, soft only for 30-35

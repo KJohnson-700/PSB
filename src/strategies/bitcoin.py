@@ -4536,19 +4536,44 @@ class BitcoinStrategy:
                 _bump_skip("kelly_unavailable")
                 logger.error("Bitcoin strategy: KellySizer unavailable — skipping entry sizing")
                 continue
-            # 2026-07-14 K2' (operator GO): window-scoped streak — pass the lane's
-            # window so a 5m win streak no longer inflates 15m/1h sizing. TypeError
-            # fallback = version-skew guard (kelly_sizer is not hot-reloadable;
-            # full behavior lands at restart).
-            try:
-                raw_size = self.kelly_sizer.size_from_edge(
-                    self._signal_strategy_name, bankroll, sizing_edge,
-                    window=_updown_tf if is_updown else None,
+            # 2026-07-31 Phase-1a sizing consolidation (operator GO): BTC default path now
+            # uses binary Kelly (matches the contract payoff curve; scales with side
+            # probability + contract price) instead of the LINEAR size_from_edge (flat
+            # sizing). win_probability = calibrated P(position side); contract_price =
+            # entry_price. Flag-gated (use_true_kelly_sizing, default on) for restart-class
+            # rollback. GUARD (Claude review of Codex patch): fall back to linear if
+            # estimated_prob is None — the old linear path did not read it, so binary must
+            # not crash on a None. TypeError branch = version-skew guard (kelly_sizer not
+            # hot-reloadable; full behavior lands at restart). window-scoped per K2'.
+            _kf_kw = dict(window=_updown_tf) if is_updown else {}
+            if bool(self.config.get("use_true_kelly_sizing", True)) and estimated_prob is not None:
+                win_probability = (
+                    estimated_prob if action == "BUY_YES" else (1.0 - estimated_prob)
                 )
-            except TypeError:
-                raw_size = self.kelly_sizer.size_from_edge(
-                    self._signal_strategy_name, bankroll, sizing_edge
-                )
+                try:
+                    raw_size = self.kelly_sizer.size_binary_position(
+                        self._signal_strategy_name,
+                        bankroll,
+                        win_probability,
+                        entry_price,
+                        **_kf_kw,
+                    )
+                except TypeError:
+                    raw_size = self.kelly_sizer.size_binary_position(
+                        self._signal_strategy_name,
+                        bankroll,
+                        win_probability,
+                        entry_price,
+                    )
+            else:
+                try:
+                    raw_size = self.kelly_sizer.size_from_edge(
+                        self._signal_strategy_name, bankroll, sizing_edge, **_kf_kw
+                    )
+                except TypeError:
+                    raw_size = self.kelly_sizer.size_from_edge(
+                        self._signal_strategy_name, bankroll, sizing_edge
+                    )
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")
                 continue

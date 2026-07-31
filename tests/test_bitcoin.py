@@ -13,6 +13,7 @@ No live data required — all TA objects are constructed with known values.
 """
 
 import pytest
+from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 from dataclasses import dataclass
@@ -1145,3 +1146,14 @@ class TestExposureManagerIntegration:
         em.get_exposure(conditions)  # MINIMAL, mult 0.2
         scaled = em.scale_size(50.0)  # 50 * 0.2 = 10 after floor, cap minimal_size 10
         assert scaled == 10.0
+
+
+def test_bitcoin_scan_sizing_uses_binary_kelly_by_default():
+    """2026-07-31 Phase-1a: BTC default sizing path migrated from linear size_from_edge
+    to binary Kelly (flag-gated, None-guarded)."""
+    source = Path("src/strategies/bitcoin.py").read_text()
+    assert 'self.config.get("use_true_kelly_sizing", True)' in source
+    assert "size_binary_position" in source
+    assert "win_probability = (" in source
+    assert 'estimated_prob if action == "BUY_YES" else (1.0 - estimated_prob)' in source
+    assert "estimated_prob is not None" in source  # the None-guard I added on Codex's patch

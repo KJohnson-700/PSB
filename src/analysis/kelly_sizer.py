@@ -8,7 +8,6 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from src.execution.performance_feedback import get_drift_kelly_mult
 
 logger = logging.getLogger(__name__)
 
@@ -246,24 +245,21 @@ class KellySizer:
     def get_kelly_fraction(
         self, strategy: str, streak_multiplier: float = None, window: str = None
     ) -> float:
-        """Return effective Kelly fraction after streak adjustment."""
+        """Return the configured Kelly fraction (base, clamped to [min_kelly, 1.0]).
+
+        2026-07-31 Phase-1a: streak + drift multipliers REMOVED from the sizing path.
+        Realized-outcome adaptation belongs to adaptive_lane_sizer (THE per-lane layer,
+        main.py._apply_adaptive_realized_size) — keeping Kelly's own streak/drift required
+        a neutralize-when-live patch to avoid compounding the same P&L signal 2-3x. This is
+        behavior-neutral in the current live config (both were already forced to 1.0). If
+        adaptive_sizer is ever set to shadow/off, Kelly no longer applies streak/drift at
+        all — intentional (adaptive_lane_sizer owns realized adaptation).
+        `streak_multiplier`/`window` remain accepted for caller back-compat but are ignored.
+        """
         cfg = self._defaults.get(strategy)
         if not cfg:
             return self._global_kelly_fraction
         frac = cfg.base_kelly_fraction
-        # 2026-07-30 2c consolidation: when the realized adaptive sizer is LIVE it becomes
-        # THE per-lane outcome-adaptive layer (main.py._apply_adaptive_realized_size).
-        # Neutralize kelly's OWN recent-outcome multipliers (streak, drift) so the same
-        # recent-P&L signal is not compounded 2-3x (a win-streak lane would otherwise get
-        # streak x realized upsize). mode shadow/off => byte-identical to before.
-        _as = ((self._root_config or {}).get("trading") or {}).get("adaptive_sizer") or {}
-        _realized_live = bool(_as.get("enabled")) and str(_as.get("mode", "")).lower() == "live"
-        if _realized_live:
-            streak_multiplier = 1.0
-        elif streak_multiplier is None:
-            streak_multiplier = self.get_streak_multiplier(strategy, window)
-        frac = frac * streak_multiplier
-        frac = frac * (1.0 if _realized_live else get_drift_kelly_mult(strategy, self._root_config))
         return max(cfg.min_kelly_fraction, min(frac, 1.0))
 
     def size_from_edge(

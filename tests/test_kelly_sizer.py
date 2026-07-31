@@ -53,3 +53,24 @@ def test_get_all_window_stats_includes_hourly_and_legacy_30m_buckets():
     assert set(ws["bitcoin"].keys()) >= {"5m", "15m", "30m", "1h"}
     assert ws["bitcoin"]["30m"]["trades"] == 0
     assert ws["bitcoin"]["1h"]["trades"] == 0
+
+
+def test_get_kelly_fraction_ignores_streak_and_explicit_multiplier():
+    """2026-07-31 Phase-1a: streak/drift removed from the Kelly sizing path. The fraction
+    is just the configured base (clamped), regardless of win streak or an explicit
+    streak_multiplier arg (kept for caller back-compat but ignored)."""
+    sizer = KellySizer(
+        {
+            "trading": {
+                "default_position_size": 1,
+                "max_position_size": 100,
+                "max_exposure_per_trade": 1.0,
+            },
+            "strategies": {"bitcoin": {"kelly_fraction": 0.20}},
+        }
+    )
+    for _ in range(5):
+        sizer.record_outcome("bitcoin", True, "5m")
+    assert sizer.get_streak_multiplier("bitcoin", "5m") > 1.0  # streak still tracked (dashboard)
+    assert sizer.get_kelly_fraction("bitcoin", window="5m") == 0.20  # but ignored in sizing
+    assert sizer.get_kelly_fraction("bitcoin", streak_multiplier=0.5, window="5m") == 0.20

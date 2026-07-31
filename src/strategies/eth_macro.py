@@ -1003,6 +1003,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         for market in eth_markets:
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
+            rsi_min_edge_add = 0.0  # 2026-07-31 Phase-1: consolidated RSI pocket-floor add
             _updown_tf = updown_timeframe_label(resolved_updown_window_minutes(market))
             is_updown = self._is_updown_market(market)  # 2026-07-15 FIX: was referenced at ~2819/2845 but never assigned in eth_macro (latent NameError, only reachable once pocket_only=false let candidates flow to sizing). Mirrors sol_macro:3327.
             is_5m = _updown_tf == "5m"
@@ -1591,7 +1592,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     )
                     continue
             _own_rsi, _own_macd = self._own_tf_rsi_macd(eth, _updown_tf)
-            _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, _own_rsi, macd=_own_macd)
+            _rsi_hard_block, rsi_soft_delta, rsi_min_edge_add = self._resolve_rsi_gate(
+                action,
+                _own_rsi,
+                macd=_own_macd,
+                window=_updown_tf,
+            )
             if _rsi_hard_block:
                 _bump_skip("rsi_hard_blocked")
                 if action == "BUY_NO":
@@ -2145,7 +2151,12 @@ class ETHMacroStrategy(SolMacroStrategy):
             # long into a BUY_NO oversold short the exhaustion gate never saw. Mirrors the post-flip
             # _post_flip_disabled_side re-check.
             _pf_rsi, _pf_macd = self._own_tf_rsi_macd(eth, _updown_tf)
-            _pf_hard, _ = self._resolve_rsi_gate(action, _pf_rsi, macd=_pf_macd)
+            _pf_hard, _, rsi_min_edge_add = self._resolve_rsi_gate(
+                action,
+                _pf_rsi,
+                macd=_pf_macd,
+                window=_updown_tf,
+            )
             if _pf_hard:
                 _bump_skip("rsi_hard_blocked_postflip")
                 continue
@@ -2516,6 +2527,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                 except (TypeError, ValueError):
                     pass
+
+            # 2026-07-31 Phase-1: apply the consolidated BUY_NO pocket-RSI soft add (parity
+            # with sol_macro; a no-op today since eth sets no buy_no_{tf}_pocket_rsi_min, but
+            # wired so an eth pocket floor works without another code change).
+            _pkt_soft_applied = False
+            if rsi_min_edge_add > 0.0:
+                effective_min_edge = float(effective_min_edge) + rsi_min_edge_add
+                _pkt_soft_applied = True
+                reason_parts.append(f"pocket_rsi_soft={rsi_min_edge_add:.3f}")
 
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
