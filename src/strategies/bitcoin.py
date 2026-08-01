@@ -693,6 +693,19 @@ class BitcoinStrategy:
         if require_conviction and quant_side is None:
             return "btc_15m_short_quant_coinflip"
 
+        # 2026-07-31 P0 FLOOR (side-isolated 15m BUY_NO): block deep-oversold shorts.
+        # Live audit (n=32 deduped, -$75.82): the loser slice is raw_est_prob_up < 0.44
+        # (n=6, 0% WR, -$49.24 overshoot-down shorts that squeeze). The [0.44,0.47) band is
+        # the lane's ONLY winner (+$11.57, 33% WR) — the floor preserves it. Evaluated
+        # BEFORE the ceiling early-return so a missing ceiling key cannot silently disable it.
+        _oversold_floor = self.config.get("btc_15m_short_min_raw_est_prob_up", 0.0) or 0.0
+        if raw_est_prob is not None:
+            try:
+                if float(raw_est_prob) < float(_oversold_floor):
+                    return "btc_15m_short_oversold"
+            except (TypeError, ValueError):
+                pass
+
         short_floor = self.config.get(
             "btc_15m_short_max_raw_est_prob_up",
             self.config.get("btc_5m_short_max_raw_est_prob_up", None),

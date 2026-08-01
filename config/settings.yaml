@@ -730,6 +730,7 @@ strategies:
     # quant is clearly bearish (est_prob_up < 0.47). Side-isolated 15m BUY_NO; lane survives on real downside.
     btc_15m_short_require_quant_conviction: true
     btc_15m_short_max_raw_est_prob_up: 0.47
+    btc_15m_short_min_raw_est_prob_up: 0.44  # floor: block deep-oversold shorts (raw_up<0.44 = 0% WR/-$49 squeeze tail); keep [0.44,0.47) winner
     # 2026-07-31 btc_15m_short_min_rsi PULLED (operator GO): mis-sourced (read 4H RSI not 15m) + wired to only 1 of 3 direction paths, so RSI-30 shorts fired anyway. Not defensible; code cleaned in the restart bundle. P0a (require_quant_conviction + max_raw_est_prob_up 0.47) left intact.
     window_delta_est_weight_15m: 0.5
     window_delta_est_weight_1h: 0.5
@@ -745,7 +746,12 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        min_edge: 0.08
+        # 2026-07-31 P1 5m-LONG re-open (operator GO): BTC 5m BUY_YES had ZERO fills / 266
+        # lane_min_edge rejects but is a documented +$77 live winner (starvation). Lower the
+        # 5m-LONG floor one notch 0.08->0.06. min_edge_buy_no pins 5m SHORT at 0.08 (intentionally
+        # gated) so this is side-isolated to BUY_YES only. Both hot-reloadable via _tf_cfg->self.config.
+        min_edge: 0.06
+        min_edge_buy_no: 0.08
         entry_window_min: 0.5
         entry_window_max: 5.5
       15m:
@@ -1970,6 +1976,13 @@ strategies:
       min_edge: 0.12
   doge_macro:
     window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
+    # 2026-08-01 (operator GO): DOGE 5m-up floor bump lacked the quant-agree guard XRP/SOL have,
+    # so it admitted quant-DISAGREE longs (raw_est 0.43 quant-SHORT bumped to LONG → -$5.73 loss).
+    # Mirror XRP: only bump when raw quant agrees (>=0.57) and RSI not overbought (<=70). Activates
+    # the existing shared _alt_buy_yes_bullish_floor_bump guard (sol_macro.py:2712) — hot-reloadable.
+    5m_buy_yes_floor_require_quant_agree: true
+    5m_buy_yes_floor_quant_agree_min: 0.57
+    5m_buy_yes_bullish_floor_bump_rsi_max: 70.0
     buy_no_min_no_price_5m: 0.49
     buy_yes_lane_repair:
       enabled: true

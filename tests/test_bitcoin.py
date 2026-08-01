@@ -1155,7 +1155,7 @@ class TestExposureManagerIntegration:
         assert tier == ExposureTier.MINIMAL
         assert mult == 0.2
 
-    def test_kill_switch_after_3_losses(self):
+    def test_paper_loss_kill_inert_without_apply_flag(self):
         from src.execution.exposure_manager import MarketConditions
 
         self.em.record_trade(-5, "bitcoin", "test1")
@@ -1165,8 +1165,29 @@ class TestExposureManagerIntegration:
             volatility=0.02, volume_ratio=1.5, trend_strength=0.8
         )
         tier, mult, size, reason = self.em.get_exposure(conditions)
-        assert tier == ExposureTier.PAUSED
-        assert size == 0.0
+        assert tier == ExposureTier.FULL
+        assert size == 5.0
+
+    def test_paper_kill_switch_after_3_losses_when_enabled(self):
+        from src.execution.exposure_manager import MarketConditions
+
+        cfg = _make_config()
+        cfg["exposure"]["loss_kill_apply_in_paper"] = True
+        em = ExposureManager(cfg, is_paper=True)
+        em.record_trade(-5, "bitcoin", "test1", window_size="15m", side="down")
+        em.record_trade(-5, "bitcoin", "test2", window_size="15m", side="down")
+        em.record_trade(-5, "bitcoin", "test3", window_size="15m", side="down")
+        conditions = MarketConditions(
+            volatility=0.02, volume_ratio=1.5, trend_strength=0.8
+        )
+        tier, mult, size, reason = em.get_exposure(conditions)
+        assert tier == ExposureTier.MODERATE
+        paused, pause_reason = em.lane_paused("15m", "down", conditions)
+        assert paused
+        assert "lane_paused" in pause_reason
+        status = em.get_status()
+        assert status["paused"] is True
+        assert "15m|down" in status["paused_lanes"]
 
     def test_win_resets_loss_streak(self):
         self.em.record_trade(-5, "bitcoin", "test1")
