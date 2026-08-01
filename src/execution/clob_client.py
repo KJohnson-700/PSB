@@ -213,6 +213,18 @@ class CLOBClient:
             if bool(_exec_fee_cfg.get("enabled", False))
             else 0.0
         )
+        # 2026-07-31 STAGED (#1): PAPER entry submission-latency / adverse-selection slip
+        # (bps of fill price). Applied ONLY inside the dry_run entry-fill branch below, so
+        # LIVE entries are untouched. Hybrid rate (larger) for 15m/1h, which wait ~8s for the
+        # maker leg before crossing in live. Mirrors the exit-side slip in live_testing.
+        # __init__-only read -> RESTART-class. Conservative defaults; calibrate with paired
+        # paper/live fills (NOT a hidden fudge).
+        self._paper_latency_slip_bps = float(
+            _trading_config.get("paper_latency_slip_bps", 5.0) or 0.0
+        )
+        self._paper_latency_slip_bps_hybrid = float(
+            _trading_config.get("paper_latency_slip_bps_hybrid", 25.0) or 0.0
+        )
         self.config = config.get("polymarket", {})
         self.api_endpoint = self.config.get(
             "api_endpoint", "https://clob.polymarket.com"
@@ -1554,6 +1566,22 @@ class CLOBClient:
                             float(polymarket_taker_fee_usdc(size, price, self._paper_entry_fee_rate)), 4
                         ),
                     }
+            # 2026-07-31 STAGED (#1): move the finalized PAPER entry fill adversely (BUY pays
+            # UP, SELL receives DOWN) to model the venue drift between the decision-time
+            # snapshot and actual submission. Paper-only (this whole branch is `if dry_run`).
+            # Hybrid windows (15m/1h) use the larger rate. Applies to both the book-walk fill
+            # and the signal-price / fail-open fill (whatever _eff_price finalized to).
+            _entry_slip_bps = (
+                self._paper_latency_slip_bps_hybrid
+                if w in ("15m", "1h")
+                else self._paper_latency_slip_bps
+            )
+            if _entry_slip_bps > 0 and _eff_price and 0.0 < float(_eff_price) < 1.0:
+                _sd = float(_eff_price) * (float(_entry_slip_bps) / 10000.0)
+                if str(side).upper() == "BUY":
+                    _eff_price = min(0.99, float(_eff_price) + _sd)
+                else:
+                    _eff_price = max(0.01, float(_eff_price) - _sd)
             _paper_order = await self.place_order(
                 token_id=token_id, side=side, price=_eff_price, size=_eff_size,
                 post_only=False, order_type="FAK", dry_run=True, **meta,

@@ -313,6 +313,72 @@ def test_bitcoin_direction_guard_blocks_expensive_bull_regime_buy_no():
     assert reason == "bull_regime_expensive_short"
 
 
+def test_bitcoin_15m_buy_no_quant_guard_mirrors_5m_defaults():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "btc_5m_short_require_quant_conviction": True,
+            "btc_5m_short_max_raw_est_prob_up": 0.47,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    assert (
+        strat._btc_15m_short_quant_guard_reason(
+            action="BUY_NO",
+            raw_est_prob=0.49,
+            quant_side=None,
+        )
+        == "btc_15m_short_quant_coinflip"
+    )
+    assert (
+        strat._btc_15m_short_quant_guard_reason(
+            action="BUY_NO",
+            raw_est_prob=0.53,
+            quant_side="LONG",
+        )
+        == "btc_15m_short_weak_bearish_quant"
+    )
+    assert (
+        strat._btc_15m_short_quant_guard_reason(
+            action="BUY_YES",
+            raw_est_prob=0.53,
+            quant_side="LONG",
+        )
+        is None
+    )
+
+
+def test_bitcoin_15m_buy_no_quant_guard_reads_explicit_15m_keys():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "btc_5m_short_require_quant_conviction": True,
+            "btc_5m_short_max_raw_est_prob_up": 0.47,
+            "btc_15m_short_require_quant_conviction": False,
+            "btc_15m_short_max_raw_est_prob_up": 0.55,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    assert (
+        strat._btc_15m_short_quant_guard_reason(
+            action="BUY_NO",
+            raw_est_prob=0.49,
+            quant_side=None,
+        )
+        is None
+    )
+    assert (
+        strat._btc_15m_short_quant_guard_reason(
+            action="BUY_NO",
+            raw_est_prob=0.56,
+            quant_side="LONG",
+        )
+        == "btc_15m_short_weak_bearish_quant"
+    )
+
+
 def test_bitcoin_bias_quant_disagree_override_allows_moderate_non5m_long_gap():
     cfg = _make_config()
     cfg["strategies"]["bitcoin"].update(

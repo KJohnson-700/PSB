@@ -383,8 +383,12 @@ class ExposureManager:
             score += 1  # Some trend
         # else: no trend = 0
 
-        # Loss streak penalty
-        if self._consecutive_losses >= 2:
+        # Loss streak penalty — gated by loss_kill_active so it mirrors the lane
+        # pause: inert in paper (calibration/data) unless loss_kill_apply_in_paper.
+        # Without this gate, paper losses fill at full size but post-loss recoveries
+        # get throttled to MINIMAL, so wins can never offset the earlier full-size
+        # losses — an asymmetric ratchet that structurally bleeds the paper session.
+        if self._consecutive_losses >= 2 and self.loss_kill_active:
             score -= 2  # Approaching lane pause threshold, reduce
 
         # Tier assignment

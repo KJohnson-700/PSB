@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-07-31 — Revert BTC paper sizing to linear Kelly
+
+- **What changed:** Set `strategies.bitcoin.use_true_kelly_sizing: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), forcing BTC entries back through `KellySizer.size_from_edge` instead of `size_binary_position`.
+- **Why:** Paper session `test_20260731_042952` showed BTC 15m BUY_NO at 0/3, -$19.31, with all three losers being oversold shorts (`RSI 22.4`, `22.5`, `28.3`). The Phase-1 `estimated_prob` path has not proven reliable enough for BTC true binary Kelly sizing.
+- **Hypothesis:** BTC 15m BUY_NO losses from miscalibrated oversold-short estimates shrink back toward the prior flat/linear notional range while preserving trade admission for forward evidence.
+- **Expected outcome:** BTC entries no longer scale up to the binary Kelly cap from `estimated_prob`; next BTC paper fills should show smaller notional on comparable edge/price setups.
+- **Actual outcome:** `pending` — requires at least 15 closed BTC trades after the rollback.
+- **Status:** `pending`
+
 ### 2026-07-13 — Let BTC 1h UP floor survive MINIMAL sizing brake
 
 - **What changed:** In [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), split per-lane sizing overrides into lift → floor → hard cap. `PAUSED` still blocks all overrides; `MINIMAL` skips lift but can honor `lane_min_notional_ignores_minimal_*`. Config added `bitcoin.lane_min_notional_1h_up: 20` and `bitcoin.lane_min_notional_ignores_minimal_1h_up: true`.

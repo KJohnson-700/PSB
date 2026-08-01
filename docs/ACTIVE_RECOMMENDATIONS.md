@@ -6,6 +6,124 @@
 
 ## Open Queue
 
+### 2026-08-01T02:06:59+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+16 more suppressed (max_notify_per_run=3)
+
+- **messages:** `19`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-08-01T00:04:36+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+16 more suppressed (max_notify_per_run=3)
+
+- **messages:** `19`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T23:22:36+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+16 more suppressed (max_notify_per_run=3)
+
+- **messages:** `19`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T22:49:29+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+17 more suppressed (max_notify_per_run=3)
+
+- **messages:** `20`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T20:23:00+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T16:59:25+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal medium performance_regression [wr_collapse] editor_action=compare_recent_vs_baseline_lane ghost_validatable=True: Compare the collapse window against the prior baseline by family, hour, oracle basis, and recent code/config changes.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T15:53:24+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T11:35:24+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+16 more suppressed (max_notify_per_run=3)
+
+- **messages:** `19`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T08:07:00+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal medium performance_regression [wr_collapse] editor_action=compare_recent_vs_baseline_lane ghost_validatable=True: Compare the collapse window against the prior baseline by family, hour, oracle basis, and recent code/config changes.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-07-31T08:01:00+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+15 more suppressed (max_notify_per_run=3)
+
+- **messages:** `18`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
 ### 2026-07-31T05:22:40+00:00 - Self-healing escalation
 
 - **Source:** `self_healing`

@@ -96,7 +96,16 @@ trading:
   # paper_fill_model=signal_price_fail_open in the calibration record (never invisible).
   # Set true for STRICT calibration: treat a missing snapshot as NO-FILL instead of filling
   # at the signal mark (removes the last fake-fill path; costs some paper frequency).
-  paper_fresh_fill_no_fill_on_snapshot_fail: false
+  paper_fresh_fill_no_fill_on_snapshot_fail: true  # 2026-07-31 (operator GO): STRICT live-calibration — a missing book snapshot is now NO-FILL, not a fake fill at the signal mark. Removes the last fail-open path (signal_price_fail_open, clob_client:1448). Restart-class (read at engine init) — joins the loser-floor restart bundle. Costs some paper frequency; 0 impact on the current session (had 0 fail-opens).
+  # 2026-07-31 STAGED (#1 submission-latency / adverse-selection slip). PAPER-ONLY: applied to
+  # the finalized paper entry fill (clob_client dry_run path) AND the paper exit fill
+  # (live_testing, gated on dry_run). Paper fills at the decision-time snapshot; live reaches
+  # the venue ~250ms+ later on entry, or after the ~8s maker-wait on 15m/1h hybrid, filling at a
+  # worse book. This is a MODELED knob (bps of fill price), transparent + defaulted conservative
+  # — calibrate against paired paper/live fills; it is NOT a hidden fudge. Live (dry_run=false)
+  # never reads it. Restart-class (clob_client reads at engine init; live_testing hot-reloads).
+  paper_latency_slip_bps: 5          # non-hybrid (5m) entry+exit adverse slip, bps of fill price
+  paper_latency_slip_bps_hybrid: 25  # 15m/1h windows that eat the ~8s maker-wait -> larger drift
   microstructure_enrichment_enabled: false
   # 2026-07-30 data-loop A: journal the LIVE maker-first order lifecycle (submit/accept/
   # maker-vs-FAK path/partial/fill/fallback + submit→resolve latency) to
@@ -155,7 +164,7 @@ trading:
     roi_scale: 0.22   # 2026-07-30 2a: was 0.35 — smaller scale => tanh saturates faster => a given loss moves the mult more (was too timid: all mults stuck ~1.0)
     sensitivity: 0.80 # 2026-07-30 2a: was 0.6 — move the mult more per unit signal
     ema_alpha: 0.50   # 2026-07-30 2a: was 0.3 — faster convergence to target (still smoothed; also see state RESET so stale +prior inertia no longer sizes a 0%-WR lane UP)
-    recompute_min_new_settles: 10
+    recompute_min_new_settles: 4  # 2026-07-31 lower from 10: settles trickle <10/run so the live sizer ran on a 17h-stale map
   # 2026-07-28 WARMUP GATE — settle into feed-sync before the FIRST trade after a
   # restart. Signal-based (NOT a timer): blocks NEW entries until the websocket is
   # delivering fresh prices across the universe (not REST-fallback) for
@@ -214,6 +223,7 @@ trading:
     lookbacks_sec: [10, 20, 30]
   exit_rules:
     enabled: true
+    hold_lane_loser_floor_enabled: true  # 2026-07-31 (operator GO): activate the hold-lane loser-floor (live_testing.py). Honors each hold lane's own updown_stop_loss_pct as a loser-floor (0<stop<catastrophic) while keeping hold-for-winners. RESTART-CLASS (read in __init__). Floored: btc15m-up 0.30, eth1h-up 0.20, sol5m-down 0.40, doge1h-up 0.30. Pure-hold (stop 0.0 => floor won't fire): btc1h-up, doge5m-down. HYPE excluded (not connected).
     take_profit_pct: 0.3
     stop_loss_pct: 0.3
     max_hold_hours: 72
@@ -226,6 +236,13 @@ trading:
     stop_dual_confirm_midpoint: true
     stop_spread_guard_max: 0.1
     realistic_paper_fills: true  # 2026-07-30 PAPER CALIB Phase 1.2 (operator): walk bids/asks like a live FAK exit so paper stop/TP PnL reflects real slippage, not the mark. Paper-only (live_testing engine). Restart-class.
+    # 2026-07-31 STAGED (#4b missing-book spread-cross). PAPER-ONLY: when the fresh top-of-book
+    # ladder is empty/absent the exit book-walk captured nothing and booked the exit at the MARK
+    # with ZERO slippage (live_testing:981-1003 fall-through). Instead cross the last-known spread
+    # (from the snapshot) or, when no spread is known, this cents fallback. Default ON = honest;
+    # set enabled false to revert to fill-at-mark. Live (dry_run=false) never applies this.
+    paper_missing_book_haircut_enabled: true
+    paper_missing_book_haircut_cents: 0.02   # spread-cross fallback when the snapshot has no spread
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.3
     exit_mark_use_clob_midpoint: true
@@ -272,7 +289,8 @@ trading:
         window_lane_overrides:
           15m:
             up:
-              updown_stop_loss_pct: 0.25  # 2026-07-30 (operator GO): was 0.0 = NO early stop, so a loser rode to the -50% hold_catastrophic_stop. 0.25 < catastrophic 0.5 => normal stop fires first at -25% (matches the WINNING btc 1h up pattern: hold=true + real stop 0.3<0.5 -> updown_stop_loss not catastrophic). Keeps hold-to-resolution for winners, caps losers. (Lane has 0 fills good+live; safety cap.)
+              updown_stop_loss_pct: 0.30  # 2026-07-31 LOSER-FLOOR (operator GO, data-safe bundle): winner max MAE 26% < loser body; 0.30 clips 0/101 historical winners. Requires hold_lane_loser_floor_enabled: true.
+              dynamic_stop_enabled: false  # 2026-07-31 (operator GO / Codex re-verify): loser-floor requires effective==raw stop; global dynamic_stop mult would shift effective and block the floor. Fire the floor at the MAE-calibrated raw value.
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
@@ -287,11 +305,11 @@ trading:
               # = -15.82, still > stop -20.95). Accumulate n before any live consideration.
               updown_stop_loss_pct: 0.3
               updown_trail_arm_pct: 0.0
-              updown_hold_winners_to_resolution: true
+              updown_hold_winners_to_resolution: false  # 2026-07-31 REVERT (operator GO): the hold=true flip was the dominant catastrophic-stop contributor (8/10 losers in 042952 rode to -50%). Restored normal stop 0.3. A/B +22.34 was tail-carried by one +44 trade (n thin); loser-floor code fix will let us re-evaluate hold=true safely.
               take_profit_pct: 0.5
           1h:
             up:
-              updown_stop_loss_pct: 0.3
+              updown_stop_loss_pct: 0.0  # 2026-07-31 PURE HOLD (operator GO, data-safe bundle): winner p95 MAE 30% ≈ loser p50 34% — a floor would guillotine ~4 winners. Keep stop=0.0 so the loser-floor won't fire; take_profit_late banks the runners. Rides to -50% catastrophic on losers.
               updown_hold_winners_to_resolution: true
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.0
@@ -353,7 +371,8 @@ trading:
             up:
               updown_trail_gap_pct: 0.15
               updown_trail_arm_pct: 0.1
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.20  # 2026-07-31 LOSER-FLOOR (operator GO, data-safe bundle): winner max MAE 16% < loser tail; 0.20 clips 0 winners. Requires hold_lane_loser_floor_enabled: true.
+              dynamic_stop_enabled: false  # 2026-07-31 (operator GO / Codex re-verify): loser-floor requires effective==raw stop; global dynamic_stop mult would shift effective and block the floor. Fire the floor at the MAE-calibrated raw value.
               updown_hold_winners_to_resolution: true
             down:
               updown_trail_gap_pct: 0.1
@@ -375,7 +394,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_hold_winners_to_resolution: true
+              updown_hold_winners_to_resolution: false  # 2026-07-31 REVERT (operator GO): the hold=true flip rode losers to -50% catastrophic. Restored normal stop 0.14. A/B +21.71 thin (n=8); loser-floor code fix to re-evaluate.
           15m:
             up:
               updown_exit_window_mins: 2.5
@@ -403,7 +422,8 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              updown_stop_loss_pct: 0.0  # 2026-07-30: stop-cap (0.25) proposal DROPPED (operator GO) — it conflicts with the 07-29 hold-means-hold decision (early exits LOSE on sol 5m down: +$252 resolved vs -$84 early). hold-means-hold enforce would suppress a sub-catastrophic stop anyway. Keep ride-to-resolution; catastrophic (-50%) is the only floor.
+              updown_stop_loss_pct: 0.40  # 2026-07-31 LOSER-FLOOR (operator GO, data-safe bundle): loserMAE p50 52% vs winnerMAE p90 19%/max 43%; 8 trades hit -50% catastrophic. 0.40 cuts the loser body ~10pts before -50%, clips 1/47 winners (the 43% tail). Requires hold_lane_loser_floor_enabled: true. Supersedes 07-30 stop=0.0 — the loser-floor keeps hold-for-winners, so the 07-29 +$252 resolution edge is preserved for winners while losers get floored.
+              dynamic_stop_enabled: false  # 2026-07-31 (operator GO / Codex re-verify): loser-floor requires effective==raw stop; global dynamic_stop mult would shift effective and block the floor. Fire the floor at the MAE-calibrated raw value.
               updown_hold_winners_to_resolution: true
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
@@ -564,7 +584,7 @@ trading:
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
               updown_hold_winners_to_resolution: true
-              updown_stop_loss_pct: 0.25  # 2026-07-30 (operator GO): was 0.7 (> catastrophic 0.5 => a loser rode to the -50% hold_catastrophic_stop, same bug shape as xrp 5m up). 0.25 < 0.5 => normal stop fires at -25% first. Keep hold=true (down/short lane can win by holding with-trend like sol 5m down); the stop only caps the losers.
+              updown_stop_loss_pct: 0.0  # 2026-07-31 PURE HOLD (operator GO, data-safe bundle): winner max MAE 74%, p95 41% overlaps loser p50 50% — a 0.25 floor guillotines ~7 winners. Keep stop=0.0 so the loser-floor won't fire; rides to -50% catastrophic on losers.
               dynamic_stop_enabled: false
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
@@ -583,6 +603,7 @@ trading:
           1h:
             up:
               updown_stop_loss_pct: 0.3
+              dynamic_stop_enabled: false  # 2026-07-31 (operator GO / Codex re-verify): loser-floor requires effective==raw stop; global dynamic_stop mult would shift effective and block the floor. Fire the floor at the MAE-calibrated raw value.
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
@@ -704,10 +725,17 @@ strategies:
     # quant_conviction: skip coin-flip shorts (quant_side None, raw in [0.48,0.52]). max_raw_est_prob_up 0.47: bearish floor.
     btc_5m_short_require_quant_conviction: true
     btc_5m_short_max_raw_est_prob_up: 0.47
+    # 2026-07-31 P0a — BTC 15m SHORT guard (mirrors 5m). #1 bleeder: btc 15m BUY_NO 21% WR -$41,
+    # shorts into strength across all RSI (flipped winner->loser in 48h). Block 15m BUY_NO unless
+    # quant is clearly bearish (est_prob_up < 0.47). Side-isolated 15m BUY_NO; lane survives on real downside.
+    btc_15m_short_require_quant_conviction: true
+    btc_15m_short_max_raw_est_prob_up: 0.47
+    # 2026-07-31 btc_15m_short_min_rsi PULLED (operator GO): mis-sourced (read 4H RSI not 15m) + wired to only 1 of 3 direction paths, so RSI-30 shorts fired anyway. Not defensible; code cleaned in the restart bundle. P0a (require_quant_conviction + max_raw_est_prob_up 0.47) left intact.
     window_delta_est_weight_15m: 0.5
     window_delta_est_weight_1h: 0.5
     min_est_prob_conviction_buy_yes: 0
     disable_buy_no_5m: false
+    use_true_kelly_sizing: false  # 2026-07-31 BTC PAPER rollback: est_prob has not proven out on BTC; 15m BUY_NO oversold shorts sized too large under binary Kelly. Hot-reloadable via strategies.bitcoin.
     enabled: true
     use_ai: true
     min_liquidity: 1000
@@ -923,6 +951,7 @@ strategies:
     # from flipping a native long into a SHORT when the alt's own primary+1h HTF are BOTH
     # bullish (fought a bull HTF, shorted SOL 1h inside bull/bull/bull twice, both lost).
     window_delta_flip_to_short_in_bull_enabled: false
+    require_quant_side_agreement: true  # 2026-07-31 RESTORE (operator GO): 07-28-approved sol/bnb quant-disagree gate (disagree n103 34%/-$100.90 vs agree 48%/+$416); clobbered out by a baseline revert. Blocks entry when chosen side != quant est_prob side (exempts flip/simple_band). Hot-reloadable.
     lane_max_notional_15m_down: 5
     fresh_cross_override: false
     tape_veto_60s_enabled: true
@@ -1024,6 +1053,7 @@ strategies:
       entry_min: 0.55  # 2026-07-27: ported the btc_1h_simple_long fix — band force-admits LONG at [entry_min,0.85] bypassing min_edge; 0.50-0.54 = midline coin-flips. 0.55 keeps 0.55-0.85. FROZEN (__init__), restart-class.
       entry_max: 0.85
       sizing_edge: 0.06
+      quality_veto_enabled: true  # 2026-07-31 RESTORE (clobbered by 96eaaaf) — vetoes Codex-confirmed sol 1h simple-band-long leak (n63 30%WR -$79.64); hot-reloadable (scan-time read)
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -1112,7 +1142,7 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.06
+            min_edge: 0.12  # 2026-07-31 P1 revert to +869 (0.06 admitted weak-edge RSI35-45 sol 15m shorts; WR12% -$17)
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1903,7 +1933,7 @@ strategies:
             entry_window_max: 15
           down:
             entry_price_min: 0.53
-            min_edge: 0.5
+            min_edge: 0.08  # 2026-07-31 RESTORE xrp 15m BUY_NO re-enable (0.5 wall clobbered the by_tf 0.08; lane was dead 0 fills)
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 135
@@ -1962,7 +1992,7 @@ strategies:
     - 5m
     - 15m
     disable_buy_no_5m: false
-    disable_buy_yes_5m: true
+    disable_buy_yes_5m: false  # 2026-07-31 RESTORE doge 5m long re-enable (85c9b26 intent; clobbered back to true by 96eaaaf)
     buy_yes_15m_pocket_rsi_max: 35
     est_prob:
       atr_low_pct: 0.0035
@@ -2165,6 +2195,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   bnb_macro:
+    require_quant_side_agreement: true  # 2026-07-31 RESTORE (operator GO): 07-28 sol/bnb quant-disagree gate, clobbered by baseline revert. Hot-reloadable.
     window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
     lane_max_notional_15m_down: 10
     fresh_cross_override: true

@@ -165,6 +165,54 @@ def test_updown_hold_winners_to_resolution_suppresses_take_profit():
     assert exits == []
 
 
+def test_bitcoin_1h_up_late_take_profit_banks_green_hold_lane():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.30,
+                "updown_hold_winners_to_resolution": True,
+                "updown_overrides": {
+                    "bitcoin": {
+                        "window_lane_overrides": {
+                            "1h": {
+                                "up": {
+                                    "take_profit_late_pct": 0.40,
+                                    "take_profit_late_gate_mins": 5,
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Bitcoin Up or Down - test",
+        outcome="YES",
+        strategy="bitcoin",
+        size=10.0,
+        entry_price=0.56,
+        current_price=0.56,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=56),
+        end_date=now + timedelta(minutes=4),
+        entry_leg="YES",
+        window_size="1h",
+    )
+
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.80}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+
+    assert len(exits) == 1
+    assert exits[0].reason == "take_profit_late"
+
+
 def test_doge_and_bnb_use_updown_exit_path():
     cfg = {
         "trading": {

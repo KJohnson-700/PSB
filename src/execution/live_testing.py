@@ -190,6 +190,20 @@ class PositionExitManager:
         # stop. hold_means_hold_enforce hot-reloads OFF; catastrophic pct is fraction (0.5=-50%).
         self._hold_means_hold_enforce = bool(exit_cfg.get("hold_means_hold_enforce", True))
         self._hold_catastrophic_stop_pct = float(exit_cfg.get("hold_catastrophic_stop_pct", 0.5) or 0.0)
+        # 2026-07-31 LOSER-FLOOR (operator GO; restart-class). Root cause of the dominant
+        # loss bucket: hold-enforce suppressed a hold lane's OWN configured stop, so a loser
+        # rode from entry to -catastrophic (hold_catastrophic_stop, default -50%) before
+        # exiting. When enabled, honor each hold lane's own updown_stop_loss_pct as a
+        # LOSER-FLOOR: let its % stop FIRE (exit ~-lane_stop) instead of riding to the
+        # catastrophic backstop. Hold-for-winners is preserved (the % stop only ever set
+        # reason=updown_stop_loss on a position already at -lane_stop; a green/developing
+        # position never enters that branch). Default OFF: shipping is behavior-neutral until
+        # the operator sets per-lane stops ABOVE each lane's winner-MAE tail and flips this
+        # true (winner-clip risk lives in the CONFIGURED VALUE, not this code). Re-read here,
+        # so it hot-reloads the same way hold_means_hold_enforce does.
+        self._hold_lane_loser_floor_enabled = bool(
+            exit_cfg.get("hold_lane_loser_floor_enabled", False)
+        )
         # Optional BUY_YES bid-depth deterioration exit (default OFF). See settings.yaml
         # trading.exit_rules.bid_depth_exit and _maybe_bid_depth_exit below.
         self._bid_depth_exit = exit_cfg.get("bid_depth_exit", {}) or {}
@@ -300,6 +314,25 @@ class PositionExitManager:
         if not _entry_mode:
             _entry_mode = "marketable" if _t.get("entry_marketable", True) else "maker"
         self._entry_taker = _entry_mode != "maker"
+        # 2026-07-31 STAGED paper execution-realism knobs (#4b + #1). ALL gated below on
+        # self._paper_mode so LIVE (dry_run=false) exit accounting is byte-for-byte unchanged.
+        # Read here (with the rest of exit_rules) so they HOT-RELOAD; dry_run itself hot-reloads
+        # the same way is_paper does in main.py. self._crypto_updown_15m_taker_fee_rate etc.
+        # already live above; these join them.
+        self._paper_mode = bool(_t.get("dry_run", True))
+        # #4b missing-book spread-cross (see settings.yaml trading.exit_rules).
+        self._paper_missing_book_haircut_enabled = bool(
+            exit_cfg.get("paper_missing_book_haircut_enabled", True)
+        )
+        self._paper_missing_book_haircut_cents = float(
+            exit_cfg.get("paper_missing_book_haircut_cents", 0.02) or 0.0
+        )
+        # #1 submission-latency / adverse-selection slip (bps of fill price) under trading.*;
+        # larger on 15m/1h hybrid windows (they wait ~8s for the maker leg before crossing).
+        self._paper_latency_slip_bps = float(_t.get("paper_latency_slip_bps", 5.0) or 0.0)
+        self._paper_latency_slip_bps_hybrid = float(
+            _t.get("paper_latency_slip_bps_hybrid", 25.0) or 0.0
+        )
 
     def _min_hold_floor_secs(self, pos) -> float:
         """Per-window phantom-exit floor. Prefers the position's EXPLICIT
@@ -777,7 +810,40 @@ class PositionExitManager:
                 )
             ):
                 _cat = getattr(self, "_hold_catastrophic_stop_pct", 0.5) or 0.0
-                if _cat > 0.0 and pnl_pct <= -_cat:
+                # 2026-07-31 LOSER-FLOOR (operator GO; restart-class). Honor a hold lane's
+                # OWN configured % stop as a loser-floor: when this stop (updown_stop_loss)
+                # is the trigger and the lane has a real stop below the catastrophic backstop
+                # (0 < lane_stop < _cat), let it FIRE at ~-lane_stop instead of suppressing to
+                # -_cat. ONLY the lane's own % stop is floored — time/flatten/never-green/
+                # bid-depth stay fully suppressed (those are premature on a hold lane). Lanes
+                # with updown_stop_loss_pct==0 (e.g. sol 5m down) never set reason=
+                # updown_stop_loss, so they are unchanged until a floor is configured for them.
+                # Hold-for-winners intact: a green/developing position (pnl_pct > -lane_stop)
+                # is never in the stop branch. WINNER-CLIP RISK is per-lane and set by the
+                # CONFIGURED VALUE, not here — keep each lane's stop above its winner-MAE tail.
+                _lane_stop = float(getattr(resolved, "updown_stop_loss_pct", 0.0) or 0.0)
+                _eff_stop = float(effective_stop_loss_pct or 0.0)
+                if (
+                    getattr(self, "_hold_lane_loser_floor_enabled", False)
+                    and reason == "updown_stop_loss"
+                    and 0.0 < _lane_stop < _cat
+                    # 2026-07-31 (Codex NO-GO fix): floor a GENUINE raw-loser stop ONLY — never a
+                    # trailing/in-profit-tightened stop on a formerly-green position. reason=
+                    # updown_stop_loss (set at :634) fires off the EFFECTIVE stop, which trail/
+                    # in-profit logic can tighten BELOW the raw lane stop; without these guards the
+                    # floor would cut a winner that ran up, armed its trail, then pulled back.
+                    and _eff_stop > 0.0
+                    and abs(_eff_stop - _lane_stop) < 1e-6   # no trail/in-profit tightening active
+                    and pnl_pct <= -_lane_stop               # actually at/below the loser floor
+                ):
+                    setattr(pos, "_hold_policy_applied", "loser_floor")
+                    logger.info(
+                        "HOLD LOSER-FLOOR: honoring lane stop %.0f%% on %s (pnl=%.1f%%) — "
+                        "cutting loser at floor instead of riding to -%.0f%% catastrophic",
+                        _lane_stop * 100.0, pos.market_id, pnl_pct * 100.0, _cat * 100.0,
+                    )
+                    # leave reason == "updown_stop_loss": the lane's % stop fires at the floor.
+                elif _cat > 0.0 and pnl_pct <= -_cat:
                     setattr(pos, "_hold_policy_applied", "catastrophic_stop")
                     reason = "hold_catastrophic_stop"
                 else:
@@ -954,6 +1020,49 @@ class PositionExitManager:
                         if _filled > 0:
                             exit_price = _fill_px
                             unrealized_pnl = pos.size * (_fill_px - pos.entry_price)
+                    # --- 2026-07-31 STAGED paper execution-realism haircuts (#4b, #1) ---
+                    # PAPER-ONLY (self._paper_mode). LIVE (dry_run=false) skips this entire
+                    # block, so the live exit price / unrealized_pnl / bankroll accounting is
+                    # byte-for-byte unchanged. Two honest drags the raw book-walk misses:
+                    #   #4b  when the fresh top-of-book ladder was empty/absent the walk
+                    #        captured nothing (_filled==0) and exit_price is still the MARK
+                    #        with zero slippage -> cross the last-known spread instead.
+                    #   #1   a submission-latency / adverse-selection slip (bps of fill
+                    #        price), larger on the 15m/1h hybrid windows that eat the ~8s
+                    #        maker-wait before the order reaches the venue.
+                    # Applied BEFORE the slippage telemetry below so fill_slippage_pct
+                    # captures the haircut, and BEFORE the fee block so the taker fee is
+                    # priced on the realistic fill.
+                    if self._paper_mode:
+                        # SELL legs = long YES (else branch) and long NO; the only BUY exit
+                        # leg is the short-YES cover (outcome==NO and entry_leg!="NO").
+                        _exit_is_sell = not (entry_leg != "NO" and pos.outcome == "NO")
+                        _px = exit_price
+                        if self._paper_missing_book_haircut_enabled and not _filled:
+                            _sp = _liq.get("spread")
+                            _hair = (
+                                float(_sp)
+                                if (_sp is not None and float(_sp) > 0)
+                                else self._paper_missing_book_haircut_cents
+                            )
+                            _px = (_px - _hair) if _exit_is_sell else (_px + _hair)
+                        _win_l = str(getattr(pos, "window_size", "") or "").lower()
+                        _slip_bps = (
+                            self._paper_latency_slip_bps_hybrid
+                            if _win_l in ("15m", "1h")
+                            else self._paper_latency_slip_bps
+                        )
+                        if _slip_bps > 0:
+                            _d = _px * (float(_slip_bps) / 10000.0)
+                            _px = (_px - _d) if _exit_is_sell else (_px + _d)
+                        _px = min(0.99, max(0.01, _px))
+                        if _px != exit_price:
+                            exit_price = _px
+                            if _exit_is_sell:
+                                unrealized_pnl = pos.size * (exit_price - pos.entry_price)
+                            else:
+                                unrealized_pnl = pos.size * (pos.entry_price - exit_price)
+
                     # Record what the book walk cost vs the mark, normalized by cost
                     # basis (negative = the sweep lost us money). Only when it moved.
                     if exit_price != _mark_price and cost_basis > 0:
@@ -996,6 +1105,20 @@ class PositionExitManager:
                     )
                     # Marketable entries are taker fills too, so charge the entry-side
                     # taker fee (priced at the entry fill) for the full round-trip cost.
+                    #
+                    # 2026-07-31 KNOWN CROSS-LANE BIAS (#2 — documented, deliberately NOT
+                    # modeled): paper charges the 0.07 taker fee on BOTH legs for every
+                    # crypto up/down lane. But LIVE runs maker-first on 15m/1h (entry_mode
+                    # /exit_mode: hybrid), where a maker leg that fills pays 0% fee. So on
+                    # 15m/1h ONLY, paper is systematically PESSIMISTIC on fees relative to
+                    # live — a cross-lane distortion (5m paper vs 5m live is fair; 15m/1h
+                    # paper over-charges vs 15m/1h live by the maker-fill share). The
+                    # operator chose NOT to fabricate a maker-fill probability here. The
+                    # correct fix is to weight the entry (and hybrid-exit) fee by the REAL
+                    # maker-fill RATE measured from the order-lifecycle logger
+                    # (data/calibration/order_lifecycle.jsonl, clob_client _lc/_order_lifecycle),
+                    # NOT a guessed constant. Until that rate is wired, leave the full
+                    # taker fee on both legs and read 15m/1h paper fee as an upper bound.
                     _entry_fee = (
                         polymarket_taker_fee_usdc(pos.size, pos.entry_price, _fee_rate)
                         if self._entry_taker
@@ -1048,6 +1171,24 @@ class PositionExitManager:
                     if _walk_levels
                     else None
                 )
+                # 2026-07-31 STAGED (#3, PAPER-ONLY): the book-walk pads any size beyond
+                # captured depth at the worst level (pad_remainder_at_worst=True), so
+                # _filled == size ALWAYS and the ratio above is ~1.0 by construction, hiding
+                # partial-fill risk. Overwrite it in paper with the TRUE ratio =
+                # captured top-of-book depth / size (capped 1.0); depth 0 -> ratio 0.0. The
+                # worst-pad EXIT PRICE (bounded-pessimistic) is intentionally KEPT. LIVE is
+                # untouched (guarded by _paper_mode) so its journal field is byte-for-byte
+                # unchanged. FOLLOW-UP (FLAGGED, invasive): carry the true residual to the
+                # next tick instead of padding — needs partial-exit plumbing across the sync
+                # check_exits boundary and main.py's close/position-delete accounting.
+                if self._paper_mode and _walk_levels is not None:
+                    _cap_depth = round(sum(float(s) for _p, s in _walk_levels if s), 4)
+                    _exit_depth_at_limit = _cap_depth
+                    _exit_fill_ratio = (
+                        round(min(1.0, _cap_depth / float(pos.size)), 4)
+                        if pos.size
+                        else None
+                    )
 
                 # PAPER CALIB Phase 3.6: raw (mark, no slippage/fee) vs execution-adjusted
                 # (realized) PnL. _mark_pnl exists only when realistic_paper_fills walked

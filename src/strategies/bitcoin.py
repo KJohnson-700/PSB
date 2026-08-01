@@ -674,6 +674,38 @@ class BitcoinStrategy:
 
         return None
 
+    def _btc_15m_short_quant_guard_reason(
+        self,
+        *,
+        action: str,
+        raw_est_prob: Optional[float],
+        quant_side: Optional[str],
+    ) -> Optional[str]:
+        """Side-isolated 15m BUY_NO guard, mirroring the existing BTC 5m short guard."""
+        if action != "BUY_NO":
+            return None
+        require_conviction = bool(
+            self.config.get(
+                "btc_15m_short_require_quant_conviction",
+                self.config.get("btc_5m_short_require_quant_conviction", False),
+            )
+        )
+        if require_conviction and quant_side is None:
+            return "btc_15m_short_quant_coinflip"
+
+        short_floor = self.config.get(
+            "btc_15m_short_max_raw_est_prob_up",
+            self.config.get("btc_5m_short_max_raw_est_prob_up", None),
+        )
+        if short_floor is None or raw_est_prob is None:
+            return None
+        try:
+            if float(raw_est_prob) >= float(short_floor):
+                return "btc_15m_short_weak_bearish_quant"
+        except (TypeError, ValueError):
+            return None
+        return None
+
     def _calibrate_est_prob(
         self,
         raw_est_prob: float,
@@ -3030,6 +3062,79 @@ class BitcoinStrategy:
                         edge = (1.0 - _adm) - (1.0 - yes_price)
 
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * timing_weight)
+                    _short_quant_guard = (
+                        self._btc_15m_short_quant_guard_reason(
+                            action=action,
+                            raw_est_prob=raw_est_prob,
+                            quant_side=direction_decision.quant_side,
+                        )
+                        if _updown_tf == "15m"
+                        else None
+                    )
+                    if _short_quant_guard:
+                        _bump_skip(_short_quant_guard)
+                        _effective_min_edge = float(
+                            self._tf_cfg(
+                                _updown_tf,
+                                "min_edge",
+                                self.config.get("min_edge", 0.0) or 0.0,
+                            )
+                        )
+                        log_rejected_candidate(
+                            strategy="bitcoin",
+                            window="15m",
+                            side="SHORT",
+                            action=action,
+                            reason=_short_quant_guard,
+                            market=market,
+                            yes_price=yes_price,
+                            est_prob_up=raw_est_prob,
+                            htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source=side_source,
+                            resolver_path=direction_decision.resolver_path,
+                            context={
+                                "raw_est_prob": round(float(raw_est_prob), 6),
+                                "estimated_prob": round(float(estimated_prob), 6),
+                                "quant_side": direction_decision.quant_side,
+                                "momentum_side": direction_decision.momentum_side,
+                                "edge": round(float(edge), 6),
+                                "effective_min_edge": round(float(_effective_min_edge), 6),
+                                "m15_direction": getattr(mom, "m15_direction", None),
+                                "m5_direction": getattr(mom, "m5_direction", None),
+                                **build_market_context(
+                                    asset_spot=ta.current_price,
+                                    btc_spot=ta.current_price,
+                                    rsi_14=ta.rsi_14,
+                                    atr_14=getattr(ta.trend_sabre, "atr", None),
+                                    macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
+                                ),
+                                **_btc_window_delta_ctx(ta, "15m", market),
+                            },
+                        )
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason=_short_quant_guard,
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=_effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            window_size=_updown_tf,
+                        )
+                        logger.info(
+                            "  BTC [15m] skip BUY_NO on '%s' — %s raw_est_prob %.3f",
+                            market.question[:40],
+                            _short_quant_guard,
+                            float(raw_est_prob),
+                        )
+                        continue
                     _direction_guard = self._btc_direction_guard_reason(
                         window_size=_updown_tf,
                         decision=direction_decision,

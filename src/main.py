@@ -7660,9 +7660,16 @@ async def main():
                 _m = getattr(bot, _mattr, None)
                 if _m is not None and hasattr(_m, "is_paper"):
                     _m.is_paper = bool(dry_run)
+            # 2026-07-31 (Codex): PositionExitManager caches _paper_mode (+ the paper-realism
+            # exit knobs) from config.trading.dry_run in reload_from_config, which ran during
+            # PolyBot() ABOVE with the paper-default config — so a paper-realism exit block would
+            # silently NOT fire in paper until the first hot-reload. Refresh it now against the
+            # CONFIRMED dry_run so _paper_mode is correct before the first trade.
+            if getattr(bot, "exit_manager", None) is not None:
+                bot.exit_manager.reload_from_config(bot.config)
             logging.warning(
                 "Runtime dry_run=%s propagated to Olympus broker guard + CTF redeemer + "
-                "exposure managers (fixes cached-paper-in-live order block).",
+                "exposure managers + exit manager (fixes cached-paper-in-live order block).",
                 dry_run,
             )
         except Exception as _exc:
