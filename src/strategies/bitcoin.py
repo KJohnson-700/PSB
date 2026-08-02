@@ -529,6 +529,40 @@ class BitcoinStrategy:
                         f"neutral_resolver_short_suppressed(mom=LONG,htf=BULLISH,adm_down={_adm_down:.3f})"
                     )
 
+        # 2026-08-01 (live loss audit, operator "use logic") — WRONG-SIDE-vs-MOMENTUM veto.
+        # The guard above only catches a SHORT against a BULLISH htf. But this session's losers
+        # were side_src=btc_htf_bias with htf=BEARISH (a LAGGING 4H MACD that hadn't flipped) while
+        # the FAST tape was up: m5 momentum_side=LONG, yes_price 0.60-0.67 (market pricing UP). The
+        # bot shorted straight into the rally because the stale htf still said SHORT and momentum
+        # was never consulted on the base-bias path. This vetoes ANY resolved side that contradicts
+        # live m5 momentum (short-into-up OR long-into-down), independent of htf. Tape-escape aware:
+        # if the contradicting side is actually realized-profitable (adapter delta >= escape) we
+        # STOP suppressing. Sit out — never force the opposite un-validated side. Config-gated on.
+        if (
+            not _suppressed
+            and momentum_side is not None
+            and final_side in ("SHORT", "LONG")
+            and bool(self.config.get("btc_momentum_contradiction_guard_enabled", True))
+        ):
+            _contra = (final_side == "SHORT" and momentum_side == "LONG") or (
+                final_side == "LONG" and momentum_side == "SHORT"
+            )
+            if _contra:
+                _cdir = "down" if final_side == "SHORT" else "up"
+                try:
+                    _adm_c = float(get_tape_admission_delta("bitcoin", tf, _cdir) or 0.0)
+                except Exception:
+                    _adm_c = 0.0
+                _c_escape = float(
+                    self.config.get("btc_momentum_contradiction_tape_escape", 0.02) or 0.02
+                )
+                if _adm_c < _c_escape:
+                    _suppressed = True
+                    _suppress_reason = f"btc_{final_side.lower()}_against_{momentum_side.lower()}_momentum"
+                    reason_parts.append(
+                        f"momentum_contradiction_suppressed(side={final_side},mom={momentum_side},adm_{_cdir}={_adm_c:.3f})"
+                    )
+
         action, direction, effective_side = self._btc_action_for_side(final_side)
         return BTCDirectionDecision(
             action=action,
@@ -684,6 +718,13 @@ class BitcoinStrategy:
         """Side-isolated 15m BUY_NO guard, mirroring the existing BTC 5m short guard."""
         if action != "BUY_NO":
             return None
+        # 2026-08-01 FULL BTC 15m BUY_NO SIT-OUT (operator GO, live data). The entire 15m
+        # short lane bleeds (n=35 since 07-30, 20% WR, -$99.41, ALL BUY_NO, every raw_est
+        # band negative, incl 11 wrong-side BULLISH-htf shorts). Evaluated FIRST so it
+        # supersedes the raw_est floor/ceiling guards below while enabled. BUY_YES 15m is
+        # untouched (this fn only gates BUY_NO). false => the prior 15m-short guards apply.
+        if bool(self.config.get("btc_15m_short_sitout", False)):
+            return "btc_15m_short_sitout"
         require_conviction = bool(
             self.config.get(
                 "btc_15m_short_require_quant_conviction",
@@ -4043,6 +4084,32 @@ class BitcoinStrategy:
                 if edge < self._b1hsl_sizing_edge:
                     edge = self._b1hsl_sizing_edge
                 reason_parts.append("btc_1h_simple_long")
+            # 2026-08-01 BTC 5m LONG CALIBRATION PROBE (operator GO — "debug bots not trading"
+            # -> "flat calibration-probe size"). BTC 5m BUY_YES est_prob is under-calibrated
+            # (ghost: rejected near-miss longs win ~69%): the TRUE edge reads negative so
+            # lane_min_edge rejects it, and bumping ONLY the gate then hits kelly_nonpositive
+            # (Kelly won't size a negative true edge). For the NEAR-MISS pocket only — edge
+            # within the configured bump of clearing min_edge — trade it at a flat calibration-
+            # probe size: a sizing POLICY, not a fabricated prob (mirrors btc_1h_simple_long
+            # above). Tag btc_5m_long_probe so its LIVE WR is isolable to validate/refute the
+            # ghost 69%. Deep-negative longs (edge below the pocket) stay rejected. 5m BUY_YES
+            # only; SHORT/15m/1h untouched. bump=0 or probe=0 => byte-identical (legacy gate).
+            if action == "BUY_YES" and _updown_tf == "5m":
+                _long_bump = float(self.config.get("btc_5m_long_est_prob_bump", 0.0) or 0.0)
+                _probe_edge = float(
+                    self.config.get("btc_5m_long_probe_sizing_edge", 0.0) or 0.0
+                )
+                if (
+                    _long_bump > 0.0
+                    and _probe_edge > 0.0
+                    and effective_min_edge > 0.0
+                    and edge < effective_min_edge
+                    and edge >= (effective_min_edge - _long_bump)
+                ):
+                    effective_min_edge = 0.0
+                    if edge < _probe_edge:
+                        edge = _probe_edge
+                    reason_parts.append("btc_5m_long_probe")
             if edge < effective_min_edge:
                 # (3) Flag bias/quant directional disagreement so we can isolate this cohort
                 # in analysis. True when raw_est is on the opposite side of 0.50 from the
@@ -4132,6 +4199,29 @@ class BitcoinStrategy:
                             "raw_est_prob": round(float(raw_est_prob), 6),
                             "estimated_prob": round(float(estimated_prob), 6),
                             "confidence": round(float(confidence), 6),
+                            # 2026-08-01 BTC 5m LONG SHADOW-ADMIT tag (operator GO, log-only).
+                            # Marks the NEAR-MISS 5m BUY_YES pocket (edge just below the min-edge
+                            # bar) so its settled-ghost WR is filterable in isolation — evidence
+                            # to confirm the ghost ~69% before any est_prob bump. Excludes the
+                            # wild deeply-negative-edge rejects via edge_min. Short-circuits on
+                            # is_updown so _updown_tf is only read when defined.
+                            "btc_5m_long_shadow_admit": bool(
+                                is_updown
+                                and _updown_tf == "5m"
+                                and action == "BUY_YES"
+                                and bool(
+                                    self.config.get(
+                                        "btc_5m_long_shadow_admit_enabled", False
+                                    )
+                                )
+                                and float(
+                                    self.config.get(
+                                        "btc_5m_long_shadow_admit_edge_min", -0.03
+                                    )
+                                )
+                                <= float(edge)
+                                < float(effective_min_edge)
+                            ),
                             "side_source": side_source,
                             "conflict_type": (
                                 direction_decision.conflict_type

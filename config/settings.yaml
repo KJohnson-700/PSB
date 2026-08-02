@@ -40,6 +40,24 @@ trading:
   persistent_session: false
   cycle_interval_sec: 60
   exit_check_interval_sec: 3
+  # 2026-08-01 BTC CALIBRATION SCOPE (config-gated, per handoff + operator amendment).
+  # When enabled, ONLY the strategies in execution_strategies create NEW entries this
+  # cycle. MECHANISM = EXECUTION-gate, NOT task-skip: ALL strategies still SCAN every
+  # cycle, so non-BTC lanes keep producing rejected-candidate / ghost / shadow evidence
+  # (operator amendment: preserve SOL/alt evidence during the BTC sprint — do not let
+  # them go dark). A non-execution strategy's admitted signals are NOT sent to the venue;
+  # instead each is shadow-logged into the ghost pipeline (reason=calibration_scope_shadow)
+  # so its would-have-entered win/loss settles as evidence for a later promotion decision.
+  # EXITS are unaffected (exit-check runs before this). Scanner market-fetch unaffected.
+  # Controlled calibration mode to isolate BTC 5m/15m/1h, NOT a permanent BTC-only
+  # direction. enabled:false restores the full lane set. execution_windows is advisory
+  # (bitcoin only trades 5m/15m/1h natively); kept for ops readout.
+  calibration_scope:
+    enabled: true
+    mode: btc_plus_alts  # 2026-08-01 operator GO ("try xrp doge bnb next, bearish edge"): added small-caps to test the momentum-FOLLOW-in-down-tape edge (research: small-caps lag BTC 16-118s so they follow BTC down = correct-side short; ETH moves simultaneously=no lag edge; thin books=less bot competition). xrp/bnb SHORT open all 3 windows; DOGE SHORT open on 5m ONLY (15m/1h disabled — left as intentional). eth 1h paused; eth 15m BUY_YES bearish-tape-gated. Scope enforces by STRATEGY (execution_windows descriptive only).
+    execution_strategies: [bitcoin, eth_macro, xrp_macro, doge_macro, bnb_macro]
+    execution_windows: [5m, 15m, 1h]
+    keep_scanner_universe: true
   # Position reconciler (2026-07-27): syncs the bot's open positions against the
   # ACTUAL Polymarket account (Data API) so manual closes / resolutions / phantom
   # entries never orphan a position or mis-count. interval=how often to reconcile;
@@ -235,6 +253,26 @@ trading:
     stop_use_executable_price: true
     stop_dual_confirm_midpoint: true
     stop_spread_guard_max: 0.1
+    # 2026-08-01 REGULAR-TP EXECUTABLE-NET GUARD (operator GO, BTC-calibration handoff P0).
+    # The regular take_profit fires on the YES-MIDPOINT mark, but selling into the exit-side
+    # bid + round-trip taker fee can close flat/red ("marked green, executes net red"). When
+    # on, take_profit only fires if the EXECUTABLE net pnl (exit-side price minus round-trip
+    # taker fee) >= take_profit_net_min_pct. Fails OPEN when no book snapshot (never strands a
+    # winner). Does NOT touch take_profit_late (performing well). RESTART-CLASS (read in
+    # __init__). net_min 0.02 = require >=2% net-after-fee during calibration.
+    take_profit_require_executable_net: true
+    take_profit_net_min_pct: 0.02
+    # 2026-08-01 TIME-UNDERWATER SHADOW (Codex audit; BTC 1h BUY_YES; LOG-ONLY, restart-class).
+    # 1h holds rode the full hour: losers 25%WR/-$43, but winners ALSO ride underwater then TP-late,
+    # and the exit code deliberately excludes 1h from never_green_cut (slow winners get false-cut).
+    # This logs what a cut WOULD do (-> data/calibration/time_underwater_shadow.jsonl) when a 1h long
+    # is held past min_held_min, never got >max_mfe_pct green, and is still <= max_pnl_pct. NEVER
+    # exits — it only measures winner-false-cut vs loser-save so we can enable a live cut later only
+    # if it proves clean. Set shadow_enabled false to silence.
+    time_underwater_1h_shadow_enabled: true
+    time_underwater_1h_min_held_min: 12.0
+    time_underwater_1h_max_mfe_pct: 0.03
+    time_underwater_1h_max_pnl_pct: 0.0
     realistic_paper_fills: true  # 2026-07-30 PAPER CALIB Phase 1.2 (operator): walk bids/asks like a live FAK exit so paper stop/TP PnL reflects real slippage, not the mark. Paper-only (live_testing engine). Restart-class.
     # 2026-07-31 STAGED (#4b missing-book spread-cross). PAPER-ONLY: when the fresh top-of-book
     # ladder is empty/absent the exit book-walk captured nothing and booked the exit at the MARK
@@ -717,20 +755,68 @@ strategies:
         min_edge_add: 0.3
         probability_haircut: 0.0
     lane_min_notional_ignores_minimal_1h_up: true
-    lane_min_notional_1h_up: 20
-    lane_max_notional_1h_up: 25
+    lane_min_notional_1h_up: 12   # 2026-08-01 SIZING FIX (audit+Codex): was 20 — the $20 floor RE-INFLATED 1h size AFTER the 0.3x size_multiplier, so the worst-strike lane got the biggest bet (~$17-20 vs 5m/15m $12-14). 1h 2W/4L bled -$46 vs 5m 3W/6L -$13 at the SAME win ratio purely from this. 12 lets the 0.3x actually shrink losers.
+    lane_max_notional_1h_up: 15   # 2026-08-01 was 25 — cap 1h bet size (loser-downsize, data: 1h 33%WR)
     btc_5m_long_sitout_on_1h_hist_rising: false
     # 2026-07-28 BTC 5m SHORT selection fix (operator GO + Codex) — restored 2026-07-30 for live shakedown (#1).
     # BTC 5m short = only 5m-short lane negative in good sessions; gates side-isolated to 5m BUY_NO.
     # quant_conviction: skip coin-flip shorts (quant_side None, raw in [0.48,0.52]). max_raw_est_prob_up 0.47: bearish floor.
     btc_5m_short_require_quant_conviction: true
     btc_5m_short_max_raw_est_prob_up: 0.47
+    # 2026-08-01 BTC 5m LONG SHADOW-ADMIT (operator GO). BTC 5m BUY_YES is 100% blocked by
+    # lane_min_edge, but investigation showed the rejects have est_prob_up < yes_price (negative
+    # computed edge) — lowering min_edge won't admit them. Ghost says these rejected longs win
+    # ~69% (avg +0.109), i.e. est_prob is UNDER-calibrated on 5m longs. Rather than loosen live,
+    # TAG the NEAR-MISS pocket (edge in [edge_min, effective_min_edge)) at the lane_min_edge reject
+    # so its settled-ghost WR is cleanly filterable — evidence to confirm the 69% before any
+    # est_prob bump. LOG-ONLY (no execution change). edge_min excludes the wild -0.36 rejects.
+    btc_5m_long_shadow_admit_enabled: true
+    btc_5m_long_shadow_admit_edge_min: -0.03
+    # 2026-08-01 BTC 5m LONG est_prob BUMP (operator GO — "debug bots not trading"). Under
+    # btc_only calibration scope, BTC is the sole executor but every 5m BUY_YES reads
+    # est_prob_up < yes_price (negative computed edge) -> lane_min_edge rejects it -> 0 BTC
+    # trades. Root cause = est_prob UNDER-calibrated on 5m longs (ghost: rejected near-miss
+    # longs win ~69%, avg +0.109). LONG-ONLY additive correction applied ONLY to the min-edge
+    # bump defines the NEAR-MISS POCKET WIDTH: a 5m BUY_YES with edge in [min_edge - bump,
+    # min_edge) is treated as a calibration probe (bitcoin.py ~4053). Live-measured 5m reject
+    # dist this session (n=54, est stuck ~0.43, yes~0.45-0.51): +0.10 covers ~33% of rejects
+    # (the near-even pocket); deeper-negative longs stay rejected. 15m longs show a similar
+    # pocket but have ZERO live evidence — NOT enabled. 0.0 => off (legacy gate).
+    # 2026-08-01 RIPPED (operator GO). Probe fired once tape flipped: live btc 5m BUY_YES n=4,
+    # 25% WR, -$12.40 (3 stops / 1 TP) — contrarian dip-buys stopped as bearish tape continued.
+    # Ghost 68.9% did NOT show up in live fills. Gate-bypass off; 5m longs revert to honest
+    # lane_min_edge (=kelly_nonpositive for the near-even pocket). shadow_admit tag stays log-only.
+    btc_5m_long_est_prob_bump: 0.0
+    # 2026-08-01 flat calibration-probe SIZE (operator GO). A near-miss 5m long (above) has
+    # NEGATIVE true edge, so bumping only the gate hit kelly_nonpositive (Kelly won't size a
+    # negative edge). Mirror btc_1h_simple_long: for the pocket, set min_edge->0 and FLOOR the
+    # sizing edge to this flat value so Kelly sizes a small controlled probe -> the long trades
+    # and we get LIVE WR to validate/refute the ghost 69%. Tagged reason=btc_5m_long_probe for
+    # isolation. Must be >= the RISK-MANAGER short-term min-edge (0.05) or evaluate_entry drops
+    # it ("Edge X too low for SHORT_TERM") — 0.04 emitted the signal but the risk layer killed it.
+    # 0.06 = btc_1h_simple_long's value (trades fine), clears both the lane gate and risk floor.
+    # lower toward 0.05 once validated; 0.0 => probe off (near-miss longs stay at kelly_nonpositive).
+    btc_5m_long_probe_sizing_edge: 0.0  # 2026-08-01 RIPPED with the bump above (probe bled 25% live)
     # 2026-07-31 P0a — BTC 15m SHORT guard (mirrors 5m). #1 bleeder: btc 15m BUY_NO 21% WR -$41,
     # shorts into strength across all RSI (flipped winner->loser in 48h). Block 15m BUY_NO unless
     # quant is clearly bearish (est_prob_up < 0.47). Side-isolated 15m BUY_NO; lane survives on real downside.
     btc_15m_short_require_quant_conviction: true
     btc_15m_short_max_raw_est_prob_up: 0.47
     btc_15m_short_min_raw_est_prob_up: 0.44  # floor: block deep-oversold shorts (raw_up<0.44 = 0% WR/-$49 squeeze tail); keep [0.44,0.47) winner
+    # 2026-08-01 FULL BTC 15m BUY_NO SIT-OUT (operator GO, live data). Whole 15m short lane bleeds:
+    # n=35 since 07-30, 20% WR, -$99.41, ALL BUY_NO, every raw_est band negative (raw<0.44 0%WR,
+    # [0.44,0.47) 28%, >=0.47 18%), both htf dirs incl 11 wrong-side BULLISH-htf shorts. A raw_est
+    # floor can't isolate the loser, so sit out the whole short side on 15m. BUY_YES 15m untouched.
+    # Blocks in _btc_15m_short_quant_guard_reason BEFORE the other 15m-short checks. false => prior guards.
+    btc_15m_short_sitout: true  # 2026-08-01 RE-SAT-OUT: tape flipped UP and the 15m short went wrong-side (0/2 this session, both stop_loss). It only works in a down-tape; sitting it out until the direction engine stops shorting into up-moves. Was: false RE-ENABLED (operator GO: "need btc 15 trading for data").
+    # The -$99/20%WR sit-out was decided on MIXED-tape data incl 11 wrong-side BULLISH-htf shorts.
+    # Tape is now cleanly BEARISH (htf4/1/15 all bearish) so 15m shorts are RIGHT-side — the exact
+    # calibration case the pooled loss never isolated. With sitout=false the band guards below apply:
+    # require_quant_conviction + max_raw 0.47 + min_raw 0.44 => trades ONLY the [0.44,0.47) slice
+    # (28% WR band; deep-oversold <0.44 0%WR and weak >=0.47 stay blocked). BUY_YES 15m untouched.
+    # BOUNDED-COST DATA PROBE: expect small bleed if shorts still lose; OFF-SWITCH = set true + reload.
+    # 2026-08-01 btc_15m_short_min_raw_est_prob_up floor now SUPERSEDED by the full sit-out above
+    # (kept for when the sit-out is lifted; harmless while sit-out true).
     # 2026-07-31 btc_15m_short_min_rsi PULLED (operator GO): mis-sourced (read 4H RSI not 15m) + wired to only 1 of 3 direction paths, so RSI-30 shorts fired anyway. Not defensible; code cleaned in the restart bundle. P0a (require_quant_conviction + max_raw_est_prob_up 0.47) left intact.
     window_delta_est_weight_15m: 0.5
     window_delta_est_weight_1h: 0.5
@@ -754,6 +840,14 @@ strategies:
         min_edge_buy_no: 0.08
         entry_window_min: 0.5
         entry_window_max: 5.5
+        # 2026-08-01 5m CORRECTNESS (operator: "we want correctness in 5min"). BTC 5m BUY_YES was
+        # forced LONG by btc_5m_neutral_fallback_15m off the slower 15m bias while the 5m quant said
+        # est_prob_up ~0.43 (bearish) — contrarian longs, 33% WR / -$13. This floor (read via
+        # _tf_cfg at bitcoin.py:3654, hot-reloadable) only admits a 5m LONG when the quant agrees
+        # (est_prob_up >= 0.50). Side-isolated to BUY_YES. Trade-off: may quiet 5m longs while est
+        # stays bearish — that is CORRECT (they were -EV wrong-side). 5m SHORT re-enable is the
+        # follow-up if we want 5m still trading (right-side) in a bearish tape.
+        min_est_prob_conviction_buy_yes: 0.50
       15m:
         min_edge: 0.06
         entry_window_min: 2.0
@@ -789,7 +883,7 @@ strategies:
     bitcoin_1h_simple_long:
       enabled: true
       entry_min: 0.55  # 2026-07-27: was 0.50 — band force-admitted BUY_YES LONG at the 0.50/0.53 midline (bypasses min_edge), both -16.5 losers this session. 0.55 stops midline coin-flip longs, keeps 0.55-0.85. Codex GO-WITH-NITS. RESTART-class (self._b1hsl_entry_min frozen at bitcoin.py:319).
-      entry_max: 0.85
+      entry_max: 0.58  # 2026-08-01 STRIKE FIX: was 0.85 — the simple-long band force-admitted 1h BUY_YES up to 0.85 (bypasses min_edge), the expensive-strike source. 0.58 confines it to near-fair. ⚠️RESTART-class (self._b1hsl_* frozen at init, bitcoin.py:319); the 1h.up entry_price_max:0.58 above IS hot and covers the main path meanwhile.
       sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 18.0
@@ -846,7 +940,7 @@ strategies:
             min_edge: 0.09
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
-            entry_price_max: 0.6
+            entry_price_max: 0.55   # 2026-08-01 STRIKE FIX v2 (mfe give-back data): was 0.6->0.58->0.55. Live mfe shows 1h losers PEAK +5-22% then reverse to a stop (give-back), NOT never-green — and give-back concentrates in the expensive slice: 1h entries >=0.58 were 56%WR but -$17.85 (win over half, still lose), while <0.55 won (+15.63). Winners draw ~26% MAE so no trail/stop separates them (config A/B: "no width discriminates"). Cheaper strike is the ONLY clean lever -> cap 0.55 keeps the high-payoff longs, drops the give-back slice. Hot path (1h simple_long entry_max still 0.58, restart-class, but this hot cap binds first).
             entry_window_min: 1.0
             entry_window_max: 59.0
             size_multiplier: 0.3
@@ -945,7 +1039,7 @@ strategies:
       datetime_utc: '2026-12-10T13:30:00Z'
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
-    disable_buy_no_5m_when_bearish: true
+    disable_buy_no_5m_when_bearish: false  # 2026-08-01 operator GO: re-enabled to test correct-side 5m shorts in a genuinely bearish tape; momentum-contradiction veto guards wrong-side (short-into-up) at 5m (m5 available). Was true (blunt wrong-side block, now superseded by the veto).
     tape_veto_60s_enabled: true
     tape_veto_60s_bps: 25
     overconfidence_sitout:
@@ -957,6 +1051,7 @@ strategies:
     # from flipping a native long into a SHORT when the alt's own primary+1h HTF are BOTH
     # bullish (fought a bull HTF, shorted SOL 1h inside bull/bull/bull twice, both lost).
     window_delta_flip_to_short_in_bull_enabled: false
+    window_delta_flip_to_long_enabled: false  # 2026-08-02 Tier1A flip-guard: match xrp/doge (proven-safe); stops bearish-native->peg-long wrong-side flip
     require_quant_side_agreement: true  # 2026-07-31 RESTORE (operator GO): 07-28-approved sol/bnb quant-disagree gate (disagree n103 34%/-$100.90 vs agree 48%/+$416); clobbered out by a baseline revert. Blocks entry when chosen side != quant est_prob side (exempts flip/simple_band). Hot-reloadable.
     lane_max_notional_15m_down: 5
     fresh_cross_override: false
@@ -1222,6 +1317,8 @@ strategies:
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
+    window_delta_flip_to_long_enabled: false  # 2026-08-02 Tier1A flip-guard: match xrp/doge (proven-safe); stops bearish-native->peg-long wrong-side flip
+    window_delta_flip_to_short_in_bull_enabled: false  # 2026-08-02 Tier1A: wire short-in-bull guard for ETH (was default-unguarded)
     window_delta_confirm_margin: 0.1
     low_atr_only_lanes: []
     disable_buy_no_5m_native: true
@@ -1758,15 +1855,15 @@ strategies:
     min_liquidity_1h_buy_yes: 400
     min_edge: 0.09
     defaults:
-      min_edge: 0.09
-      min_edge_buy_no: 0.08
+      min_edge: 0.05  # 2026-08-01 tinker: freq bump (was 0.09)
+      min_edge_buy_no: -0.03  # 2026-08-01 tinker: admit near-even overbought fade-shorts (was 0.08); bounded -EV in bull, watch realized, REVERT net-neg n>=5
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:
       5m:
         min_edge: 0.085
         entry_window_min: 0.0
-        entry_window_max: 4.5
+        entry_window_max: 10.0  # 2026-08-01: capture 5m pre-window entries (MTE edge); was 4.5, matches bnb 5m; REVERT if net-neg n>=5
       15m:
         min_edge: 0.085
         # 2026-07-30 RE-ENABLE (operator GO): 0.5 was an impossible-edge wall (pure disable).
@@ -1847,6 +1944,14 @@ strategies:
     # the Phase-1 buy_no_oversold_admission consolidation at next restart.
     buy_no_5m_pocket_rsi_min: 35.0
     buy_no_pocket_rsi_soft_penalty: 0.04
+    # 2026-08-01 operator GO — OVERBOUGHT FADE-SHORT (xrp 5m+15m). xrp had NO buy_yes pocket,
+    # so overbought longs never hit a flip point. Add pockets (RSI>=65 blocks the long-chase)
+    # which route overbought longs into the fade-SHORT (RSI>=70). xrp 5m/15m shorts are open.
+    buy_yes_15m_pocket_rsi_max: 65.0
+    buy_yes_5m_pocket_rsi_max: 65.0
+    overbought_fade_short_enabled: true
+    overbought_fade_short_rsi: 70.0
+    overbought_fade_short_windows: ["5m"]  # 2026-08-02: fade only carries tape signal at 5m; 15m/1h no-signal + live xrp 15m fade -13.66 (2W/8, 7/8 into unanimous bull)
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45
@@ -2007,6 +2112,13 @@ strategies:
     disable_buy_no_5m: false
     disable_buy_yes_5m: false  # 2026-07-31 RESTORE doge 5m long re-enable (85c9b26 intent; clobbered back to true by 96eaaaf)
     buy_yes_15m_pocket_rsi_max: 35
+    # 2026-08-01 operator GO — OVERBOUGHT FADE-SHORT (doge 5m). Add a 5m buy_yes pocket
+    # (RSI>=65 blocks the overbought long) so doge 5m overbought longs flip to fade-SHORT
+    # (RSI>=70). doge 5m short is OPEN; 15m/1h shorts stay disabled (flip respects that).
+    buy_yes_5m_pocket_rsi_max: 65.0
+    overbought_fade_short_enabled: true
+    overbought_fade_short_rsi: 70.0
+    overbought_fade_short_windows: ["5m"]  # 2026-08-02: fade only carries tape signal at 5m; 15m/1h no-signal + live xrp 15m fade -13.66 (2W/8, 7/8 into unanimous bull)
     est_prob:
       atr_low_pct: 0.0035
       atr_high_pct: 0.0053
@@ -2047,15 +2159,15 @@ strategies:
     min_liquidity_1h_buy_yes: 250
     min_edge: 0.09
     defaults:
-      min_edge: 0.09
-      min_edge_buy_no: 0.08
+      min_edge: 0.05  # 2026-08-01 tinker: freq bump (was 0.09)
+      min_edge_buy_no: -0.03  # 2026-08-01 tinker (was 0.08); bounded -EV in bull, watch+revert
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:
       5m:
         min_edge: 0.085
         entry_window_min: 0.0
-        entry_window_max: 4.5
+        entry_window_max: 10.0  # 2026-08-01: capture 5m pre-window entries (MTE edge); was 4.5, matches bnb 5m; REVERT if net-neg n>=5
       15m:
         min_edge: 0.04
         entry_window_min: 2.0
@@ -2210,6 +2322,7 @@ strategies:
   bnb_macro:
     require_quant_side_agreement: true  # 2026-07-31 RESTORE (operator GO): 07-28 sol/bnb quant-disagree gate, clobbered by baseline revert. Hot-reloadable.
     window_delta_flip_to_short_in_bull_enabled: false  # 2026-07-30 short-in-bull guard (sol-family)
+    window_delta_flip_to_long_enabled: false  # 2026-08-02 Tier1A flip-guard: match xrp/doge (proven-safe); stops bearish-native->peg-long wrong-side flip
     lane_max_notional_15m_down: 10
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -2224,6 +2337,13 @@ strategies:
     disable_buy_no_5m: false
     buy_yes_15m_pocket_rsi_max: 65.0
     buy_yes_15m_pocket_include_bearish: false
+    # 2026-08-01 operator GO — OVERBOUGHT FADE-SHORT (bnb 15m): when a native long is
+    # blocked here for chasing an overbought (RSI>=70) top, flip it to a fade-SHORT instead
+    # of sitting out. Attacks bnb's 140x buy_yes_15m_pocket_off starvation. Respects
+    # disable_buy_no_<tf>. Codex-GO (edge re-prices for NO side, no desync).
+    overbought_fade_short_enabled: true
+    overbought_fade_short_rsi: 70.0
+    overbought_fade_short_windows: ["5m"]  # 2026-08-02: fade only carries tape signal at 5m; 15m/1h no-signal + live xrp 15m fade -13.66 (2W/8, 7/8 into unanimous bull)
     buy_no_1h_pocket_rsi_min: 35.0
     buy_no_15m_pocket_rsi_min: 35.0
     est_prob:
@@ -2259,8 +2379,8 @@ strategies:
     min_liquidity_1h_buy_yes: 250
     min_edge: 0.09
     defaults:
-      min_edge: 0.09
-      min_edge_buy_no: 0.08
+      min_edge: 0.05  # 2026-08-01 tinker: freq bump (was 0.09)
+      min_edge_buy_no: -0.03  # 2026-08-01 tinker (was 0.08); bounded -EV in bull, watch+revert
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:

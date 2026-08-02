@@ -3654,18 +3654,76 @@ class SolMacroStrategy:
                     _alt_rsi is not None and float(_alt_rsi) < float(_by_pocket_rsi_max)
                 )
                 if not _in_pocket:
-                    _bump_skip(f"buy_yes_{_updown_tf}_pocket_off")
-                    _log_skip_reject(
-                        market=market,
-                        window=_updown_tf,
-                        side=allowed_side,
-                        action=action,
-                        reason=f"buy_yes_{_updown_tf}_pocket_off",
-                        yes_price=yes_price,
-                        htf_bias=primary_htf_bias,
-                        context={"side_source": side_source, "rsi_14": _alt_rsi},
+                    # 2026-08-01 (operator GO — "get alt participation on the fade side").
+                    # OVERBOUGHT FADE-SHORT: a BUY_YES blocked here is an overbought long-chase
+                    # (alt RSI >= pocket_rsi_max, non-bearish htf) — which is exactly a fade-short
+                    # setup. When RSI is EXTREME (>= overbought_fade_short_rsi) flip the blocked
+                    # long to a SHORT and fall through to the BUY_NO pocket + RSI gate + edge +
+                    # momentum-veto below, which RE-PRICE the edge for the NO side (edge is the
+                    # absolute formula yes-est off direction-agnostic est_prob_up, so the flip is
+                    # correct as long as the NO gates key off `action` — they do). Per-asset opt-in
+                    # (overbought_fade_short_enabled, DEFAULT OFF — inert until enabled per lane).
+                    # Only fires in NON-bearish htf: a bearish overbought already shorts natively.
+                    _ofs_on = bool(self.config.get("overbought_fade_short_enabled", False))
+                    _ofs_rsi = float(self.config.get("overbought_fade_short_rsi", 75.0) or 75.0)
+                    # 2026-08-02 (operator "go further" — xrp 15m fade audit + TAPE-LANE-EDGE-MAP):
+                    # (1) WINDOW ALLOWLIST. The fade only carries tape signal at 5m; the 15m/1h
+                    #     horizons show NO directional edge in the dataset, and live xrp 15m fade
+                    #     went 2W/8 / -13.66 shorting a UNANIMOUS bull 7 of 8 times. When
+                    #     `overbought_fade_short_windows` is set, only fade on those windows.
+                    # Normalize (Codex E): a bare string "5m" would set()-split into
+                    # {"5","m"} and mis-suppress; a non-iterable would raise. Coerce safely.
+                    _ofs_windows = self.config.get("overbought_fade_short_windows")
+                    if isinstance(_ofs_windows, str):
+                        _ofs_windows_set = {_ofs_windows}
+                    elif _ofs_windows:
+                        try:
+                            _ofs_windows_set = {str(w) for w in _ofs_windows}
+                        except TypeError:
+                            _ofs_windows_set = set()
+                    else:
+                        _ofs_windows_set = set()
+                    _ofs_window_ok = (not _ofs_windows_set) or (str(_updown_tf or "") in _ofs_windows_set)
+                    # (2) UNANIMOUS-BULL GUARD. Never fade a top when 1H+15M+5M are ALL bullish —
+                    #     overbought keeps running in a strong trend; the fade is only +EV on a
+                    #     high-vol overshoot / a crack in the trend, not a steady unanimous bull.
+                    #     macro_trend/bias_15m/bias_5m are resolved above (~L3173). Default ON.
+                    _ofs_block_unan = bool(
+                        self.config.get("overbought_fade_short_block_unanimous_bull", True)
+                    ) and (
+                        str(macro_trend or "").upper() == "BULLISH"
+                        and str(bias_15m or "").upper() == "BULLISH"
+                        and str(bias_5m or "").upper() == "BULLISH"
                     )
-                    continue
+                    if (
+                        _ofs_on
+                        and _ofs_window_ok
+                        and not _ofs_block_unan
+                        and _alt_rsi is not None
+                        and float(_alt_rsi) >= _ofs_rsi
+                        and str(primary_htf_bias or "").upper() != "BEARISH"
+                        # RESPECT intentional short disables (Codex caveat): this flip runs AFTER
+                        # the generic disable_buy_no_<tf> gate, so re-check it here — never fade
+                        # into a lane whose BUY_NO is deliberately off (e.g. DOGE 15m/1h shorts).
+                        and not bool(self.config.get(f"disable_buy_no_{_updown_tf}", False))
+                        and not bool(self.config.get(f"disable_buy_no_{_updown_tf}_native", False))
+                    ):
+                        action = "BUY_NO"
+                        allowed_side = "SHORT"
+                        side_source = f"{side_source}__overbought_fade_short(rsi={float(_alt_rsi):.0f})"
+                    else:
+                        _bump_skip(f"buy_yes_{_updown_tf}_pocket_off")
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=allowed_side,
+                            action=action,
+                            reason=f"buy_yes_{_updown_tf}_pocket_off",
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={"side_source": side_source, "rsi_14": _alt_rsi},
+                        )
+                        continue
             # 2026-07-31 Phase-1: the early per-window BUY_NO pocket RSI floor moved into the
             # consolidated _resolve_rsi_gate (hard reject when no soft penalty = BNB; soft
             # min_edge_add when a penalty is set = XRP). This duplicated block is deleted.
