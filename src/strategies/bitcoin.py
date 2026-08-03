@@ -86,6 +86,7 @@ from src.strategies.strategy_ai_context import (
     format_market_metadata,
 )
 from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.tape_map import snapshot_and_log as _tape_map_snapshot
 from src.analysis.tape_freshness import compute_freshness_penalty
 from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
@@ -407,12 +408,21 @@ class BitcoinStrategy:
         return "BUY_YES", "UP", "LONG"
 
     @staticmethod
-    def _btc_momentum_side(mom: Any = None) -> Optional[str]:
+    def _btc_momentum_side(mom: Any = None, disagree_none: bool = False) -> Optional[str]:
         m15_dir = getattr(mom, "m15_direction", None) if mom is not None else None
         m5_dir = getattr(mom, "m5_direction", None) if mom is not None else None
-        if m15_dir in ("SPIKE_DOWN", "DRIFT_DOWN") or m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN"):
+        _up = m15_dir in ("SPIKE_UP", "DRIFT_UP") or m5_dir in ("SPIKE_UP", "DRIFT_UP")
+        _dn = m15_dir in ("SPIKE_DOWN", "DRIFT_DOWN") or m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN")
+        # 2026-08-02 Tier2b: default (disagree_none=False) preserves the legacy DOWN-first
+        # tie-break byte-for-byte. When both an UP and a DOWN signal are present (m5/m15
+        # conflict) the legacy path silently returns SHORT — a DOWN bias that mislabels a
+        # mixed tape as bearish. disagree_none=True returns None on that genuine conflict
+        # (no confident momentum), removing the false-short. Non-conflict cases identical.
+        if disagree_none and _up and _dn:
+            return None
+        if _dn:
             return "SHORT"
-        if m15_dir in ("SPIKE_UP", "DRIFT_UP") or m5_dir in ("SPIKE_UP", "DRIFT_UP"):
+        if _up:
             return "LONG"
         return None
 
@@ -446,6 +456,19 @@ class BitcoinStrategy:
         """Resolve BTC side in one compact path with explicit suppression rules."""
         htf_side = "LONG" if htf_bias == "BULLISH" else "SHORT" if htf_bias == "BEARISH" else allowed_side
         momentum_side = self._btc_momentum_side(mom)
+        # 2026-08-02 Tier2b (SHADOW-FIRST, operator GO): the legacy _btc_momentum_side DOWN-first
+        # tie-break mislabels a mixed m5/m15 tape as SHORT. That feeds (a) the quant-flip momentum
+        # gate below (blocks a LONG flip) and (b) the momentum-contradiction veto (~L555) which then
+        # suppresses a LONG and PERMITS a wrong-side SHORT -> shorts the bull / starves longs. v2
+        # returns None on genuine up/down conflict. DEFAULT SHADOW: log divergence only; promote live
+        # by setting btc_momentum_side_disagree_none:true after the shadow proves the down-bias hurts.
+        _mom_side_v2 = self._btc_momentum_side(mom, disagree_none=True)
+        if _mom_side_v2 != momentum_side:
+            reason_parts.append(
+                f"btc_mom_side_downbias_shadow(live={momentum_side},v2={_mom_side_v2},tf={tf})"
+            )
+            if bool(self.config.get("btc_momentum_side_disagree_none", False)):
+                momentum_side = _mom_side_v2
         counter_trend_disabled = bool(self.config.get("disable_buy_no_counter_trend", False))
         rollover_short = (
             not counter_trend_disabled
@@ -562,6 +585,43 @@ class BitcoinStrategy:
                     reason_parts.append(
                         f"momentum_contradiction_suppressed(side={final_side},mom={momentum_side},adm_{_cdir}={_adm_c:.3f})"
                     )
+
+        # 2026-08-02 Tier2c (SHADOW-FIRST, operator GO) — STRONG-4H vetoes a fast-TF SHORT.
+        # The two guards above only fire when live m5 momentum is LONG (short-into-upspike). They
+        # MISS the ROOT case the 3-agent audit named: a fast-TF SHORT taken during a PULLBACK in a
+        # strongly-bullish 4H — m5 momentum is momentarily DOWN so neither guard trips, yet the trade
+        # shorts straight into a strong bull that resumes. The audit's core finding: "HTF only
+        # PENALIZES, never VETOES." This VETOES a SHORT when the 4H is STRONGLY bullish (hist >=
+        # strong-magnitude AND rising) — the slow HTF overriding the fast-TF side. strong-magnitude
+        # (default 40) sits well above the 2a decision bar (20) so ONLY genuinely strong bulls veto;
+        # a merely-decided +20 bull does not. Tape-escape aware (realized btc-down winning => admit).
+        # DEFAULT SHADOW: always logs btc_strong_4h_veto_shadow; suppresses live ONLY when
+        # btc_strong_4h_veto_fast_short_enabled:true (promote after the shadow proves it's +EV).
+        if (
+            not _suppressed
+            and final_side == "SHORT"
+            and htf_bias == "BULLISH"
+            and macd_4h is not None
+        ):
+            try:
+                _hist4h = float(getattr(macd_4h, "histogram", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                _hist4h = 0.0
+            _rising4h = bool(getattr(macd_4h, "histogram_rising", False))
+            _strong_mag = float(self.config.get("btc_strong_4h_veto_hist_magnitude", 40.0) or 40.0)
+            if _hist4h >= _strong_mag and _rising4h:
+                try:
+                    _adm_s = float(get_tape_admission_delta("bitcoin", tf, "down") or 0.0)
+                except Exception:
+                    _adm_s = 0.0
+                _s_escape = float(self.config.get("btc_strong_4h_veto_tape_escape", 0.02) or 0.02)
+                if _adm_s < _s_escape:
+                    reason_parts.append(
+                        f"btc_strong_4h_veto_shadow(hist={_hist4h:.0f},rising={_rising4h},adm_down={_adm_s:.3f})"
+                    )
+                    if bool(self.config.get("btc_strong_4h_veto_fast_short_enabled", False)):
+                        _suppressed = True
+                        _suppress_reason = "btc_short_against_strong_4h_bull"
 
         action, direction, effective_side = self._btc_action_for_side(final_side)
         return BTCDirectionDecision(
@@ -1970,6 +2030,31 @@ class BitcoinStrategy:
         htf_bias = self._get_higher_tf_bias(ta)
         bias_1h = self._get_1h_bias(ta)
         bias_15m = self._get_15m_bias(ta)
+
+        # 2026-08-02 TAPE MAP (Phase 1, SHADOW — operator directive). Log BTC's mechanical tape
+        # state once per cycle (deduped) to data/calibration/tape_map.jsonl. htf_bias carries the
+        # direction; per-TF histograms feed the MACD vote. OBSERVE-ONLY; fail-silent.
+        # #104 fix: BTC's TA exposes MACD as objects, NOT as btc_*_histogram floats
+        # (those attrs never existed -> macd_signs were always [0,0,0] -> BTC stuck FLAT).
+        # Correct paths: 5m lives under ta.tf_5m.macd; 15m/1h are top-level ta.macd_15m/1h.
+        # BTC's TA has no ema_9/21/50 / atr_14 / trend_strength in the alt shape (it uses
+        # sabre/sma), so those stay None honestly -- direction now classifies via the MACD
+        # vote (+/-1..3) plus htf_bias, which is enough to reach |dscore|>=2.
+        _btc_macd_5m = getattr(getattr(ta, "tf_5m", None), "macd", None)
+        _tape_map_snapshot(
+            "bitcoin",
+            current_price=getattr(ta, "current_price", None),
+            atr_14=getattr(ta, "atr_14", None),
+            trend_direction=htf_bias,
+            trend_strength=getattr(ta, "trend_strength", None),
+            macd_5m=getattr(_btc_macd_5m, "histogram", None),
+            macd_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+            macd_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+            rsi_14=getattr(ta, "rsi_14", None),
+            ema_9=getattr(ta, "ema_9", None),
+            ema_21=getattr(ta, "ema_21", None),
+            ema_50=getattr(ta, "ema_50", None),
+        )
         bias_5m = self._get_5m_bias(ta)
 
         logger.info(
