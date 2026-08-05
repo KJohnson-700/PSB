@@ -447,6 +447,29 @@ def public_dashboard_url() -> Optional[str]:
     return f"https://{d}"
 
 
+def _calibration_scope_digest(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Surface trading.calibration_scope so non-BTC silence reads as intentional.
+
+    When enabled, only `execution_strategies` create new entries; every other
+    lane's scan-task is skipped in the cycle. Fail-safe: never breaks the pulse.
+    """
+    try:
+        scope = ((config or {}).get("trading") or {}).get("calibration_scope") or {}
+        enabled = bool(scope.get("enabled"))
+        return {
+            "enabled": enabled,
+            "mode": scope.get("mode") if enabled else None,
+            "execution_strategies": list(scope.get("execution_strategies") or [])
+            if enabled
+            else [],
+            "execution_windows": list(scope.get("execution_windows") or [])
+            if enabled
+            else [],
+        }
+    except Exception:
+        return {"enabled": False}
+
+
 def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
     """Machine-readable snapshot for logs and /api/ops/summary."""
     trading = bot.config.get("trading", {}) if getattr(bot, "config", None) else {}
@@ -528,8 +551,16 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "total_pnl": summary.get("total_pnl", 0),
         "daily_trades": getattr(rm, "daily_trades", 0) if rm else 0,
         "daily_pnl": round(float(getattr(rm, "daily_pnl", 0) or 0), 4) if rm else 0.0,
-        "exposure_loss_kill_enabled": bool(
+        "exposure_loss_kill_enabled": bool(getattr(em0, "loss_kill_active", False))
+        if em0 is not None
+        else None,
+        "exposure_loss_kill_configured": bool(
             getattr(em0, "loss_kill_switch_enabled", True)
+        )
+        if em0 is not None
+        else None,
+        "exposure_loss_kill_apply_in_paper": bool(
+            getattr(em0, "loss_kill_apply_in_paper", False)
         )
         if em0 is not None
         else None,
@@ -561,6 +592,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
             "note": "Journal/log lines may use mixed TZ — compare using ops_ts or convert explicitly",
         },
         "regime": _regime_hint(trading, btc_spot_f),
+        "calibration_scope": _calibration_scope_digest(getattr(bot, "config", {}) or {}),
         "window_watch": _window_watch_ops_stats(bot),
         "scan_interval_sec": getattr(bot, "scan_interval", None),
         "dashboard_url": public_dashboard_url(),

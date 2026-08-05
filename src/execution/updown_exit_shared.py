@@ -105,6 +105,15 @@ class UpdownExitGlobals:
     # fill at the qualifying tick, real near-resolution books may be worse.
     take_profit_late_pct: float = 0.0
     take_profit_late_gate_mins: float = 0.0
+    # ── 5m HOLD-ALL (default OFF) ────────────────────────────────────────────
+    # 2026-08-04 operator GO. Data: recent-8 5m n=62 realized WR 15% but HELD-to-
+    # resolution WR 45% and sum(hold_minus_exit)=+$212 — stops/ngc amputate a coinflip's
+    # winners (82% of 5m exits are stops). hold_5m_all forces EVERY 5m lane to hold-to-
+    # resolution with a uniform loser-floor (hold_5m_loser_floor_pct) as the resolver's
+    # FINAL word — one flag instead of smearing hold across 14 per-lane blocks. hold_means_hold
+    # then suppresses ngc/stop/time/flatten; only the floor + -50% catastrophic fire. Reversible.
+    hold_5m_all: bool = False
+    hold_5m_loser_floor_pct: float = 0.30
 
 
 @dataclass(frozen=True)
@@ -273,6 +282,8 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         updown_hold_winners_to_resolution=bool(
             ec.get("updown_hold_winners_to_resolution", False)
         ),
+        hold_5m_all=bool(ec.get("hold_5m_all", False)),
+        hold_5m_loser_floor_pct=float(ec.get("hold_5m_loser_floor_pct", 0.30) or 0.30),
         updown_stop_loss_pct=float(ec.get("updown_stop_loss_pct", 0.20) or 0.20),
         updown_stop_cents=base_stop,
         updown_exit_window_mins=base_win,
@@ -499,6 +510,22 @@ def resolve_updown_exit_params_for_position(
         params, lane=lane, btc_1h_regime=btc_1h_regime, g=g,
         strategy_name=strategy_name, window=resolved_window,
     )
+    # 2026-08-04 (operator GO) 5m HOLD-ALL — the TRUE final word for 5m. Forces every 5m lane
+    # to hold-to-resolution with a uniform loser-floor (hold_means_hold suppresses ngc/stop/
+    # time/flatten; only the floor + -50% catastrophic fire). Data: 5m realized 15% WR vs held
+    # 45% / +$212 left on the table. dynamic_stop OFF so the floor fires at the raw pct (the
+    # loser-floor requires effective==raw). Applied AFTER regime-conditioning so nothing re-tightens
+    # a 5m hold. OFF by default (hold_5m_all:false) => zero behavior change.
+    if getattr(g, "hold_5m_all", False) and resolved_window == "5m":
+        params["updown_hold_winners_to_resolution"] = True
+        # Codex 2026-08-04: only WIDEN a tight stop up to the floor — NEVER tighten a lane that is
+        # already pure-hold (stop==0.0, rides to catastrophic) or has a lane-calibrated WIDER floor
+        # (e.g. sol 5m down 0.40, doge 5m down 0.0). Uniform 0.30 would have guillotined their winners.
+        _cur_stop = float(params.get("updown_stop_loss_pct", 0.0) or 0.0)
+        _floor = float(getattr(g, "hold_5m_loser_floor_pct", 0.30) or 0.30)
+        if _cur_stop != 0.0:
+            params["updown_stop_loss_pct"] = max(_cur_stop, _floor)
+        params["dynamic_stop_enabled"] = False
     return UpdownResolvedExitParams(
         take_profit_pct=float(params["take_profit_pct"]),
         updown_hold_winners_to_resolution=bool(

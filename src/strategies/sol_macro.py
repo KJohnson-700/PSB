@@ -87,6 +87,11 @@ from src.execution.performance_feedback import (
     get_loosen_min_edge_mult,
 )
 from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.tape_map import (
+    snapshot_and_log as _tape_map_snapshot,
+    latest_tape_state as _latest_tape_state,
+    log_side_veto_shadow as _log_side_veto_shadow,
+)
 from src.analysis.tape_freshness import compute_freshness_penalty
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -3160,6 +3165,42 @@ class SolMacroStrategy:
         corr = ta.correlation
         mtt = ta.multi_tf
 
+        # 2026-08-02 TAPE MAP (Phase 1, SHADOW — operator directive: map the tape so the bot can
+        # shift behavior with it). Log this alt's mechanical tape state once per cycle (deduped
+        # inside) to data/calibration/tape_map.jsonl so we can SEE the regime + its transitions.
+        # OBSERVE-ONLY: no trade depends on this yet. Fail-silent (snapshot_and_log never raises).
+        _tape_map_snapshot(
+            self._signal_strategy_name,
+            current_price=getattr(sol, "current_price", None),
+            atr_14=getattr(sol, "atr_14", None),
+            trend_direction=getattr(sol, "trend_direction", None),
+            trend_strength=getattr(sol, "trend_strength", None),
+            macd_5m=getattr(sol, "macd_5m", None),
+            macd_15m=getattr(sol, "macd_15m", None),
+            macd_1h=getattr(sol, "macd_1h", None),
+            rsi_14=getattr(sol, "rsi_14", None),
+            ema_9=getattr(sol, "ema_9", None),
+            ema_21=getattr(sol, "ema_21", None),
+            ema_50=getattr(sol, "ema_50", None),
+        )
+
+        # 2026-08-02 SIDE-VETO SHADOW (observe-only, operator GO; high-confidence lane). Diagnosed
+        # bleed: xrp 15m SHORT (BUY_NO) fires into UP tape = wrong-direction. Log what a tape-
+        # adaptive veto WOULD do each cycle (tape==UP AND realized down-adapter not loosening) —
+        # DOES NOT block. Measured offline vs trade outcomes before it is ever made active. R4.
+        try:
+            if self._signal_strategy_name == "xrp_macro":
+                _sv_ts = _latest_tape_state("xrp_macro")
+                _sv_dir = str((_sv_ts or {}).get("direction") or "")
+                _sv_adm = float(get_tape_admission_delta("xrp_macro", "15m", "down") or 0.0)
+                _log_side_veto_shadow(
+                    strategy="xrp_macro", window="15m", side="down", target_action="BUY_NO",
+                    tape_dir=(_sv_dir or None), tape_strength=(_sv_ts or {}).get("strength"),
+                    adm=round(_sv_adm, 4), would_veto=bool(_sv_dir == "UP" and _sv_adm >= 0.0),
+                )
+        except Exception:
+            pass
+
         # ═══════════════════════════════════════════════
         # LAYER 0: Exposure check
         # ═══════════════════════════════════════════════
@@ -3592,6 +3633,147 @@ class SolMacroStrategy:
                     context={"side_source": side_source},
                 )
                 continue
+            # 2026-08-02 KNOB A — OVERSOLD-SHORT gate, TAPE-ADAPTIVE (operator directive: no
+            # tape-blind gates that break when the tape flips). The oversold short is only -EV
+            # when the tape is UP (it fades the bounce -> stop-out; that's the -23.8/0W bull
+            # cluster). In a DOWN tape an oversold alt CONTINUES down = the short is +EV. So do
+            # NOT hardcode "block RSI<40" — defer to the lane's REALIZED tape-adapter for the
+            # short ("down") side: get_tape_admission_delta >= admit_below => short lane net-
+            # losing/never-green (up/bounce tape) => BLOCK the oversold short; < admit_below =>
+            # short lane winning (down tape) => ADMIT (momentum continuation). The lane's
+            # non-oversold shorts (RSI >= floor) keep filling and feed the adapter, so the gate
+            # SELF-FLIPS when the tape turns instead of staying fit to this bull. Config:
+            # buy_no_oversold_hard_block_rsi (which shorts count as oversold, 0=off) +
+            # buy_no_oversold_adapter_admit_below (delta threshold to admit, default 0.0 =>
+            # block while losing/neutral incl no-data, admit only once realized-winning).
+            # 2026-08-03 P0 FLAT-ENTRY BLOCK (Codex bundle, operator GO): realized forensics show 23%
+            # of trades fired when the tape had NO direction (tape_map FLAT), ~15% WR = pure fee-bleed
+            # coin-flips. Block entry (BOTH sides) when the tape_map read is FLAT / low-conf on a FRESH
+            # snapshot. FAIL OPEN when the snapshot is stale/missing (feed stall must not starve all
+            # entries). Per-window via _tf_cfg; default OFF (require_tape_direction=False). Config (by_tf):
+            # require_tape_direction (bool), require_tape_direction_min_conf (0.5), _max_age_s (90).
+            if is_updown and bool(self._tf_cfg(_updown_tf, "require_tape_direction", False)):
+                try:
+                    _fd_tm = _latest_tape_state(self._signal_strategy_name) or {}
+                except Exception:
+                    _fd_tm = {}
+                _fd_dir = str(_fd_tm.get("direction") or "").upper()
+                _fd_conf = float(_fd_tm.get("confidence", 0.0) or 0.0)
+                _fd_minconf = float(self._tf_cfg(_updown_tf, "require_tape_direction_min_conf", 0.5) or 0.0)
+                _fd_max_age = float(self._tf_cfg(_updown_tf, "require_tape_direction_max_age_s", 90.0) or 0.0)
+                try:
+                    _fd_age = time.time() - float(_fd_tm.get("ts", 0.0) or 0.0)
+                except Exception:
+                    _fd_age = 1e9
+                _fd_fresh = _fd_max_age <= 0.0 or _fd_age <= _fd_max_age
+                if _fd_fresh and (_fd_dir not in ("UP", "DOWN") or _fd_conf < _fd_minconf):
+                    _bump_skip(f"{_updown_tf}_flat_tape_no_direction")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason=f"{_updown_tf}_flat_tape_no_direction(dir={_fd_dir or 'NONE'},conf={_fd_conf:.2f})",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": side_source, "tape_dir": _fd_dir, "tape_conf": _fd_conf},
+                    )
+                    continue
+            # 2026-08-03 (c) TAPE-MAP SIDE-VETO (operator GO, Codex-reviewed): a GENERAL wrong-side
+            # veto for shorts — covers the RSI 40-70 shorts the oversold gate (below) does NOT catch.
+            # Veto BUY_NO when tape_map direction is UP with confidence >= threshold = shorting into
+            # an up-tape = wrong side (evidence: xrp 15m BUY_NO -30.06/WR13% n=15; side-veto shadow:
+            # 29% of xrp 15m shorts fire into UP-tape). Self-flips: SILENT in DOWN/FLAT, fires ONLY
+            # on a confident UP-tape. Per-window via _tf_cfg so it scopes to 15m only. Config (by_tf):
+            # buy_no_tape_map_veto_up (bool, default False=off) + buy_no_tape_map_veto_min_confidence (0.6).
+            if is_updown and action == "BUY_NO" and bool(self._tf_cfg(_updown_tf, "buy_no_tape_map_veto_up", False)):
+                try:
+                    _sv_tm = _latest_tape_state(self._signal_strategy_name) or {}
+                except Exception:
+                    _sv_tm = {}
+                _sv_dir = str(_sv_tm.get("direction") or "").upper()
+                _sv_conf = float(_sv_tm.get("confidence", 0.0) or 0.0)
+                _sv_minconf = float(self._tf_cfg(_updown_tf, "buy_no_tape_map_veto_min_confidence", 0.6) or 0.0)
+                # Codex fix: freshness guard — a stale cached UP after a feed stall must NOT over-block.
+                # Fail OPEN (no veto) when the map snapshot is older than max_age_s.
+                _sv_max_age = float(self._tf_cfg(_updown_tf, "buy_no_tape_map_veto_max_age_s", 90.0) or 0.0)
+                try:
+                    _sv_age = time.time() - float(_sv_tm.get("ts", 0.0) or 0.0)
+                except Exception:
+                    _sv_age = 1e9
+                if _sv_dir == "UP" and _sv_conf >= _sv_minconf and _sv_age <= _sv_max_age:
+                    _bump_skip(f"buy_no_{_updown_tf}_tape_map_side_veto")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason=f"buy_no_{_updown_tf}_tape_map_side_veto(dir=UP,conf={_sv_conf:.2f})",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": side_source, "tape_dir": _sv_dir, "tape_conf": _sv_conf},
+                    )
+                    continue
+            # 2026-08-03 #1 REBUILD (operator GO): gate on the TAPE MAP direction, which is
+            # fed by price/indicators every ~30s and therefore HAS data even when the realized
+            # adapter is starved. The old adapter-only version DEADLOCKED: in a deep one-sided
+            # oversold down-tape every short is RSI<floor -> all blocked -> nothing fills ->
+            # adapter never learns (n=1-5, delta 0.0) -> block-on-no-data fails CLOSED -> it
+            # degenerates into a STATIC RSI<floor block that fights the very down-tape it should
+            # ride (confirmed 2026-08-03: 828 oversold shorts blocked / 0 non-oversold fills).
+            #   map DOWN (continuation) -> ADMIT the oversold short
+            #   map UP   (bounce risk)  -> BLOCK
+            #   map FLAT / low-conf / no-map -> fall back to the realized adapter (old logic:
+            #       block if adm >= admit_below, else admit) so the adapter is consulted ONLY in
+            #       the genuinely-ambiguous case and no-data no longer forces a static block.
+            # Self-flips bull<->bear because the map is not fed by (gated) fills. Config:
+            # buy_no_oversold_hard_block_rsi (0=off), buy_no_oversold_use_tape_map (default True),
+            # buy_no_oversold_map_min_confidence (default 0.5), buy_no_oversold_adapter_admit_below.
+            _a_bn_floor = float(self.config.get("buy_no_oversold_hard_block_rsi", 0.0) or 0.0)
+            if is_updown and action == "BUY_NO" and _a_bn_floor > 0.0:
+                _a_rsi = getattr(sol, "rsi_14", None)
+                if _a_rsi is not None and float(_a_rsi) < _a_bn_floor:
+                    _os_block = None  # None=undecided, True=block, False=admit
+                    _os_dbg = ""
+                    if bool(self.config.get("buy_no_oversold_use_tape_map", True)):
+                        try:
+                            _os_tm = _latest_tape_state(self._signal_strategy_name) or {}
+                        except Exception:
+                            _os_tm = {}
+                        _os_dir = str(_os_tm.get("direction") or "").upper()
+                        _os_conf = float(_os_tm.get("confidence", 0.0) or 0.0)
+                        _os_min_conf = float(self.config.get("buy_no_oversold_map_min_confidence", 0.5) or 0.0)
+                        if _os_dir in ("DOWN", "UP") and _os_conf >= _os_min_conf:
+                            _os_block = (_os_dir == "UP")  # UP=bounce->block, DOWN=continuation->admit
+                            _os_dbg = f"map={_os_dir},conf={_os_conf:.2f}"
+                        else:
+                            _os_dbg = f"map={_os_dir or 'NONE'},conf={_os_conf:.2f}->adptr"
+                    if _os_block is None:  # FLAT / low-conf / map off -> realized-adapter tie-break
+                        try:
+                            _a_adm = float(
+                                get_tape_admission_delta(self._signal_strategy_name, _updown_tf, "down") or 0.0
+                            )
+                        except Exception:
+                            _a_adm = 0.0
+                        _a_admit_below = float(
+                            self.config.get("buy_no_oversold_adapter_admit_below", 0.0) or 0.0
+                        )
+                        _os_block = (_a_adm >= _a_admit_below)
+                        _os_dbg = (f"{_os_dbg},adm={_a_adm:+.3f}" if _os_dbg else f"adm={_a_adm:+.3f}")
+                    if _os_block:
+                        _bump_skip(f"buy_no_{_updown_tf}_oversold_adaptive_block")
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=allowed_side,
+                            action=action,
+                            reason=f"buy_no_{_updown_tf}_oversold_adaptive_block(rsi={float(_a_rsi):.0f}<{_a_bn_floor:.0f},{_os_dbg})",
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={"side_source": side_source, "rsi_14": _a_rsi, "oversold_block_dbg": _os_dbg},
+                        )
+                        continue
+                    # else: down-tape continuation (or adapter says short winning) -> admit, fall through.
             # 2026-06-15: per-asset, PER-WINDOW BUY_YES (LONG) sit-out. Set
             # `disable_buy_yes_<window>: true` (e.g. disable_buy_yes_15m) for an asset
             # whose long-side on that window is -EV (bnb 15m -0.048/-0.080 over n=16k)
@@ -4365,6 +4547,40 @@ class SolMacroStrategy:
                     )
                     continue
                 if self.enforce_alt_1h_alignment:
+                    # 2026-08-04 (operator GO): the alignment gate was DIAGNOSTIC-ONLY — it appended a
+                    # reason and LET THE TRADE THROUGH ("a guard that only writes a comment"). LIVE PROOF
+                    # (sess 175827 ops_pulse): all 6 lanes went SHORT into a BULLISH btc/market because the
+                    # alts' native 15m/5m were bearish and the 1h (NEUTRAL) didn't block. When
+                    # alt_1h_require_confirm is set, actually SKIP a native entry the alt's OWN 1h does not
+                    # confirm: a short (BUY_NO) needs 1H BEARISH, a long (BUY_YES) needs 1H BULLISH — a
+                    # NEUTRAL/opposing 1H blocks it. Alt-native (NOT btc). Hot-reloadable (self.config.get).
+                    # Reversible (false). NOTE: this reduces frequency (neutral-1H entries are blocked).
+                    # 2026-08-04 loosen: alt_1h_allow_neutral=true blocks ONLY an OPPOSING 1H
+                    # (short w/ 1H BULLISH, long w/ 1H BEARISH); a NEUTRAL 1H passes. Keeps the
+                    # anti-short-into-bull protection but un-starves neutral tape (was 115 skips/30min,
+                    # 0 entries). Reversible (false = original require-confirm behavior).
+                    _need_1h = "BEARISH" if action == "BUY_NO" else "BULLISH"
+                    _oppose_1h = "BULLISH" if action == "BUY_NO" else "BEARISH"
+                    _h1u = str(_h1_trend or "NEUTRAL").upper()
+                    _blocked_1h = (
+                        (_h1u == _oppose_1h)
+                        if bool(self.config.get("alt_1h_allow_neutral", False))
+                        else (_h1u != _need_1h)
+                    )
+                    if (
+                        bool(self.config.get("alt_1h_require_confirm", False))
+                        and _blocked_1h
+                    ):
+                        reason_parts.append(
+                            f"alt_1h_unconfirmed_{action.lower()}_{str(_h1_trend or 'neutral').lower()}"
+                        )
+                        _bump_skip("alt_1h_unconfirmed")  # Codex: count it so starvation is measurable
+                        logger.info(
+                            "  %s SKIP %s on '%s' — own 1H=%s does not confirm (need %s)",
+                            self._signal_strategy_name, action, market.question[:40],
+                            _h1_trend, _need_1h,
+                        )
+                        continue
                     if action == "BUY_NO" and _h1_trend == "BULLISH":
                         reason_parts.append("buy_no_against_alt_1h_bullish")
                         logger.info(
@@ -6347,6 +6563,13 @@ class SolMacroStrategy:
                 self.config.get("ai_updown_marginal_min_edge", 0.03)
             ):
                 _admit_marginal_no_ai = False
+            # EXPERIMENT (2026-08-03, operator-directed): drop the min_edge floor to test whether
+            # it is an OLYMPUS PRE-FEE relic (edge is pre-fee; the uniform 0.09 bar was calibrated
+            # at fee=$0) strangling frequency on every lane. Global flag, hot-reloadable, ONE-flip
+            # reversible. Covers sol/xrp/hype/doge/bnb (they inherit this scan loop). 0.0 keeps only
+            # the breakeven floor (net-of-fee edge must still be >= 0), NOT a full ungate.
+            if self.full_config.get("experiment_disable_min_edge_gate", False):
+                effective_min_edge = 0.0
             if _net_edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (_net_edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")

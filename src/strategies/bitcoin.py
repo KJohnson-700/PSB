@@ -2054,6 +2054,10 @@ class BitcoinStrategy:
             ema_9=getattr(ta, "ema_9", None),
             ema_21=getattr(ta, "ema_21", None),
             ema_50=getattr(ta, "ema_50", None),
+            # #110: BTC has no ema_9/21/50, so give it a 3rd direction vote via its native
+            # sabre MA-trend ({1,-1,0}); fills the EMA-vote slot so BTC classifies UP/DOWN
+            # on macd+sabre agreement even when htf_bias is NEUTRAL (was stuck FLAT).
+            aux_dir=getattr(getattr(ta, "trend_sabre", None), "trend", None),
         )
         bias_5m = self._get_5m_bias(ta)
 

@@ -116,12 +116,75 @@ def pol_tape_hold_aligned_trending(ctx):
     return "CUT"
 
 
+# --- LLM AI-policy slot -----------------------------------------------------
+# The AI brain runs OUT-OF-PROCESS via a terminal tool (Codex CLI) or Claude Code
+# — NOT the API. It reads an emitted decision batch (no outcome leaked) and writes
+# ai_exit_decisions.jsonl {trade_id, decision:'HOLD'|'CUT'}. This policy just reads
+# that file back and applies it, so the AI is scored on the exact champion/challenger
+# footing as every coded policy. Missing/unknown trade -> CUT (conservative = static).
+AI_DECISIONS = CAL / "ai_exit_decisions.jsonl"
+_AI_CACHE = {}
+
+
+def _load_ai_decisions():
+    if _AI_CACHE:
+        return _AI_CACHE
+    if AI_DECISIONS.exists():
+        for l in open(AI_DECISIONS):
+            try:
+                d = json.loads(l)
+                dec = str(d.get("decision", "")).upper()
+                if dec in ("HOLD", "CUT"):
+                    _AI_CACHE[d.get("trade_id")] = dec
+            except Exception:
+                continue
+    return _AI_CACHE
+
+
+def pol_llm(ctx):
+    return _load_ai_decisions().get(ctx["trade_id"], "CUT")
+
+
+# --- GUARDRAILS -------------------------------------------------------------
+# The guardrail DEFAULTS TO CUT (= static champion) and only permits a HOLD when
+# multiple independent conditions all agree. Because every deviation from static is
+# gated, the policy is downside-bounded: it can only differ from the champion on the
+# subset of trades that pass every check. This is the "guardrails" the operator asked
+# to try — discipline encoded as necessary conditions, not free judgment on thin context.
+def _guardrail_allows_hold(ctx):
+    p = ctx.get("lane_hold_prior")
+    if p is None:
+        return False
+    lane_favors = p >= 0.55                                   # history says this lane rewards holding
+    not_against_tape = _tape_aligned(ctx) is not False        # not fighting the tape (aligned or unknown)
+    was_green = (ctx.get("mfe_pct") or 0.0) >= 0.05           # it actually went green (cut-a-winner signature)
+    has_room = (ctx.get("secs_to_expiry_at_exit") or 0.0) >= 60.0  # time left to recover
+    return lane_favors and not_against_tape and was_green and has_room
+
+
+def pol_guardrail_hold(ctx):
+    """Pure guardrail policy: HOLD only when every condition agrees, else take the static exit."""
+    return "HOLD" if _guardrail_allows_hold(ctx) else "CUT"
+
+
+def pol_llm_guarded(ctx):
+    """AI INSIDE guardrails: honor the AI's HOLD only if the guardrail also permits it.
+    Caps the AI's downside — it can no longer hold a tape-fighting, never-green, prior-negative
+    position no matter what it 'thinks'. The AI can still choose to CUT freely."""
+    ai = _load_ai_decisions().get(ctx["trade_id"], "CUT")
+    if ai == "HOLD":
+        return "HOLD" if _guardrail_allows_hold(ctx) else "CUT"
+    return "CUT"
+
+
 POLICIES = {
     "static": pol_static,
     "always_hold": pol_always_hold,
     "tape_hold_aligned": pol_tape_hold_aligned,
     "tape_hold_aligned_trending": pol_tape_hold_aligned_trending,
-    # "llm": <register a callable ctx->'HOLD'|'CUT' here>  # AI-policy slot
+    "guardrail_hold": pol_guardrail_hold,   # rule-based guardrail (no AI)
+    "llm": pol_llm,                         # AI free judgment (terminal AI, no API)
+    "llm_guarded": pol_llm_guarded,         # AI inside the guardrail — downside-capped
 }
 
 _PROXY_DIR = {"BULLISH": "UP", "BEARISH": "DOWN", "NEUTRAL": "FLAT",
@@ -190,9 +253,64 @@ def load():
             "strategy": strat, "side_up": side_up,
             "static_pnl": static_pnl, "hold_pnl": hold_pnl, "base": base,
             "tape_dir": tape_dir, "tape_strength": tape_strength, "tape_source": tape_source,
-            "mfe_pct": _f(t, "mfe_pct"), "mae_pct": _f(t, "mae_pct"),
+            "mfe_pct": _f(s, "mfe_pct") if _f(s, "mfe_pct") is not None else _f(t, "mfe_pct"),
+            "mae_pct": _f(s, "mae_pct") if _f(s, "mae_pct") is not None else _f(t, "mae_pct"),
+            "exit_reason": s.get("exit_reason") or t.get("exit_reason"),
+            "secs_to_expiry_at_exit": _f(s, "secs_to_expiry_at_exit")
+            if _f(s, "secs_to_expiry_at_exit") is not None else _f(t, "secs_to_expiry_at_exit"),
+            "entry_price": _f(s, "entry_price"),
+            "rsi_bucket": s.get("rsi_bucket") or t.get("rsi_bucket"),
+            "settle_ts": te if te is not None else 0.0,
+            "held_better": hold_pnl > static_pnl,
         })
+
+    # WALK-FORWARD per-lane hold prior (leakage-safe): for each trade, the fraction of
+    # SAME-LANE trades that settled BEFORE it where hold beat cut, shrunk toward 0.5
+    # (alpha=beta=2). This is exactly what history would have told you AT the decision —
+    # no look-ahead, no reuse of the trade's own outcome. It is the empirical grounding
+    # the first AI pass lacked (operator: "the ai is guessing with minimal context").
+    rows.sort(key=lambda r: r["settle_ts"])
+    run = defaultdict(lambda: [0, 0])  # lane -> [hold_wins, n], running over past trades only
+    ALPHA = BETA = 2.0
+    for r in rows:
+        w, n = run[r["lane"]]
+        r["lane_hold_prior"] = round((w + ALPHA) / (n + ALPHA + BETA), 3)
+        r["lane_prior_n"] = n
+        run[r["lane"]][1] += 1
+        if r["held_better"]:
+            run[r["lane"]][0] += 1
     return rows, real_tape_hits
+
+
+# The decision context the AI sees — ONLY what is knowable AT THE EXIT MOMENT.
+# Deliberately EXCLUDES static_pnl / hold_pnl (that is the answer we grade on) and
+# any whole-life excursion (that would leak the future).
+def _ai_ctx(c):
+    return {
+        "trade_id": c["trade_id"],
+        "lane": c["lane"],
+        "side": "LONG" if c["side_up"] else "SHORT",
+        "entry_price": c.get("entry_price"),
+        "exit_reason": c.get("exit_reason"),
+        "mfe_pct": c.get("mfe_pct"),   # best favorable excursion reached before the static exit
+        "mae_pct": c.get("mae_pct"),   # worst adverse excursion before the static exit
+        "secs_to_expiry_at_exit": c.get("secs_to_expiry_at_exit"),
+        "tape_dir": c.get("tape_dir"),
+        "tape_strength": c.get("tape_strength"),
+        "tape_source": c.get("tape_source"),
+        "rsi_bucket": c.get("rsi_bucket"),
+        # walk-forward empirical grounding: how often holding beat cutting on THIS lane in the
+        # PAST (leakage-safe), and on how many prior trades. prior≈0.5 with small n = weak.
+        "lane_hold_prior": c.get("lane_hold_prior"),
+        "lane_prior_n": c.get("lane_prior_n"),
+    }
+
+
+def emit_batch(rows, path):
+    with open(path, "w") as fh:
+        for c in rows:
+            fh.write(json.dumps(_ai_ctx(c)) + "\n")
+    return len(rows)
 
 
 def realized(policy_fn, ctx):
@@ -207,6 +325,8 @@ def main():
     ap.add_argument("--policies", type=str, default=None,
                     help="comma list; default = all registered")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--emit-batch", type=str, default=None,
+                    help="write the AI decision batch (no-outcome contexts) to this path and exit")
     args = ap.parse_args()
 
     loaded = load()
@@ -215,6 +335,11 @@ def main():
     rows, real_hits = loaded
     if not rows:
         print("[exitlab] no settled trades with both outcomes"); return
+
+    if args.emit_batch:
+        n = emit_batch(rows, args.emit_batch)
+        print(f"[exitlab] wrote {n} decision contexts -> {args.emit_batch}")
+        return
 
     names = [p.strip() for p in args.policies.split(",")] if args.policies else list(POLICIES)
     names = [n for n in names if n in POLICIES]

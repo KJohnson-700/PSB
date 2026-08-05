@@ -1,0 +1,249 @@
+# PSB — Research, Findings & Roadmap (LIVING DOC)
+
+**Last updated:** 2026-08-05 (session f28a11e1 / test_20260805_005317)
+**Maintain this file.** It is the single source of truth for: what we learned, the
+analysis tooling, the running experiments, and the gated build order. Update the
+status columns as items ship. Companion trackers: the task list (live status),
+the Hermes vault handoff (session narrative), and `docs/CALIBRATION_TOOLING_QUEUE.md`.
+
+Visual synthesis (hosted): https://claude.ai/code/artifact/e6595bdc-0e57-4bb3-9814-0c35c6bd6d46
+
+---
+
+## ★ OPEN CONFIRMATIONS LEDGER — check EVERY session (added 2026-08-05)
+
+Every recent major change and what CONFIRMS it worked. Decisions on LIVE REALIZED only
+(filter by session_id). Read-out scripts noted. Update Status each session; when an item
+is confirmed +/-, move it to §1 findings and drop the row.
+
+### A. Live behavior changes awaiting realized confirmation
+| # | Change (shipped) | Live? | Confirms it → threshold | Read-out | Status 08-05 |
+|---|---|---|---|---|---|
+| 1 | `hold_5m_all` all-5m hold-to-resolution (08-04) | LIVE | 5m realized WR → toward held ~50%; ngc/stop share of 5m exits DROPS | trades_settled 5m by session | ⏳ n<8 new; eth5m held +171 leak is the target |
+| 2 | eth-5m loser floor **0.30→0.40** (08-05 restart) | LIVE sess 005317 | floor clips ~1 winner not ~4; eth-5m net > −30%-floor | held-winner MAE vs actual exit | ⏳ awaiting 5m settles |
+| 3 | eth-LONG tape-conditioned stop-defer (08-04) | LIVE | eth BUY_YES held winners NOT stopped while tape-up; holdΔ shrinks | tape_stop_shadow_analyze.py | ⏳ n thin |
+| 4 | `alt_1h_require_confirm` sol/xrp/doge/bnb+eth (08-04) | LIVE | book on RIGHT side (short=1H bearish); NOT over-starved | ops_pulse side_rollup + alt_1h_unconfirmed skip% | ✔ flipped SHORT6→LONG5; ⚠ watch starve% |
+| 5 | Sizing batch: max_pos 25→15, mult_ceil 1.40, unproven_lane 0.60, WR-gate (08-04) | LIVE | winners sized UP / losers DOWN; payoff ratio (avgW/avgL) rises | lane_expectancy.py + adaptive_sizer log | ⏳ need n per lane |
+| 6 | **15m FLAT-block DROPPED** `require_tape_direction→false` (08-05) | LIVE | 15m freq UP but WR does NOT crater to ~15% (FLAT coinflips) | 15m WR by session | ⏳ just dropped; watch closely |
+| 7 | BTC pocket un-starve `bias_quant_disagree_*` (08-04) | LIVE | BTC trades again (was 0/session) at acceptable WR | ops_pulse bitcoin signals + WR | ⏳ BTC still ~0 this sess |
+| 8 | `buy_no_tape_map_veto_up` 15m sol/eth/xrp/bnb (08-03/04) | LIVE | fewer wrong-side shorts into up-tape on 15m | tape_join winners vs tape dir | ⏳ needs tape_join |
+| 9 | never_green_cut per-lane `min_loss_pct_default 0.08` (08-04) | LIVE | ngc exit share drops; fewer premature cuts of recoverable | exit-reason mix by session | ⏳ |
+
+### B. Shadows / detectors (log-only) — periodic read-out, NOT trade-affecting
+| # | Shadow | Read-out script | Confirms → | Status 08-05 |
+|---|---|---|---|---|
+| 10 | **tape_map** (the mapping) `tape_map.jsonl` | tape_map_accuracy.py / tape_map_validator.py | accuracy > coinflip per TF; then wire Phase-2 | ~49/53/60% @5/15/60m; BTC macd wiring FIXED (#104); ⏳ run tape_join at next transition |
+| 11 | **AI direction engine** (minimax_tape) pid 26462 | ai_direction_score.py | direction acc > coinflip across regimes, n≥30 | ⏳ sub-coinflip so far (digest 43% vs tape 15% n~37, 1 chop) |
+| 12 | Dynamic-admission: rotation/breaker/attribution | rotation_detector_shadow / directional_breaker_shadow / attribution_shadow | produce actionable per-lane signal | ⏳ accumulating |
+| 13 | tape_admission / tape_confirmed_exit / hold_benefit / entry_tape | respective *_shadow.py | which exit/admission policy beats champion | ⏳ |
+| 14 | xrp/eth 15m tape-adaptive side-veto SHADOW (#111) | tape_map_validator | veto agrees with realized wrong-side | ⏳ verify live vs shadow |
+| — | exit-AI shadow daemon | — | — | ❌ KILLED 08-05 (operator) — no longer pending |
+
+### C. Built-not-live / needs porting (task labels say "BUILT" but NO flags in this tree)
+#79 WS FixA+B · #80 fee-aware edge gate · #81 same-side concentration cap · #82 RSI FixA+B ·
+#83 maker-first. Verified 08-05: **zero config flags present locally** → NOT staged-here;
+need actual build/port + Codex + GO, not a restart.
+
+### D. 2026-08-05 status snapshot (sess test_20260805_005317, +$21 realized, 60% WR)
+
+**Detectors / "heat map" — LIVE but READ-OUTS:**
+- **tape_map (the heat map):** LIVE, 21k rows, updating ~47s. **Directional accuracy (UP/DOWN, conf≥0.6): 5m ~45% · 15m 44.9% (n=12.4k) · 60m 44.6% — BELOW the 50% coinflip = ANTI-predictive on direction.** FLAT detection is decent (54–79%) but FLAT isn't tradeable. By asset best=bitcoin (55% @5m). ⇒ tape_map is NOT a usable direction signal; confirms est_prob≈coinflip ceiling. Do NOT gate hard on its direction; it's a FLAT/chop detector + realized-adapter input, not a predictor.
+- **AI direction engine (minimax):** LIVE (pid 26462, 2544 rows, ai_direction_shadow 3min fresh). Still the bet to beat tape_map's 45%. Needs n≥30 across regimes to judge.
+- **⚠ BROKEN shadows:** rotation/attribution/dirbreaker (dynamic-admission) are **erroring** — writing to `*_shadow.launchd.err` (fresh) while their `.jsonl` is **12 DAYS stale**. Dead, not producing data. Fix or remove (they were listed "LIVE" — they're not).
+- LIVE+fresh: tape_side_veto_shadow, entry_book_shadow, tape_entry_shadow, never_green_shadow, btc_neutral_resolver_shadow, adaptive_sizer_shadow, topup_shadow. exit_ai_shadow = KILLED tonight.
+
+**Tonight's confirmed findings (LIVE data):**
+- **xrp 1h: SHORT is the edge, NOT blocked-wrong-side.** Ghost n=4390: BUY_NO 60%WR/+0.137EV vs BUY_YES 45%WR/−0.172EV. Keep xrp 1h, keep it short. Do NOT cut. (xrp 1h BUY_YES bullish-admission is under-boosted vs sol — `1h_buy_yes_bullish_floor_bump 0.0 vs 0.3` — defensible since long is the weak side; revisit only if Olympus long-edge recalled.)
+- **Hermes staleness gap CLOSED:** watcher now pages on WS silence (WS_SILENCE_WATCHDOG), tape_map frozen (>360s), oracle_stale/geoblock spikes. Was blind to all feed staleness before. (WS/tape self-heal + price_max_age=8 gate already protect trades — the gap was visibility only.)
+
+**QUEUED BUILD — Sizing redesign (scoped, Codex+restart pending):** spec at scratchpad `sizing_redesign_spec.md`. Problem: winners are pennies ($15 cap = 3% of $500; proven-winner growth pinned by mult_ceil + cap). Fix = ASYMMETRIC realized-primary: P0 flat base (kill est_prob-kelly variance) + kill streak_mult; P1 let PROVEN lanes (n≥12, WR≥55%, ROI≥5%) grow PAST the $15 cap to ~$45 (proven_lane_max) w/ mult_ceil→2.5. Losers stay capped; only proven winners get big. Verify: avg-winner-size/avg-loser-size ≥1.0.
+
+**QUEUED BUILD — Per-lane directional breaker (scoped, Codex+restart pending):** spec at scratchpad `perlane_breaker_spec.md`. From the 12-day-dead breaker shadow (now nohup-daemon fixed, PID 47638). Blanket breaker=wash (+8.80); PER-LANE decisive. ENABLE-set (net+ both shadows, k3/45m default): xrp5m±, bitcoin1h-up, sol5m-down, xrp15m-down, bnb15m-down, doge1h-up, eth1h-up (~+$86/32-sess). HARD-EXCLUDE (breaker net-HURTS): doge5m-down (−36!), eth5m-up, doge5m-up, eth/btc/sol 15m — their stops are noise, cutting loses; doge5m-down = EXIT problem not admission. Mechanism: per-lane consec-stop counter → pause k stops for cooldown_min, persisted state, reset on TP.
+
+**TAPE-VETO P&L (ghost, real outcomes) — mostly not earning their keep:** `eth_15m_long_not_bearish_tape` n=9860 → **50% WR/−0.011 EV = WASH** (biggest veto, blocks coinflips; DROP candidate). `tape_flat_block` (dropped tonight) n=2885 → 51% WR/−0.029 = near-wash (dropping re-opens marginal coinflips; watch 15m WR). `tape_veto_60s` n=153 → **46% WR/−0.062 = GOOD (blocks losers), KEEP.** Consistent w/ tape_map 45% directional + attribution tape-block −$54 (cut winners > saved losers by $). Net: tape *direction* gates are washes-to-negative; keep only the 60s veto. eth-15m-long veto = next drop candidate.
+
+**★ BUILD STATUS 2026-08-05 — all 3 BUILT + Codex-reviewed + fixes applied, STAGED for next restart (NOT live yet):**
+- Files: NEW `src/analysis/lane_breaker.py`; `src/analysis/adaptive_lane_sizer.py` (resolve_lane_cap + MED-fix ema clamp); `src/main.py` (_lane_breaker_blocks + 2 admission checks + record_exit + proven-cap in _apply_adaptive_realized_size); `config/settings.yaml` (trading.lane_breaker 8 lanes, adaptive_sizer mult_ceil 1.40→2.5 + proven_lane_max_usd 45 / proven_wr_min 0.55 / proven_roi_min 0.05, eth_15m veto→false).
+- Codex: **HIGH fixed** — record_exit was using `pos.action` (Position has none; stores outcome YES/NO) → keys wouldn't match allow-list → breaker never armed; now uses `circuit_breakers.action_from_position(pos)`. **MED fixed** — a now-loser lane could keep a stale >1.0 ema under the wider mult_ceil; now clamped to ≤1.0 when target≤1.0. **LOW accepted** — breaker skips are log-only (`LANE_BREAKER cooldown skip`), not journaled; add ops_pulse counter later.
+- Proven-cap is bounded by max_exposure_per_trade (0.08 here → ~$40 on $500), a hard risk ceiling. All 3 flag-gated to current behavior; restart to activate. Specs: scratchpad `sizing_redesign_spec.md`, `perlane_breaker_spec.md`.
+- **Codex RE-REVIEW (2026-08-05, on the 2 fixes): FIX1 CLEAN. FIX2 caught a NEW silent-noop** — `resolve_lane_cap` read `proven_lane_max_usd/proven_wr_min/proven_roi_min` but `_cfg()` strips any key not in `DEFAULTS` (the `if k in c` filter), so the proven-cap was 0.0 always → the whole "grow winners" half did nothing. **FIXED**: added the 3 keys to `DEFAULTS` (default 0.0 = off). Validated: proven winner→$45, loser/low-n/unknown/shadow/feature-off→0.0. Bundle now genuinely arms on restart.
+- **★ 4th BUNDLE ITEM 2026-08-05 — TAPE-CONDITIONED STOP generalized to SHORTS (Codex GO, no findings):** exit forensics (last-6-sess n=57 stops) = `updown_stop_loss` is THE leak, −$167 realized / **+$92.7 recoverable**; TP clean (+6 holdΔ), ngc SAVES (−45 holdΔ). Leak concentrates in shorts: xrp 1h BUY_NO +$15.6, eth 15m BUY_NO +$17.1, xrp 5m BUY_NO +$16.9. Mirror of the PROVEN eth-long deferral (fired 38× in 08-04 sizingbatch sess). `src/execution/live_testing.py` block generalized (LONG byte-identical; SHORT flips to DOWN/dscore≤−2/1h-MACD-down; short-YES rep skipped; only %-stop gated). `config/settings.yaml tape_hold_stop.by_lane` +`xrp_macro:BUY_NO`,`eth_macro:BUY_NO` (floor 0.15 = same as long). Validated: 11-case unit test all pass. Winners untouched (sol/doge/bnb shorts NOT listed). Restart-class — bundles with the other 3. Backup `settings.yaml.bak_pre_tapehold_short_*`. Scope: scratchpad `tapehold_short_scope.md`.
+
+---
+
+## 0. The mandate (never drift from this)
+
+**No tape-blind static gates.** Every gate tuned to one tape (bull) inverts when the
+tape flips and we re-bleed → re-fix. Behavior must READ an explicit per-asset **tape
+map** and DEFER to the realized tape-adapter (`get_tape_admission_delta`) so it
+self-flips bull↔bear. See memory `feedback_adaptive_tape_map_not_tape_blind_gates`.
+Never say "regime" — name the mechanical read.
+
+---
+
+## 1. Core findings (this session, from LIVE REALIZED data)
+
+1. **ETH's edge is in the EXIT, not the entry.** Across 805 ETH trades, win/loss are
+   statistically identical on every static entry feature (primary_htf_bias 49.7 vs
+   50.7, rsi_bucket, edge_bucket, momentum_side — all coin flips). The only separator
+   is exit_reason: take_profit = 71.9% of wins / 0% of losses; stops = 77.8% of losses.
+2. **The give-back leak, dollarized.** ETH stopped trades: realized −$841 but **+$1,241
+   was on the table at MFE**; 45% of stopped trades were >+5% green before dying
+   (avg MFE +9% → realized −21%). TP itself is tuned fine (median +34% at +35% MFE).
+3. **Hold-to-resolution beat exit** on the settled ETH set (n=10, a FLAG not a trigger):
+   exit +6.74 vs hold +53.57, unanimous across lanes.
+4. **The probability barely predicts.** Calibration audit (Script D): `stated_est_prob`
+   vs true resolution outcome (n=280) → **Brier skill +0.021** (barely beats base rate);
+   vs exit-win (n=4397) → skill **−0.072**, curve inverts. Confirms "est_prob ≈ 0.50 AUC,
+   edge is selection." Sharper est_prob is NOT the lever; the exit + tape are.
+5. **Cross-script convergence on the worst active lanes:**
+   - `bitcoin|15m|BUY_NO` — #1 give-back ($214, 5/14 green-stops), worst PnL (−98.52),
+     current era **−173.76 since 07-25** (Script C). A dated exit leak, bleeding now.
+   - `bitcoin|1h|BUY_YES` — only positive-expectancy lane in last 8 sessions (WRlo 0.35),
+     BUT lifetime +74 masks a current-era −106 since 06-18. Recent vs era windows DISAGREE
+     — watch before trusting.
+   - `xrp_macro|5m|BUY_YES` — lifetime +198 is a mirage; current era −69 since 06-19.
+
+---
+
+## 2. Research synthesis (3 deep sweeps, 2026-08-02)
+
+Full text in Hermes vault `2026-08-02-RESEARCH-SYNTHESIS-AND-ROADMAP.md`. Condensed:
+
+### 2a. Strategy edge & tricks
+- **Crypto has BOTH intraday momentum AND reversal** (Wen et al. 2022); a hardcoded side
+  is wrong ~half the time → must score the tape and blend (validates the mandate).
+- **Intraday-momentum** (Gao-Han-Li-Zhou, JFE 2018): first-period return predicts last;
+  **stronger on high-vol / high-volume / news days** → gate pre-window conviction on vol.
+- **Favorite-longshot bias** (most robust finding): longshots overpriced, favorites
+  underpriced. Structural +EV at `est_prob ≥ 0.85`; trap on cheap-longshot buys. No
+  prediction required.
+- **Fee math:** Polymarket crypto taker ≈1.8%, maker ≈0% → the fee is often larger than
+  the edge. Maker-first is near-mandatory. Watch adverse selection (toxicity EWMA;
+  ref repo `warproxxx/poly-maker`).
+- **Indicators at 5m/15m:** MACD crossover = noise (use slope as soft confirm); RSI fade
+  only regime-gated; ATR/realized-vol = the state variable that gates everything;
+  funding+OI = crowding/unwind tell; CVD describes not predicts (use as veto).
+- Sources: SSRN 2440866, ScienceDirect S1062940822000833, QuantPedia prediction-markets,
+  Reign Edge Regime Handbook, Hudson&Thames triple-barrier.
+
+### 2b. Regime/tape detection (the self-flip engine)
+- **Tier 1 (cheap, first):** Efficiency Ratio (trend vs chop), ADX (strength), **Variance-
+  Ratio sweep q∈{2,4,8,16,32}** — literally tells you at which horizon each asset has
+  structure = our per-lane problem in statistics.
+- **Tier 2:** probability-weighted regime score → `w_trend = sigmoid(k·(score−0.5))`,
+  BLEND behavior (fade in chop, follow in trend), continuous crossover. Hurst (DFA, noisy),
+  Yang-Zhang realized-vol buckets.
+- **Tier 3:** Gaussian HMM (`hmmlearn`) — use FILTERED (causal) probs, sort states each
+  refit or the signal silently inverts. BOCPD / `ruptures` PELT for the flip moment.
+- Validation: expanding-window refit, charge switch turnover (1.8% taker!), require ≥2
+  detectors agree before a flip.
+
+### 2c. Sizing, exit, allocation
+- **Sizing:** quarter-Kelly (noisy edge) × inverse-vol (`target_vol/realized_vol`) ×
+  regime-confidence. Each auto-shrinks losers/quiet/uncertain, never cuts a winner.
+  EWMA realized win-rate (λ≈0.94) feeds Kelly.
+- **Exit:** literature says tight price stops SUBTRACT value at these horizons; time /
+  vertical exits ADD it. **Triple-barrier** (López de Prado): TP + stop ≥2·ATR (outside
+  noise) + dominant time exit. Binary markets already have a hard vertical barrier.
+  **Meta-labeling** = the principled "downsize losers" (secondary model decides act/size,
+  not side). Hold-to-resolution only on deep books (settlement-manipulation risk on thin).
+- **Allocation:** lanes = multi-armed bandit. Use **Exp3 / Tsallis-INF (adversarial),
+  NOT Thompson** (TS → near-linear regret in non-stationary tape). Exploration floor so a
+  cold winner isn't zeroed; reset on change-point; allocate as a TILT on sizing, not on/off.
+
+---
+
+## 3. Analysis script suite (read-only, over the JSONL we log)
+
+All in `scripts/`, LIVE-REALIZED only, pure-stdlib/fail-safe, NOT imported by the bot
+(no restart impact). Guardrails baked in: rank by lower confidence bound; ghost quarantined.
+
+| ID | Script | Status | What it does |
+|----|--------|--------|--------------|
+| A | `scripts/giveback_analyzer.py` | ✅ built+tested | Per-lane MFE→realized give-back in $ + green-then-stopped ratio |
+| B | `scripts/lane_expectancy.py` | ✅ built+tested | WR + $expectancy ranked by Wilson lower bound + empirical-Bayes shrinkage |
+| C | `scripts/lane_changepoint.py` | ✅ built+tested | CUSUM binary-segmentation eras; current-era vs lifetime (kills stale-era poisoning) |
+| D | `scripts/calibration_audit.py` | ✅ built+tested | Reliability + Brier/log-loss vs base-rate on est_prob (resolution & exit targets); optional isotonic |
+| E | `scripts/exit_policy_lab.py` | ✅ built+tested | Tier-0 AI shadow exit-manager: champion(static) vs challenger exit policies (hold / tape-heuristic / pluggable AI slot), faithful HOLD-vs-CUT scoring on settled trades. FINDING 08-02: blanket-hold −1.94 (no free lunch); proxy-htf tape heuristic −27 (FAILS — proxy tape too weak, validates need for real tape_map); per-lane holding is strongly lane-specific (bitcoin\|1h\|BUY_YES +7.4 hold-better 3/3; bitcoin\|1h\|BUY_NO −40.7 holding destroys it). Re-run when tape_map covers settled trades. Path-dependent policies (trail/time/TP-sweep) = Tier 1 (need per-tick path) |
+| F | counterfactual ledger | ⬜ planned | `hold_vs_exit` + gate-flip via doubly-robust/IPW on the ghost log (quarantined, caveated) |
+| — | `tape_join` (Phase-2 validator) | ⬜ waiting on map | Join closed trades to nearest `tape_map` snapshot; test: winners cluster in trending tape, stopped losers in chop? |
+
+Cross-cutting (all scripts): sort by lower bound not point estimate; Benjamini-Hochberg
+FDR / Deflated Sharpe on multi-lane sweeps; profitability mining on live realized only.
+Missing libs: `statsmodels`, `ruptures` (hand-rolled Wilson + CUSUM instead).
+
+---
+
+## 4. Running experiments / shadows (LIVE, observe-only)
+
+| Experiment | Where | Status |
+|-----------|-------|--------|
+| **Tape MAP shadow** | `src/analysis/tape_map.py` → `data/calibration/tape_map.jsonl` | LIVE, ~210 rows. Labels alts DOWN now; **BTC stuck FLAT = macd-wiring gap** (btc_*_histogram getattr None) |
+| **Adaptive-A** (oversold-short gate defers to realized adapter) | sol_macro.py / eth_macro.py | LIVE, hundreds of blocks; self-flips vs static rsi<40 |
+| Dynamic-admission shadows (rotation/breaker/attribution) | `data/calibration/*_shadow.jsonl` | LIVE |
+| Ghost settler (out-of-process) + rotation | settler daemon | LIVE |
+
+---
+
+## 5. Roadmap / build order (ALL gated on operator GO)
+
+1. **[DONE]** Scripts A–D built + tested.
+2. **Next data step:** build **E (exit-rule replay)** — dollarize the profit-maximizing
+   exit per lane; this is the concrete answer to the give-back leak. Then **F**.
+3. **Tape map:** let it accumulate; **fix BTC macd wiring** so BTC leaves FLAT; at the next
+   real transition run **`tape_join`** to validate the trend→TP / chop→stop hypothesis.
+4. **Phase 2 (the payoff):** wire per-lane behavior to the map, deferring to the realized
+   adapter — UP: prefer longs / fade overbought / block oversold-shorts; DOWN: prefer
+   shorts / block overbought-longs; FLAT: fade both, tighter. Confirmed by the adapter.
+5. **Phase 3:** transition hysteresis (≥2 detectors agree; don't flip on one read).
+6. **Structural levers (parallel):** favorite-longshot price prior; fee-aware maker-first
+   (partly live); quarter-Kelly × inverse-vol × regime-conf sizing.
+7. **AI / Claude-Code-assisted control (operator wants to CONSIDER — see §6).**
+
+---
+
+## 6. AI / Claude-assisted control layer (operator interested — SCOPING, not building)
+
+Goal: let an AI model supervise / tune / (eventually) drive the bot safely. Credible path
+(from the AI-harness research sweep):
+
+- **Execution layer:** a THIN CUSTOM MCP wrapping our own `clob_client.py` /
+  `olympus_client.py` — key custody stays exactly where it is today. Reference schema:
+  `caiovicentino/polymarket-mcp-server` (616★); engineering template: Alpaca official MCP.
+  ⛔ Never hand a private key to an off-the-shelf MCP (all Polymarket ones store it plaintext).
+- **Supervisory harness:** `Justin0504/Aegis` (approval-gate + kill-switch + audit, wraps
+  every tool call) between the AI and execution. `freqtrade` REST/RPC (start/stop/reload/
+  force-exit + dry-run) is the battle-tested control-plane blueprint; `freqtrade-mcp` exists.
+- **Decision overlay (upstream only):** `TradingAgents` / `ai-hedge-fund` — vote/veto that
+  feeds proposals in; both decision-only, no execution.
+- Red flags: `py-clob-client` & official `Polymarket/agents` ARCHIVED (pin); `backtrader`
+  unmaintained; `vectorbt`/`OpenBB` non-standard licenses; `freqtrade` GPL if embedded.
+
+**Proposed safe first spike (needs operator GO + Codex review):** a read-only MCP over our
+existing JSONL + summary (positions, per-lane PnL, the A–D analyzers) so an AI can OBSERVE
+and report — no order path at all. Then, only behind Aegis + paper/DEMO, add a
+propose-trade tool that writes to a shadow queue (never live). Execution stays operator-gated.
+
+---
+
+## 7. Held / staged / pending (do NOT deploy without GO)
+
+- **Committed 71413cf** (2026-08-02): scripts A–E, `src/analysis/tape_map.py`, `bitcoin.py`
+  (#104 BTC macd fix + BTC tape-map hook + 2b/2c momentum shadows + momentum-contradiction veto).
+  NOT pushed (local on live/olympus-jul29).
+- **Still uncommitted** (mid-evaluation): `sol_macro.py`, `eth_macro.py` (adaptive-A, fade-guard,
+  Tier1A, tape-map hooks), `config/settings.yaml` (adaptive-A + knobs A/C/D). Cursor files off-limits.
+- **Staged, restart-class:** SOL → `execution_strategies` (currently shadow-only by
+  calibration_scope).
+- **Held tinker:** xrp 5m-up stop-tighten 0.25→0.15 (gap-through; winner-clip risk).
+- Many older staged items — see the live task list.
+
+## 8. Standing constraints (verbatim-critical)
+
+Paper only (`--paper`; `dry_run:false` = go-live trap); SIGTERM to pid, never the dashboard
+shutdown endpoint; ASK before restart; Codex-review live-path code before deploy; per-lane
+side-isolated edits; decisions from LIVE realized only (ghosts distrusted); present delta +
+STOP for yes on gates/cuts; restart loads the WHOLE working tree (diff vs HEAD first); commit
+only MY files (main.py/server.py/ops_pulse.py/live_testing.py have parallel Cursor edits);
+never blind-cp a stale backup; paging = `~/.local/bin/hermes send --to telegram`.

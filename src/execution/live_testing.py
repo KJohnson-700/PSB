@@ -35,6 +35,10 @@ from src.execution.updown_exit_shared import (
     scaled_exit_window_mins,
 )
 from src.execution.fill_sim import polymarket_taker_fee_usdc, simulate_book_fill
+try:
+    from src.analysis.tape_map import latest_tape_state as _latest_tape_state
+except Exception:  # pragma: no cover - defensive; shadow simply no-ops if unavailable
+    _latest_tape_state = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,15 @@ class ExitDecision:
     # strategies by execution_adjusted_pnl. Both None when realistic_paper_fills is off.
     raw_signal_pnl: Optional[float] = None
     execution_adjusted_pnl: Optional[float] = None
+    # 2026-08-01 regular-TP executable-net guard telemetry (set only on reason=="take_profit"
+    # when the guard is enabled): the MIDPOINT-mark pnl that triggered TP vs the pnl we'd
+    # actually realize at the exit-side price (gross before fee, and net after round-trip
+    # taker fee). tp_trigger_mark_pnl_pct − tp_executable_net_pnl_pct = the mark-vs-executable
+    # gap this guard exists to catch. None on non-TP exits / guard off / no book.
+    tp_trigger_mark_pnl_pct: Optional[float] = None
+    tp_executable_exit_price: Optional[float] = None
+    tp_executable_gross_pnl_pct: Optional[float] = None
+    tp_executable_net_pnl_pct: Optional[float] = None
 
 
 @dataclass
@@ -182,6 +195,69 @@ class PositionExitManager:
         # +$19.62. 0.0 = OFF (fires exactly as before, backward-compatible).
         self.never_green_cut_min_loss_pct = float(exit_cfg.get("never_green_cut_min_loss_pct", 0.0) or 0.0)
         self.updown_time_stop_min_loss_pct = float(exit_cfg.get("updown_time_stop_min_loss_pct", 0.0) or 0.0)
+        # 2026-08-04 PER-LANE ngc severity gate (operator GO). The global default seeds from the
+        # top-level never_green_cut.min_loss_pct_default (falls back to the legacy exit_rules value,
+        # then 0.0=off). Per-lane overrides keyed "strategy:window:side" carry their own min_loss_pct.
+        # ngc cuts only when pnl_pct <= -min_loss_pct(lane). cut_after_secs per-lane lives in the
+        # main.py observer; this half is the severity gate.
+        _ngc_top = (config.get("never_green_cut", {}) or {})
+        self._ngc_min_loss_default = float(
+            _ngc_top.get("min_loss_pct_default", self.never_green_cut_min_loss_pct) or 0.0
+        )
+        self._ngc_by_lane_min_loss = {}
+        _ngc_by_lane_cfg = _ngc_top.get("by_lane", {})
+        if isinstance(_ngc_by_lane_cfg, dict):
+            for _lk, _lv in _ngc_by_lane_cfg.items():
+                if isinstance(_lv, dict) and _lv.get("min_loss_pct") is not None:
+                    try:
+                        self._ngc_by_lane_min_loss[str(_lk)] = float(_lv["min_loss_pct"])
+                    except (TypeError, ValueError):
+                        pass
+        # 2026-08-04 TAPE-CONDITIONED STOP DEFERRAL (per-lane, LONG-only). A LONG whose asset
+        # tape reads UP (HTF-confirmed) is riding an up-tape dip, not a wrong-side loss — defer its
+        # %-stop while the loss is SHALLOW (above floor_pct). Past the floor, or in a DOWN/FLAT tape,
+        # the stop fires exactly as before (the bull<->bear self-flip). Keyed "strategy:BUY_YES"
+        # (side-isolated). Loser-floor is mandatory (see holdmeanshold_no_loser_floor blowup) and the
+        # -50% catastrophic backstop is untouched. LIVE-forward validated (ghosts don't cover exits).
+        _th_top = (config.get("tape_hold_stop", {}) or {})
+        self._tape_hold_enabled = bool(_th_top.get("enabled", False))
+        self._tape_hold_by_lane = {}
+        _th_by_lane_cfg = _th_top.get("by_lane", {})
+        if isinstance(_th_by_lane_cfg, dict):
+            for _tk, _tv in _th_by_lane_cfg.items():
+                if not isinstance(_tv, dict):
+                    continue
+                try:
+                    self._tape_hold_by_lane[str(_tk)] = {
+                        "floor_pct": abs(float(_tv.get("floor_pct", 0.15) or 0.15)),
+                        "conf_min": float(_tv.get("conf_min", 0.60) or 0.60),
+                        "max_age_s": float(_tv.get("max_age_s", 90.0) or 90.0),
+                        "require_1h_macd": int(_tv.get("require_1h_macd", 1) or 0),
+                    }
+                except (TypeError, ValueError):
+                    pass
+        # 2026-08-01 TIME-UNDERWATER SHADOW (Codex audit; BTC 1h BUY_YES). LOG-ONLY, no behavior
+        # change. 1h holds rode the hour: losers 25%WR/-$43 (RESOLVED:NO + catastrophic), BUT the
+        # winners ALSO ride underwater then take_profit_late, and the code deliberately excludes 1h
+        # from never_green_cut (winners develop slowly, get false-cut). So a live time-cut is unsafe
+        # until measured. This logs what a cut WOULD do at the moment it would fire, so an offline
+        # join to final outcome measures winner-false-cut vs loser-save BEFORE we ever enable it.
+        # Never sets an exit reason. Enable the live cut only after the shadow proves it clean.
+        self._tu_shadow_enabled = bool(exit_cfg.get("time_underwater_1h_shadow_enabled", True))
+        self._tu_min_held_min = float(exit_cfg.get("time_underwater_1h_min_held_min", 12.0) or 12.0)
+        self._tu_max_mfe_pct = float(exit_cfg.get("time_underwater_1h_max_mfe_pct", 0.03) or 0.03)
+        self._tu_max_pnl_pct = float(exit_cfg.get("time_underwater_1h_max_pnl_pct", 0.0) or 0.0)
+        # 2026-08-03 TAPE-AWARE FASTER-STOP shadow (operator GO). LOG-ONLY: when a LOSING open
+        # position has the tape_map turned AGAINST its side (long/YES vs tape DOWN, short/NO vs
+        # tape UP) at conf>=min, record a would-cut-here row (never sets an exit reason). Offline
+        # join to the final outcome then measures would-SAVE (rode further down) vs FALSE-CUT
+        # (recovered to a win) by window — the pass/fail read before any live tape-stop. Tape is
+        # only 53% directional @15m / 60% @60m, so a live cut MUST be measured first (the 47%
+        # false-cut risk at 15m is exactly why this is a shadow, not a live cut).
+        self._tape_stop_shadow_enabled = bool(exit_cfg.get("tape_stop_shadow_enabled", True))
+        self._tape_stop_conf_min = float(exit_cfg.get("tape_stop_conf_min", 0.6) or 0.6)
+        self._tape_stop_min_loss_pct = float(exit_cfg.get("tape_stop_min_loss_pct", 0.03) or 0.03)
+        self._tape_stop_max_age_s = float(exit_cfg.get("tape_stop_max_age_s", 90.0) or 90.0)
         # 2026-07-29 HOLD MEANS HOLD (operator GO + Codex proof). A true hold-to-resolution
         # lane must ride to resolution — the soft exits (stop/trail/in-profit/time/flatten/
         # never-green) were cutting hold lanes early (sol 5m down: wins 11/11 +$252 when
@@ -214,6 +290,20 @@ class PositionExitManager:
         # fires it at a true -X% and fills near there. See check_exits below.
         self._stop_use_executable_price = bool(
             exit_cfg.get("stop_use_executable_price", False)
+        )
+        # 2026-08-01 REGULAR-TP EXECUTABLE-NET GUARD (default OFF => legacy behavior).
+        # The regular `take_profit` branch fires on the YES-MIDPOINT pnl, but a TP that
+        # sells into the exit-side bid can close flat/red once the fill + round-trip
+        # taker fee land. When enabled, the TP only fires if the EXECUTABLE net pnl
+        # (exit-side price minus round-trip taker fee) is >= take_profit_net_min_pct.
+        # Fail-open to the midpoint gate when no book snapshot exists (never strand a
+        # winner on a missing book). Deliberately does NOT touch take_profit_late,
+        # which is performing well. See the take_profit branch in check_exits.
+        self._tp_require_executable_net = bool(
+            exit_cfg.get("take_profit_require_executable_net", False)
+        )
+        self._tp_net_min_pct = float(
+            exit_cfg.get("take_profit_net_min_pct", 0.0) or 0.0
         )
         # Wide-book winner guard (2026-07-21). When the executable-price stop is
         # evaluated on a book WIDER than exit_max_book_spread, also require the YES
@@ -334,6 +424,20 @@ class PositionExitManager:
             _t.get("paper_latency_slip_bps_hybrid", 25.0) or 0.0
         )
 
+        # 2026-08-03 P0 LATE-ONLY STOP (Codex-planned bundle). Realized forensics: the early %
+        # stop (updown_stop_loss) was 63% of exits at 3% WR / -$92 — it knifed winners that would
+        # resolve green (a 15m/1h binary can be -15..-30% mid-window and still settle 1.0). On
+        # 15m/1h, SUPPRESS the % stop until `earliest_mins` into the window; only a DEEP collapse
+        # on a FRESH ws mark cuts early, and the -50% catastrophic backstop below is untouched.
+        # Reversible: updown_late_stop_enabled=false restores the old always-on behavior. Keys are
+        # __init__-frozen (restart-class). 5m is NOT gated (kept as-is).
+        self._late_stop_enabled = bool(_t.get("updown_late_stop_enabled", True))
+        _lse = _t.get("updown_pct_stop_earliest_mins") or {"15m": 9.0, "1h": 45.0}
+        self._late_stop_earliest_mins = {str(k): float(v) for k, v in _lse.items()}
+        _lsd = _t.get("updown_late_stop_deep_pct") or {"15m": 0.35, "1h": 0.45}
+        self._late_stop_deep_pct = {str(k): float(v) for k, v in _lsd.items()}
+        self._WINDOW_TOTAL_MINS = {"5m": 5.0, "15m": 15.0, "30m": 30.0, "1h": 60.0}
+
     def _min_hold_floor_secs(self, pos) -> float:
         """Per-window phantom-exit floor. Prefers the position's EXPLICIT
         ``window_size`` (so a late 15m/1h entry with little runway left is NOT
@@ -385,6 +489,78 @@ class PositionExitManager:
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
         return resolve_updown_exit_params(self._ude, strategy_name)
+
+    def _tu_shadow_write(self, pos_id, pos, held_min, pnl_pct, mfe_pct, mae_pct):
+        """Append a time-underwater shadow row (LOG-ONLY; never affects an exit).
+
+        Records the position state at the moment a hypothetical 1h-underwater cut WOULD fire.
+        An offline join to the trade's final EXIT (in entries.jsonl) then measures whether a real
+        cut would have saved a loser or false-cut a slow take_profit_late winner, before we enable it.
+        """
+        rec = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "trade_id": getattr(pos, "trade_id", pos_id),
+            "market_id": getattr(pos, "market_id", None),
+            "strategy": getattr(pos, "strategy", None),
+            "action": getattr(pos, "action", None),
+            "window_size": "1h",
+            "entry_price": getattr(pos, "entry_price", None),
+            "size": getattr(pos, "size", None),
+            "held_min_at_shadow": round(held_min, 1),
+            "pnl_pct_at_shadow": round(pnl_pct, 4),
+            "mfe_pct_at_shadow": round(mfe_pct, 4),
+            "mae_pct_at_shadow": round(mae_pct, 4),
+        }
+        p = (
+            Path(__file__).resolve().parent.parent.parent
+            / "data" / "calibration" / "time_underwater_shadow.jsonl"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        logger.info(
+            f"TIME-UNDERWATER SHADOW: {rec['trade_id']} 1h held={held_min:.0f}m "
+            f"pnl={pnl_pct:+.1%} mfe={mfe_pct:+.1%} (would-cut; log-only, no behavior change)"
+        )
+
+    def _tape_stop_shadow_write(self, pos_id, pos, window, side, tape_dir, tape_conf,
+                                held_min, pnl_pct, peak_pnl_pct, mae_pct):
+        """Append a tape-aware-stop shadow row (LOG-ONLY; never affects an exit).
+
+        Records position state at the first tick a LOSING position has the tape turned against
+        its side. An offline join to the trade's final outcome (entries.jsonl EXIT) measures
+        would-SAVE (final loss worse than here) vs FALSE-CUT (recovered to a win) by window,
+        so the tape-stop is proven per-window before any live cut (tape is only 53% @15m).
+        """
+        rec = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "trade_id": getattr(pos, "trade_id", pos_id),
+            "market_id": getattr(pos, "market_id", None),
+            "strategy": getattr(pos, "strategy", None),
+            "action": getattr(pos, "action", None),
+            "window_size": window,
+            "side": side,                       # LONG/YES or SHORT/NO
+            "tape_dir": tape_dir,
+            "tape_conf": round(float(tape_conf), 3),
+            "entry_price": getattr(pos, "entry_price", None),
+            "size": getattr(pos, "size", None),
+            "held_min_at_shadow": round(held_min, 1),
+            "pnl_pct_at_shadow": round(pnl_pct, 4),      # would-cut here (live mark) <-- the counterfactual exit
+            "mfe_pct_at_shadow": round(peak_pnl_pct, 4),
+            "mae_pct_at_shadow": round(mae_pct, 4),
+        }
+        p = (
+            Path(__file__).resolve().parent.parent.parent
+            / "data" / "calibration" / "tape_stop_shadow.jsonl"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        logger.info(
+            f"TAPE-STOP SHADOW: {rec['trade_id']} {window} {side} tape={tape_dir}"
+            f"(c{tape_conf:.2f}) pnl={pnl_pct:+.1%} held={held_min:.0f}m "
+            f"(would-cut; log-only, no behavior change)"
+        )
 
     def check_exits(
         self,
@@ -525,6 +701,56 @@ class PositionExitManager:
                         ) / cost_basis
                         exec_exit_price = float(_best_bid)
 
+            # Regular-TP executable-net guard (default OFF via _tp_require_executable_net):
+            # the pnl we'd REALIZE if we took profit right now — exit-side price minus the
+            # round-trip taker fee — so the take_profit branch can require it be net-green
+            # instead of firing on the midpoint mark. Independent of the stop's
+            # executable-price flag. None => no book snapshot (TP branch fails open to the
+            # midpoint gate). Same leg logic + fee model as the stop mark and realized-fill
+            # fee block. cost_basis>0 guarded (division).
+            _tp_exec_price: Optional[float] = None
+            _tp_exec_gross_pnl_pct: Optional[float] = None
+            _tp_exec_net_pnl_pct: Optional[float] = None
+            if self._tp_require_executable_net and cost_basis > 0:
+                _tpliq = (market_liquidity or {}).get(pos.market_id) or {}
+                _tp_bid = _tpliq.get("best_bid")
+                _tp_ask = _tpliq.get("best_ask")
+                if _tp_bid is not None and _tp_ask is not None:
+                    if entry_leg == "NO":
+                        # Long NO: sell NO -> NO bid = 1 - YES ask
+                        _tp_exec_price = 1.0 - float(_tp_ask)
+                        _tp_gross = pos.size * (_tp_exec_price - pos.entry_price)
+                    elif pos.outcome == "NO":
+                        # Short YES: buy back YES -> pay YES ask
+                        _tp_exec_price = float(_tp_ask)
+                        _tp_gross = pos.size * (pos.entry_price - _tp_exec_price)
+                    else:
+                        # Long YES: sell YES -> YES bid
+                        _tp_exec_price = float(_tp_bid)
+                        _tp_gross = pos.size * (_tp_exec_price - pos.entry_price)
+                    _tp_exec_gross_pnl_pct = _tp_gross / cost_basis
+                    _tp_fee = 0.0
+                    if (
+                        self._execution_fees_enabled
+                        and str(getattr(pos, "strategy", "") or "")
+                        in CRYPTO_UPDOWN_STRATEGIES
+                    ):
+                        _tp_rate = _tpliq.get("taker_fee_rate")
+                        if _tp_rate is None:
+                            _tp_rate = self._crypto_updown_15m_taker_fee_rate
+                        _tp_rate = float(_tp_rate or 0.0)
+                        _tp_cfg_rate = float(self._crypto_updown_15m_taker_fee_rate or 0.0)
+                        if _tp_cfg_rate > 0:
+                            _tp_rate = min(_tp_rate, _tp_cfg_rate)
+                        _tp_fee = polymarket_taker_fee_usdc(
+                            pos.size, _tp_exec_price, _tp_rate
+                        )
+                        if self._entry_taker:
+                            _tp_fee += polymarket_taker_fee_usdc(
+                                pos.size, pos.entry_price, _tp_rate
+                            )
+                    _tp_exec_net_pnl_pct = (_tp_gross - _tp_fee) / cost_basis
+
             # Wide-book winner guard (2026-07-21): only fire the executable-price stop
             # on a book wider than exit_max_book_spread if the YES MIDPOINT also
             # confirms the loss. Prevents a thin low bid from cutting a genuine winner
@@ -618,6 +844,147 @@ class PositionExitManager:
                         _flat_end - datetime.now(timezone.utc)
                     ).total_seconds() / 60.0
 
+                # 2026-08-03 P0 LATE-ONLY STOP gate (see __init__). On 15m/1h, suppress the early
+                # % stop while > (window_total - earliest_mins) minutes remain — i.e. until we are
+                # `earliest_mins` into the window. A DEEP collapse (>= deep_pct) on a FRESH ws mark
+                # still cuts; TP / take_profit_late / flatten-pre-resolution / the -50% catastrophic
+                # backstop are all unaffected. Hold lanes (stop_pct==0) never reach the stop branch,
+                # so they are untouched. 5m has no entry in the maps -> never suppressed.
+                # Codex review 2026-08-03 (P0 fix): NEVER suppress a hold-to-resolution lane. Those
+                # lanes manage loss via their own loser-floor + the -50% catastrophic backstop, both
+                # of which fire through the reason=="updown_stop_loss" path — suppressing it would let
+                # a hold lane ride past its floor/catastrophic (esp. on a stale mark). The late-only
+                # gate targets the NORMAL %-stop directional lanes (the 36-trade/-92 leak), not holds.
+                _late_stop_suppressed = False
+                if (
+                    self._late_stop_enabled
+                    and _flat_mins_remaining is not None
+                    and not resolved.updown_hold_winners_to_resolution
+                ):
+                    _ls_win = infer_updown_window_size(
+                        getattr(pos, "window_size", "") or "",
+                        opened_at=getattr(pos, "opened_at", None),
+                        end_date=getattr(pos, "end_date", None),
+                    )
+                    _ls_earliest = self._late_stop_earliest_mins.get(_ls_win)
+                    _ls_total = self._WINDOW_TOTAL_MINS.get(_ls_win)
+                    if _ls_earliest is not None and _ls_total is not None:
+                        if _flat_mins_remaining > (_ls_total - _ls_earliest):
+                            _ls_liq = (market_liquidity or {}).get(pos.market_id) or {}
+                            _ls_age = _ls_liq.get("mark_age_ms")
+                            _ls_fresh = (
+                                _ls_liq.get("mark_src") == "ws"
+                                and isinstance(_ls_age, (int, float))
+                                and float(_ls_age) <= 2000.0
+                            )
+                            _ls_deep = self._late_stop_deep_pct.get(_ls_win, 0.35)
+                            if not (stop_pnl_pct <= -_ls_deep and _ls_fresh):
+                                _late_stop_suppressed = True
+
+                # 2026-08-04 TAPE-CONDITIONED STOP DEFERRAL (per-lane LONG; see __init__). Suppress
+                # the %-stop ONLY when: (a) LONG/BUY_YES lane with a by_lane entry, (b) loss still
+                # SHALLOW (pnl_pct above -floor_pct — the loser floor), (c) this asset's tape reads
+                # UP, HTF-confirmed (dscore>=2 AND 1h-MACD up), at conf>=conf_min and fresh. In a
+                # DOWN/FLAT tape, or once loss breaches the floor, this stays False and the stop
+                # fires as normal. Deferring drops to the else-branch (time-stop near expiry still
+                # runs) — the position keeps being managed, it just isn't %-stopped mid-up-tape.
+                # Codex 2026-08-04: strict LONG = BUY_YES leg on a YES outcome (entry_leg!="NO"
+                # with outcome=="NO" is the short-YES representation — must NOT be deferred). Floor
+                # is gated on the WORSE of midpoint/executable pnl so stop_use_executable_price can't
+                # slip a -16% executable loss past a -15% floor. Whole parse fails closed (=False).
+                # 2026-08-05 GENERALIZED to the SHORT side (BUY_NO). The LONG path (entry_leg==YES,
+                # outcome==YES) is UNCHANGED — same eth_macro:BUY_YES cfg, UP tape, dscore>=2, 1h-MACD
+                # up (>=require_1h_macd). The MIRROR: a strict BUY_NO short (entry_leg==NO, outcome==NO)
+                # with a {strategy}:BUY_NO by_lane cfg is deferred while the loss is SHALLOW AND this
+                # asset's tape reads DOWN, HTF-confirmed (dscore<=-2 AND 1h-MACD down <=-require_1h_macd)
+                # at conf>=conf_min and fresh. This is the "shallow bounce in a downtrend" analogue of
+                # the long's "shallow dip in an uptrend" — the stopped shorts that would have WON if
+                # held (xrp 1h/eth 15m BUY_NO, holdΔ +$33 / last-6-sess). In an UP/FLAT tape, once the
+                # 1h MACD isn't down, or once the loss breaches floor_pct, this stays False and the stop
+                # fires as normal (self-flips). Side-isolated: ONLY lanes explicitly in by_lane are
+                # touched; the short-YES representation (entry_leg==YES, outcome==NO) is NOT a canonical
+                # BUY_NO and is skipped (fails closed). Whole parse fails closed (=no suppression).
+                _tape_hold_suppressed = False
+                _th_side = None
+                if entry_leg == "YES" and pos.outcome == "YES":
+                    _th_side = "BUY_YES"
+                elif entry_leg == "NO" and pos.outcome == "NO":
+                    _th_side = "BUY_NO"
+                if (
+                    self._tape_hold_enabled
+                    and _latest_tape_state is not None
+                    and _th_side is not None
+                ):
+                    _th_cfg = self._tape_hold_by_lane.get(f"{strategy_name}:{_th_side}")
+                    _th_floor_pnl_pct = min(pnl_pct, stop_pnl_pct)
+                    if _th_cfg is not None and _th_floor_pnl_pct > -_th_cfg["floor_pct"]:
+                        try:
+                            _th_tm = _latest_tape_state(strategy_name) or {}
+                            _th_dir = str(_th_tm.get("direction") or "").upper()
+                            _th_conf = float(_th_tm.get("confidence", 0.0) or 0.0)
+                            _th_dscore = int(_th_tm.get("dscore", 0) or 0)
+                            _th_signs = _th_tm.get("macd_signs") or [0, 0, 0]
+                            _th_m1h = int(_th_signs[2]) if len(_th_signs) >= 3 else 0
+                            _th_age = (
+                                datetime.now(timezone.utc).timestamp()
+                                - float(_th_tm.get("ts", 0.0) or 0.0)
+                            )
+                        except Exception:
+                            _th_dir, _th_conf, _th_dscore, _th_m1h, _th_age = "", 0.0, 0, 0, 1e9
+                        _req_macd = int(_th_cfg["require_1h_macd"])
+                        if _th_side == "BUY_YES":
+                            _th_agree = (
+                                _th_dir == "UP" and _th_dscore >= 2 and _th_m1h >= _req_macd
+                            )
+                        else:  # BUY_NO short mirror: DOWN tape, negative dscore, 1h-MACD down
+                            _th_agree = (
+                                _th_dir == "DOWN" and _th_dscore <= -2 and _th_m1h <= -_req_macd
+                            )
+                        if (
+                            _th_agree
+                            and _th_conf >= _th_cfg["conf_min"]
+                            and _th_age <= _th_cfg["max_age_s"]
+                        ):
+                            _tape_hold_suppressed = True
+                            logging.info(
+                                "TAPE-HOLD deferred stop on %s (%s %s): pnl=%.1f%% "
+                                "stop_pnl=%.1f%% tape=%s conf=%.2f dscore=%d m1h=%d age=%.0fs floor=%.0f%%",
+                                pos.market_id, strategy_name, _th_side, pnl_pct * 100.0,
+                                stop_pnl_pct * 100.0, _th_dir, _th_conf, _th_dscore, _th_m1h, _th_age,
+                                _th_cfg["floor_pct"] * 100.0,
+                            )
+
+                # Regular-TP net gate: the midpoint mark says take-profit, but when the
+                # executable-net guard is on, only fire if the pnl we'd actually realize
+                # (exit-side price minus round-trip taker fee) clears take_profit_net_min_pct.
+                # Fails OPEN when the guard is off or no book snapshot exists (legacy). A
+                # suppressed TP logs mark-vs-executable so a hold-instead-of-TP is visible.
+                # take_profit_late is intentionally NOT gated (it performs well).
+                _tp_mark_ready = (
+                    not resolved.updown_hold_winners_to_resolution
+                    and pnl_pct >= resolved.take_profit_pct
+                )
+                _tp_net_ok = True
+                if (
+                    _tp_mark_ready
+                    and self._tp_require_executable_net
+                    and _tp_exec_net_pnl_pct is not None
+                ):
+                    _tp_net_ok = _tp_exec_net_pnl_pct >= self._tp_net_min_pct
+                    if not _tp_net_ok:
+                        logging.info(
+                            "TP NET-GUARD suppressed take_profit on %s (%s %s): "
+                            "trigger_mark_pnl=%.1f%% executable_net=%.1f%% < min=%.1f%% "
+                            "exec_price=%.3f — holding instead of TP",
+                            pos.market_id,
+                            strategy_name,
+                            getattr(pos, "window_size", ""),
+                            pnl_pct * 100.0,
+                            _tp_exec_net_pnl_pct * 100.0,
+                            self._tp_net_min_pct * 100.0,
+                            _tp_exec_price if _tp_exec_price is not None else -1.0,
+                        )
+
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
                 if (
@@ -644,14 +1011,13 @@ class PositionExitManager:
                     and pnl_pct >= resolved.take_profit_late_pct
                 ):
                     reason = "take_profit_late"
-                elif (
-                    not resolved.updown_hold_winners_to_resolution
-                    and pnl_pct >= resolved.take_profit_pct
-                ):
+                elif _tp_mark_ready and _tp_net_ok:
                     reason = "take_profit"
                 elif (
                     effective_stop_loss_pct != 0
                     and stop_pnl_pct <= -effective_stop_loss_pct
+                    and not _late_stop_suppressed  # 2026-08-03 P0 late-only stop gate
+                    and not _tape_hold_suppressed  # 2026-08-04 tape-conditioned LONG deferral
                     and (
                         not _wide_book_stop_needs_mid
                         or pnl_pct <= -effective_stop_loss_pct
@@ -772,13 +1138,96 @@ class PositionExitManager:
             # of riding to the stop. Only fires when nothing higher priority (TP / stop /
             # time / bid-depth) already set a reason. 1h is deliberately EXCLUDED (main.py
             # only adds 5m/15m ids) because 1h winners develop slowly and get false-cut.
-            _ngc_min = getattr(self, "never_green_cut_min_loss_pct", 0.0)
+            # 2026-08-04 PER-LANE severity gate: resolve min_loss_pct for THIS lane
+            # (strategy:window:side), falling back to the global seeded default (-8%).
+            _ngc_side = "BUY_NO" if str(entry_leg) == "NO" else "BUY_YES"
+            _ngc_win = str(getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "")
+            _ngc_key = f"{getattr(pos, 'strategy', '') or ''}:{_ngc_win}:{_ngc_side}"
+            _ngc_min = self._ngc_by_lane_min_loss.get(_ngc_key, self._ngc_min_loss_default)
             if (
                 reason is None
                 and pos_id in getattr(self, "_never_green_cut_ids", ())
                 and (_ngc_min <= 0.0 or pnl_pct <= -_ngc_min)
             ):
                 reason = "never_green_cut"
+
+            # 2026-08-01 TIME-UNDERWATER SHADOW (Codex audit; BTC 1h BUY_YES; LOG-ONLY). Never sets
+            # reason -> zero behavior change. Fires once per position when a 1h long has been held
+            # past the floor AND never got meaningfully green (mfe < thresh) AND is still not green.
+            # Offline join to the trade's FINAL outcome (in entries.jsonl EXIT) then tells us whether
+            # a real cut here would have SAVED a loser or FALSE-CUT a slow take_profit_late winner.
+            if (
+                getattr(self, "_tu_shadow_enabled", False)
+                and entry_leg == "YES"
+                and strategy_name == "bitcoin"
+                and not getattr(pos, "_tu_shadowed", False)
+            ):
+                _tu_win = str(
+                    (entry_signal or {}).get("window_size")
+                    or getattr(pos, "window_size", "")
+                    or ""
+                )
+                if _tu_win == "1h":
+                    _held_min = hours_held * 60.0
+                    if (
+                        _held_min >= self._tu_min_held_min
+                        and peak_pnl_pct < self._tu_max_mfe_pct
+                        and pnl_pct <= self._tu_max_pnl_pct
+                    ):
+                        try:
+                            self._tu_shadow_write(
+                                pos_id, pos, _held_min, pnl_pct, peak_pnl_pct, mae_pct
+                            )
+                            # Mark shadowed only after a successful write so a transient
+                            # file error retries next cycle instead of silently dropping the row.
+                            setattr(pos, "_tu_shadowed", True)
+                        except Exception:
+                            pass
+
+            # 2026-08-03 TAPE-AWARE FASTER-STOP SHADOW (operator GO; LOG-ONLY, mirrors _tu_shadow).
+            # Fire once per position at the first tick it is (a) LOSING past min_loss AND (b) the
+            # tape_map for its asset has turned AGAINST its side (long/YES vs DOWN, short/NO vs UP)
+            # at conf>=min and fresh. Records the would-cut mark (live pnl_pct); an offline join to
+            # the final outcome measures would-SAVE vs FALSE-CUT by window before any live cut.
+            # NEVER sets `reason` -> zero behavior change. Tape is 53% @15m / 60% @60m, so the
+            # per-window false-cut rate MUST be measured here before a live tape-stop is enabled.
+            if (
+                is_updown
+                and getattr(self, "_tape_stop_shadow_enabled", False)
+                and _latest_tape_state is not None
+                and not getattr(pos, "_tape_stop_shadowed", False)
+                and pnl_pct <= -abs(getattr(self, "_tape_stop_min_loss_pct", 0.03))
+            ):
+                _ts_win = str(
+                    (entry_signal or {}).get("window_size")
+                    or getattr(pos, "window_size", "")
+                    or ""
+                ).lower()
+                _ts_side = "SHORT" if entry_leg == "NO" else "LONG"
+                _ts_against = "UP" if entry_leg == "NO" else "DOWN"
+                try:
+                    _ts_tm = _latest_tape_state(strategy_name) or {}
+                except Exception:
+                    _ts_tm = {}
+                _ts_dir = str(_ts_tm.get("direction") or "").upper()
+                _ts_conf = float(_ts_tm.get("confidence", 0.0) or 0.0)
+                try:
+                    _ts_age = datetime.now(timezone.utc).timestamp() - float(_ts_tm.get("ts", 0.0) or 0.0)
+                except Exception:
+                    _ts_age = 1e9
+                if (
+                    _ts_dir == _ts_against
+                    and _ts_conf >= getattr(self, "_tape_stop_conf_min", 0.6)
+                    and _ts_age <= getattr(self, "_tape_stop_max_age_s", 90.0)
+                ):
+                    try:
+                        self._tape_stop_shadow_write(
+                            pos_id, pos, _ts_win or "?", _ts_side, _ts_dir, _ts_conf,
+                            hours_held * 60.0, pnl_pct, peak_pnl_pct, mae_pct,
+                        )
+                        setattr(pos, "_tape_stop_shadowed", True)
+                    except Exception:
+                        pass
 
             # 2026-07-29 HOLD MEANS HOLD (operator GO + Codex proof). The hold flag only
             # blocked take_profit; stop/trail/in-profit/time/flatten/never-green kept cutting
@@ -1235,6 +1684,26 @@ class PositionExitManager:
                         exit_mark_age_ms=((market_liquidity or {}).get(pos.market_id) or {}).get("mark_age_ms"),
                         raw_signal_pnl=_raw_signal_pnl,
                         execution_adjusted_pnl=_exec_adj_pnl,
+                        tp_trigger_mark_pnl_pct=(
+                            round(pnl_pct, 4) if reason == "take_profit" else None
+                        ),
+                        tp_executable_exit_price=(
+                            round(_tp_exec_price, 4)
+                            if reason == "take_profit" and _tp_exec_price is not None
+                            else None
+                        ),
+                        tp_executable_gross_pnl_pct=(
+                            round(_tp_exec_gross_pnl_pct, 4)
+                            if reason == "take_profit"
+                            and _tp_exec_gross_pnl_pct is not None
+                            else None
+                        ),
+                        tp_executable_net_pnl_pct=(
+                            round(_tp_exec_net_pnl_pct, 4)
+                            if reason == "take_profit"
+                            and _tp_exec_net_pnl_pct is not None
+                            else None
+                        ),
                     )
                 )
 

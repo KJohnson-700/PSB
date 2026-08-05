@@ -746,6 +746,26 @@ def _filter_crypto_hourly_markets(markets, include_hourly: bool) -> list:
     return [m for m in markets if not _is_hourly_crypto_market(m)]
 
 
+def _calibration_scope(config: Dict) -> Dict:
+    """The trading.calibration_scope block ({} when unset)."""
+    return ((config.get("trading") or {}).get("calibration_scope") or {})
+
+
+def _calibration_strategy_allowed(config: Dict, strategy: str) -> bool:
+    """True if `strategy` may create NEW entries this cycle.
+
+    Scope OFF (or no execution_strategies listed) => every strategy allowed
+    (byte-identical to pre-scope behavior). Scope ON => only the listed
+    strategies produce entries; the rest have their scan-task skipped. Exits
+    run before task-building and are never gated here.
+    """
+    scope = _calibration_scope(config)
+    if not scope.get("enabled"):
+        return True
+    allowed = set(scope.get("execution_strategies") or [])
+    return not allowed or strategy in allowed
+
+
 def _is_crypto_market(market) -> bool:
     """Crypto up/down and short-candle markets.
 
@@ -1080,6 +1100,20 @@ class PolyBot:
             str(k): float(v)
             for k, v in (_ngc.get("cut_after_secs_by_window", {}) or {}).items()
         }
+        # 2026-08-04 PER-LANE cut_after_secs override (operator GO). Keyed
+        # "strategy:window:side" (side=BUY_NO|BUY_YES); an entry's cut_after_secs (when
+        # present) overrides the by_window value for that one lane. Absent keys / absent
+        # cut_after_secs fall back to by_window. (min_loss_pct in the same by_lane entry is
+        # read by the ExitManager severity gate, not here.)
+        self._never_green_cut_by_lane = {}
+        _ngc_by_lane_cfg = _ngc.get("by_lane", {})
+        if isinstance(_ngc_by_lane_cfg, dict):
+            for _lk, _lv in _ngc_by_lane_cfg.items():
+                if isinstance(_lv, dict) and _lv.get("cut_after_secs") is not None:
+                    try:
+                        self._never_green_cut_by_lane[str(_lk)] = float(_lv["cut_after_secs"])
+                    except (TypeError, ValueError):
+                        pass
         try:
             if self._never_green_mode in ("shadow", "live"):
                 from src.execution.never_green_cut import NeverGreenCut
@@ -3452,6 +3486,19 @@ class PolyBot:
             t = self.config.get("trading", {}) or {}
             _max = float(t.get("max_position_size", 0.0) or 0.0)
             _max_exp = float(t.get("max_exposure_per_trade", 0.0) or 0.0)
+            # 2026-08-05 PROVEN-LANE CAP (winners-too-small fix): a lane the adaptive sizer
+            # flags PROVEN (n>=min_n_up, WR/ROI above thresholds) may grow PAST max_position_size
+            # up to proven_lane_max_usd. Losers/unproven stay at _max. No-op unless the sizer is
+            # live AND proven_lane_max_usd>0 (returns 0.0 otherwise). Never lowers _max.
+            try:
+                from src.analysis.adaptive_lane_sizer import resolve_lane_cap
+                _pcap = float(resolve_lane_cap(
+                    self.config, strategy=strategy,
+                    window=str(window_size or ""), action=action or "") or 0.0)
+                if _pcap > _max:
+                    _max = _pcap
+            except Exception:
+                pass
             if _max > 0:
                 new_size = min(new_size, _max)
             if _max_exp > 0:
@@ -3464,6 +3511,20 @@ class PolyBot:
         except Exception as _e:  # never break execution on a sizing helper
             logging.error("[adaptive-sizer] size apply error: %s", _e, exc_info=True)
         return final_size
+
+    def _lane_breaker_blocks(self, strategy: str, window_size, action: str) -> bool:
+        """2026-08-05 PER-LANE BREAKER admission check. True => this lane is in cooldown
+        (k consecutive stops), skip the entry. No-op unless trading.lane_breaker.enabled AND
+        the lane is in its allow-list. Fail-open (never blocks on error)."""
+        try:
+            from src.analysis import lane_breaker
+            if lane_breaker.is_blocked(self.config, strategy=strategy,
+                                       window=window_size, action=action):
+                logging.info("LANE_BREAKER cooldown skip %s|%s|%s", strategy, window_size, action)
+                return True
+        except Exception as _e:
+            logging.debug("lane_breaker check error: %s", _e)
+        return False
 
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
         """Apply realized PnL to paper/live bankroll with a hard floor at zero."""
@@ -3974,7 +4035,13 @@ class PolyBot:
                 else:
                     pnl_pct = (cy - entry) / entry
                 win = getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "?"
-                _cut_secs = self._never_green_cut_by_window.get(str(win))
+                # 2026-08-04 PER-LANE cut_after_secs: prefer a "strategy:window:side" override,
+                # else fall back to the by_window value (then the class default inside observe()).
+                _ng_side = "BUY_NO" if (entry_leg or "YES") == "NO" else "BUY_YES"
+                _ng_lane_key = f"{strat}:{win}:{_ng_side}"
+                _cut_secs = self._never_green_cut_by_lane.get(_ng_lane_key)
+                if _cut_secs is None:
+                    _cut_secs = self._never_green_cut_by_window.get(str(win))
                 ev = ng.observe(
                     position_id=pos_id, hold_seconds=hold_s, current_pnl_pct=pnl_pct,
                     cut_after_secs=_cut_secs,
@@ -4970,6 +5037,17 @@ class PolyBot:
                         )
                     self.kelly_sizer.record_outcome(strat, exit_pnl > 0, window)
                     try:
+                        from src.analysis import lane_breaker
+                        # Codex HIGH: Position has no .action and stores outcome as YES/NO — use the
+                        # normalizer so the lane key matches config/admission (BUY_YES/BUY_NO).
+                        lane_breaker.record_exit(
+                            self.config, strategy=strat, window=window,
+                            action=breaker_action,
+                            exit_reason=exit_decision.reason,
+                        )
+                    except Exception:
+                        pass
+                    try:
                         self.lane_tape_adapter.record_close(
                             strat, window,
                             (getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",
@@ -5294,6 +5372,10 @@ class PolyBot:
                 _alt_strat._injected_btc_ta = shared_btc_ta
                 _alt_strat._btc_ta_inject_set = True
 
+        # ALL strategies always SCAN (calibration scope gates EXECUTION, not scanning —
+        # so non-BTC lanes keep producing rejected-candidate / ghost / shadow evidence
+        # during a BTC-only sprint; see the per-strategy execution loops + the
+        # _shadow_log_blocked_admit shadow of would-be entries below).
         strategy_tasks: list[Any] = [
             _time_strategy_scan(
                 "bitcoin",
@@ -5477,8 +5559,12 @@ class PolyBot:
             self.last_buy_no_skip_samples["sol_macro"] = dict(
                 self.last_ai_scan_stats["sol_macro"].get("last_buy_no_skip_sample", {}) or {}
             )
-            for signal in sol_signals:
-                await self._execute_sol_macro_signal(signal)
+            if _calibration_strategy_allowed(self.config, "sol_macro"):
+                for signal in sol_signals:
+                    await self._execute_sol_macro_signal(signal)
+            else:
+                for signal in sol_signals:
+                    self._shadow_log_blocked_admit("sol_macro", signal)
             if sol_signals:
                 logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
             else:
@@ -5516,8 +5602,12 @@ class PolyBot:
                 self.last_buy_no_skip_samples["eth_macro"] = dict(
                     self.last_ai_scan_stats["eth_macro"].get("last_buy_no_skip_sample", {}) or {}
                 )
-                for signal in eth_signals:
-                    await self._execute_sol_macro_signal(signal)
+                if _calibration_strategy_allowed(self.config, "eth_macro"):
+                    for signal in eth_signals:
+                        await self._execute_sol_macro_signal(signal)
+                else:
+                    for signal in eth_signals:
+                        self._shadow_log_blocked_admit("eth_macro", signal)
                 if eth_signals:
                     logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
                 else:
@@ -5555,8 +5645,12 @@ class PolyBot:
                 self.last_buy_no_skip_samples["hype_macro"] = dict(
                     self.last_ai_scan_stats["hype_macro"].get("last_buy_no_skip_sample", {}) or {}
                 )
-                for signal in hype_signals:
-                    await self._execute_sol_macro_signal(signal)
+                if _calibration_strategy_allowed(self.config, "hype_macro"):
+                    for signal in hype_signals:
+                        await self._execute_sol_macro_signal(signal)
+                else:
+                    for signal in hype_signals:
+                        self._shadow_log_blocked_admit("hype_macro", signal)
                 if hype_signals:
                     logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
                 else:
@@ -5594,8 +5688,12 @@ class PolyBot:
                 self.last_buy_no_skip_samples["xrp_macro"] = dict(
                     self.last_ai_scan_stats["xrp_macro"].get("last_buy_no_skip_sample", {}) or {}
                 )
-                for signal in xrp_signals:
-                    await self._execute_xrp_macro_signal(signal)
+                if _calibration_strategy_allowed(self.config, "xrp_macro"):
+                    for signal in xrp_signals:
+                        await self._execute_xrp_macro_signal(signal)
+                else:
+                    for signal in xrp_signals:
+                        self._shadow_log_blocked_admit("xrp_macro", signal)
                 if xrp_signals:
                     logging.info(f"[TRADING] Crypto XRP macro: {len(xrp_signals)} signals")
                 else:
@@ -5633,8 +5731,12 @@ class PolyBot:
                 self.last_buy_no_skip_samples["doge_macro"] = dict(
                     self.last_ai_scan_stats["doge_macro"].get("last_buy_no_skip_sample", {}) or {}
                 )
-                for signal in doge_signals:
-                    await self._execute_sol_macro_signal(signal)
+                if _calibration_strategy_allowed(self.config, "doge_macro"):
+                    for signal in doge_signals:
+                        await self._execute_sol_macro_signal(signal)
+                else:
+                    for signal in doge_signals:
+                        self._shadow_log_blocked_admit("doge_macro", signal)
                 if doge_signals:
                     logging.info(f"[TRADING] Crypto DOGE macro: {len(doge_signals)} signals")
                 else:
@@ -5672,8 +5774,12 @@ class PolyBot:
                 self.last_buy_no_skip_samples["bnb_macro"] = dict(
                     self.last_ai_scan_stats["bnb_macro"].get("last_buy_no_skip_sample", {}) or {}
                 )
-                for signal in bnb_signals:
-                    await self._execute_sol_macro_signal(signal)
+                if _calibration_strategy_allowed(self.config, "bnb_macro"):
+                    for signal in bnb_signals:
+                        await self._execute_sol_macro_signal(signal)
+                else:
+                    for signal in bnb_signals:
+                        self._shadow_log_blocked_admit("bnb_macro", signal)
                 if bnb_signals:
                     logging.info(f"[TRADING] Crypto BNB macro: {len(bnb_signals)} signals")
                 else:
@@ -6435,6 +6541,8 @@ class PolyBot:
 
     async def _execute_bitcoin_signal_impl(self, signal: BitcoinSignal):
         """Bitcoin entry (holds _execution_lock via caller)."""
+        if self._lane_breaker_blocks("bitcoin", signal.window_size, signal.action):
+            return
         _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
         _entry_reason = f"btc_{signal.direction} ai={signal.ai_used}"
         lane_meta = build_lane_metadata(
@@ -6799,6 +6907,66 @@ class PolyBot:
                 }
             )
 
+    def _shadow_log_blocked_admit(self, strategy_name: str, signal: Any) -> None:
+        """Calibration scope: a non-execution strategy produced an admitted signal that
+        we are NOT executing this BTC-only sprint. Route it into the ghost / rejected-
+        candidate pipeline (reason=calibration_scope_shadow) so the settler scores its
+        win/loss and the lane's would-have-entered PICKS accrue as settleable evidence
+        for a later promotion decision. Never raises — shadow logging must not break the
+        trade cycle. Non-BTC signals share the sol-family shape (market_id/market_slug/
+        end_date/est_prob/window_size/action/price)."""
+        try:
+            from types import SimpleNamespace
+
+            action = str(getattr(signal, "action", "") or "").upper()
+            if action not in ("BUY_YES", "BUY_NO"):
+                return
+            side = "LONG" if action == "BUY_YES" else "SHORT"
+            # signal.price is the ORDER price of the TRADED token: yes_price for BUY_YES
+            # but (1 - yes_price) for BUY_NO (sol_macro.py:6873). Recover the canonical
+            # YES/NO prices so the ghost settler scores BUY_NO realized return correctly
+            # (it reads market.no_price for BUY_NO).
+            order_price = float(getattr(signal, "price", 0.0) or 0.0)
+            if action == "BUY_YES":
+                yes_price = order_price
+                no_price = (1.0 - order_price) if order_price else 0.0
+            else:  # BUY_NO — order_price IS the NO price
+                no_price = order_price
+                yes_price = (1.0 - order_price) if order_price else 0.0
+            _mkt = SimpleNamespace(
+                id=getattr(signal, "market_id", None),
+                question=getattr(signal, "market_question", None),
+                slug=getattr(signal, "market_slug", None),
+                end_date=getattr(signal, "end_date", None),
+                token_id_yes=getattr(signal, "token_id_yes", None),
+                token_id_no=getattr(signal, "token_id_no", None),
+                no_price=no_price,
+            )
+            log_rejected_candidate(
+                strategy=strategy_name,
+                window=str(getattr(signal, "window_size", "") or ""),
+                side=side,
+                action=action,
+                reason="calibration_scope_shadow",
+                market=_mkt,
+                yes_price=yes_price,
+                est_prob_up=getattr(signal, "est_prob", None),
+                raw_est_prob=getattr(signal, "raw_est_prob", None),
+                htf_bias=getattr(signal, "htf_bias", None),
+                primary_htf_bias=getattr(signal, "primary_htf_bias", None),
+                btc_1h_regime=getattr(signal, "btc_1h_regime", None),
+                stage="calibration_scope",
+                context={
+                    "calibration_scope_shadow": True,
+                    "blocked_execution": True,
+                    "edge": getattr(signal, "edge", None),
+                    "size": getattr(signal, "size", None),
+                    "confidence": getattr(signal, "confidence", None),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — shadow logging must not block the cycle
+            logging.debug("calibration shadow-log failed (%s): %s", strategy_name, exc)
+
     async def _execute_sol_macro_signal(self, signal: SolMacroSignal):
         """Execute a SOL or ETH macro trade signal (same execution path)."""
         async with self._execution_lock:
@@ -6807,6 +6975,8 @@ class PolyBot:
     async def _execute_sol_macro_signal_impl(self, signal: SolMacroSignal):
         """SOL/ETH macro entry (holds _execution_lock via caller)."""
         strat = signal.strategy_name
+        if self._lane_breaker_blocks(strat, signal.window_size, signal.action):
+            return
         _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
         _entry_reason = (
             f"{strat}_{signal.direction} macro_leg={signal.lag_magnitude} "

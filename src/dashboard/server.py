@@ -1148,6 +1148,11 @@ def _get_current_session_summary() -> Dict:
     for UI rollups so Performance does not show stale prior-session data.
     """
     summary = _get_cached_journal_summary()
+    runtime_dir = _runtime_session_dir_by_status()
+    if runtime_dir is not None and summary.get("session_id") != runtime_dir.name:
+        entries = runtime_dir / "entries.jsonl"
+        if not entries.exists() or entries.stat().st_size == 0:
+            return _empty_session_summary(runtime_dir.name)
     empty_startup_dir = None if bot_instance is not None else _newer_empty_startup_session(summary)
     if empty_startup_dir is not None:
         return _empty_session_summary(empty_startup_dir.name)
@@ -1695,6 +1700,21 @@ def _latest_session_dir_by_name() -> Optional[Path]:
     return subs[0] if subs else None
 
 
+def _runtime_session_dir_by_status() -> Optional[Path]:
+    """Active runtime session from the bot heartbeat, if it points at a real dir."""
+    try:
+        status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+        session_id = str(status.get("session_id") or "").strip()
+        if not session_id:
+            return None
+        from src.execution.trade_journal import JOURNAL_DIR
+
+        path = JOURNAL_DIR / session_id
+        return path if path.is_dir() else None
+    except Exception:
+        return None
+
+
 def _current_session_dir_str() -> Optional[str]:
     """THE canonical 'current session' directory for every session-scoped panel.
 
@@ -1707,7 +1727,8 @@ def _current_session_dir_str() -> Optional[str]:
 
     Resolution order:
       1. the live bot's own journal (authoritative when the dashboard is embedded)
-      2. newest directory by NAME — session ids embed the timestamp
+      2. bot_runtime_status.json session_id (authoritative for local split runs)
+      3. newest directory by NAME — session ids embed the timestamp
          (test_YYYYMMDD_HHMMSS) so lexicographic max is chronological, and unlike
          mtime it cannot be dragged backwards by late writes to an old dir.
     NEVER resolve a session by mtime.
@@ -1719,6 +1740,9 @@ def _current_session_dir_str() -> Optional[str]:
                 return str(sd)
         except Exception:
             pass
+    runtime_dir = _runtime_session_dir_by_status()
+    if runtime_dir is not None:
+        return str(runtime_dir)
     p = _latest_session_dir_by_name()
     return str(p) if p is not None else None
 

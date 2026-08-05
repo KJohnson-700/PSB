@@ -31,11 +31,16 @@ from typing import Any, Optional
 
 _CALIB_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "calibration"
 _MAP_PATH = _CALIB_DIR / "tape_map.jsonl"
+_VETO_SHADOW_PATH = _CALIB_DIR / "tape_side_veto_shadow.jsonl"
 
 # Rolling per-asset ATR% history so the volatility bucket is RELATIVE to each asset's own
 # recent range (a "high vol" read means high for THIS asset, not an absolute threshold).
 _ATR_HIST: dict[str, deque] = defaultdict(lambda: deque(maxlen=600))
 _LAST_LOG: dict[str, float] = {}
+# In-memory cache of the most-recent computed tape state per asset. Populated by
+# snapshot_and_log each cycle so latest_tape_state() is a dict lookup with ZERO file reads
+# (reading tape_map.jsonl per scan would be the jsonl-reread churn that ballooned RSS before).
+_LAST_STATE: dict[str, dict] = {}
 _LOCK = Lock()
 
 
@@ -79,6 +84,7 @@ def compute_tape_state(
     ema_9: Any = None,
     ema_21: Any = None,
     ema_50: Any = None,
+    aux_dir: Any = None,
     now: Optional[float] = None,
 ) -> dict:
     """Compute the tape state from whatever indicators are provided (all optional)."""
@@ -93,6 +99,13 @@ def compute_tape_state(
             ema_dir = 1
         elif cp < e21 < e50 and e9 <= e21:
             ema_dir = -1
+
+    # Assets without an EMA stack (e.g. BTC, which uses a sabre/MA trend instead) can supply a
+    # native MA-trend vote via aux_dir in {-1,0,1}. It fills the EMA-vote slot so they still get
+    # a 3rd direction vote (macd + MA-trend + htf) rather than just macd + htf — keeping the
+    # 3-term dscore and +/-2 threshold identical to the alts.
+    if ema_dir == 0 and aux_dir is not None:
+        ema_dir = _sign(_f(aux_dir))
 
     # Explicit trend label when the service provides one.
     td = str(trend_direction or "").upper()
@@ -157,6 +170,7 @@ def snapshot_and_log(asset: str, *, min_interval_s: float = 30.0, **indicators: 
                 return None
             _LAST_LOG[asset] = now
         st = compute_tape_state(asset, now=now, **indicators)
+        _LAST_STATE[asset] = st  # in-memory cache for latest_tape_state() (no file re-read)
         try:
             _line = json.dumps(st) + "\n"
             with _LOCK:  # serialize appends so concurrent asset lines never interleave
@@ -166,5 +180,30 @@ def snapshot_and_log(asset: str, *, min_interval_s: float = 30.0, **indicators: 
         except Exception:
             return None
         return st
+    except Exception:
+        return None
+
+
+def latest_tape_state(asset: str) -> Optional[dict]:
+    """Most-recent computed tape state for ``asset`` from the in-memory cache — a dict lookup,
+    NO file read (avoids the per-scan jsonl-reread that ballooned RSS). Returns None until the
+    first snapshot_and_log() for the asset this process. Fail-open."""
+    try:
+        return _LAST_STATE.get(asset)
+    except Exception:
+        return None
+
+
+def log_side_veto_shadow(**fields: Any) -> None:
+    """Observe-only: record what a tape-adaptive side-veto WOULD do (would_veto) for an entry,
+    without blocking it — so we can measure (offline, joined to the trade outcome) whether the
+    veto correctly catches wrong-direction entries before it is ever made active. Fail-silent."""
+    try:
+        fields.setdefault("ts", _time.time())
+        _line = json.dumps(fields) + "\n"
+        with _LOCK:
+            _CALIB_DIR.mkdir(parents=True, exist_ok=True)
+            with open(_VETO_SHADOW_PATH, "a") as fh:
+                fh.write(_line)
     except Exception:
         return None

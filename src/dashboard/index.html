@@ -2193,37 +2193,10 @@
       #trigger-board-list .tb-stat{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--tm);font-variant-numeric:tabular-nums}
       #trigger-board-list .tb-cond{font-family:"IBM Plex Mono",monospace;font-size:9px;color:var(--td);letter-spacing:.04em;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     </style>
-    <div class="card" id="trigger-board-section" data-aos="fade-up" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;">Break-Trigger Board</h3>
-      <div id="trigger-board-list"><div class="tb-stat">loading triggers&hellip;</div></div>
-    </div>
-    <script>
-    (function(){
-      var COL={safe:"var(--gr)",watch:"var(--ye)",wait:"var(--tm)",fire:"var(--re)"};
-      var BG={safe:"rgba(0,255,136,.10)",watch:"rgba(255,215,0,.10)",wait:"rgba(136,136,170,.10)",fire:"rgba(255,68,102,.14)"};
-      async function refreshTriggers(){
-        try{
-          var r=await fetch("/api/triggers",{cache:"no-store"}); if(!r.ok) return;
-          var d=await r.json(); var g=document.getElementById("trigger-board-list"); if(!g||!d||!d.triggers) return;
-          if(!d.triggers.length){ g.innerHTML="<div class=\"tb-stat\">no active triggers</div>"; return; }
-          g.innerHTML=d.triggers.map(function(t){
-            var c=COL[t.state]||"var(--tm)"; var bg=BG[t.state]||"transparent";
-            var pct=Math.min(100,Math.round((t.closed/(t.min_closed||10))*100));
-            var stat=t.closed>0
-              ?("net "+(t.net>=0?"+":"")+"$"+Number(t.net).toFixed(0)+(t.wr!=null?(" · WR "+t.wr+"%"):"")+" · "+t.closed+"/"+t.min_closed+" cl"+(t.ride0>0?(" · "+t.ride0+" ride0"):""))
-              :("no fills yet · "+t.closed+"/"+t.min_closed+" cl");
-            return "<div class=\"tb-row\" style=\"border-left:2px solid "+c+"\">"
-              +"<div class=\"tb-head\"><span class=\"tb-name\">"+t.label+"</span>"
-              +"<span class=\"tb-pill\" style=\"color:"+c+";background:"+bg+"\">"+t.state+"</span></div>"
-              +"<div class=\"tb-bar\"><div style=\"height:100%;width:"+pct+"%;background:"+c+"\"></div></div>"
-              +"<div class=\"tb-stat\">"+stat+"</div>"
-              +"<div class=\"tb-cond\">"+t.cond+(t.action?(" → "+t.action):"")+"</div></div>";
-          }).join("");
-        }catch(e){}
-      }
-      window._refreshTriggers=refreshTriggers; setInterval(refreshTriggers,15000); refreshTriggers();
-    })();
-    </script>
+    <!-- 2026-08-01 Break-Trigger Board REMOVED (operator): break_triggers.json was only written at
+         launch (01:13) and break_trigger_board.build() is not called in the run loop, so the panel
+         showed stale/empty data and never fired. Pulled per operator request. /api/triggers endpoint
+         left inert in server.py (returns []) — harmless; can be removed on a later dashboard pass. -->
 
 
 

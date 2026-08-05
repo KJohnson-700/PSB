@@ -50,20 +50,54 @@ DEFAULTS = {
     "roi_scale": 0.35,         # ROI (avg_pnl/avg_cost) that maps to ~76% of the way to a bound
     "sensitivity": 0.60,       # how aggressively ROI moves the multiplier
     "ema_alpha": 0.30,         # new = alpha*target + (1-alpha)*prev
+    "unproven_lane_mult": 1.0, # 2026-08-04 lever-2: brand-new/very-low-n lane (n<min_n_down) rides
+                               # this reduced mult until it has data (default 1.0 = OFF, back-compat)
+    # 2026-08-05 PROVEN-LANE CAP keys (Codex re-review FIX: MUST live in DEFAULTS or _cfg drops
+    # them — the `if k in c` filter at line ~82 strips any config key not mirrored here, which
+    # would make resolve_lane_cap a silent no-op). Default 0.0 = OFF (proven-cap disabled until
+    # config sets proven_lane_max_usd>0); thresholds are the proven-winner bar.
+    "proven_lane_max_usd": 0.0,  # $ ceiling a PROVEN lane may grow to (0 = feature off)
+    "proven_wr_min": 0.55,       # min recent WR (fraction) to count a lane proven
+    "proven_roi_min": 0.05,      # min recent ROI (avg_pnl/avg_cost) to count a lane proven
 }
+
+
+def _num(v: Any, default: float) -> float:
+    """Coerce a config value to float, falling back to default on None/bad-string (Codex P2)."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _sizer_block(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract trading.adaptive_sizer (or top-level adaptive_sizer) as a dict, tolerating a
+    non-dict config or a non-dict parent block (Codex P1: never crash _cfg on malformed yaml)."""
+    if not isinstance(config, dict):
+        return {}
+    trading = config.get("trading")
+    blk = trading.get("adaptive_sizer") if isinstance(trading, dict) else None
+    if not isinstance(blk, dict):
+        blk = config.get("adaptive_sizer")
+    return blk if isinstance(blk, dict) else {}
 
 
 def _cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     c = dict(DEFAULTS)
-    if config:
-        blk = ((config.get("trading") or {}).get("adaptive_sizer")) or config.get("adaptive_sizer") or {}
-        for k, v in (blk or {}).items():
-            if k in c and v is not None:
-                c[k] = v
+    blk = _sizer_block(config)
+    for k, v in blk.items():
+        if k in c and v is not None:
+            c[k] = v
     # validate numeric guardrails (Codex nit 1): keep 1.0 inside the band and alpha in [0,1]
-    c["mult_floor"] = min(float(c["mult_floor"]), 1.0)
-    c["mult_ceil"] = max(float(c["mult_ceil"]), 1.0)
-    c["ema_alpha"] = max(0.0, min(float(c["ema_alpha"]), 1.0))
+    c["mult_floor"] = min(_num(c["mult_floor"], 0.40), 1.0)
+    c["mult_ceil"] = max(_num(c["mult_ceil"], 1.0), 1.0)
+    c["ema_alpha"] = max(0.0, min(_num(c["ema_alpha"], 0.30), 1.0))
+    # 2026-08-04 WR-GATE (per-lane realized SELF-FLIP): nested block, ALLOWLISTED lanes only.
+    # A structurally wrong-side lane (recent WR below a floor at n>=min_n) is driven to a
+    # near-sitout mult that rides the ~$1 venue floor — it keeps trading (calibration data)
+    # at ~0 risk and self-reverses as WR recovers. Kept OUT of DEFAULTS/params (it's a dict).
+    _w = blk.get("wr_gate")
+    c["wr_gate"] = _w if isinstance(_w, dict) else {}
     return c
 
 
@@ -117,6 +151,14 @@ def _target_mult(avg_pnl: float, avg_cost: float, n: int, c: Dict[str, Any]) -> 
     """
     if avg_cost <= 0:
         return 1.0, "no_cost_basis"
+    # 2026-08-04 UNPROVEN-LANE CAP (operator GO — sizing-inversion fix). A brand-new / very-low-n
+    # lane (n < min_n_down) trades at a REDUCED mult until it has enough data to size properly —
+    # a fresh lane must never blow up at full base ($15) on n=3. AUDIT: the sizing-inversion big
+    # losers (xrp 5m BUY_NO, sol 15m BUY_YES) were exactly n=3 lanes stuck at mult 1.00 because they
+    # sat below min_n_down=4. Applies to WIN or LOSS (unknown => bet small). Default 1.0 = OFF.
+    _unproven = _num(c.get("unproven_lane_mult", 1.0), 1.0)
+    if _unproven < 1.0 and n < int(c["min_n_down"]):
+        return _unproven, "unproven_lowN(n=%d<%d,mult=%.2f)" % (n, int(c["min_n_down"]), _unproven)
     roi = avg_pnl / avg_cost
     # smooth signed signal in (-1, 1)
     signal = math.tanh(roi / max(1e-6, float(c["roi_scale"])))
@@ -163,6 +205,30 @@ def build(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         # clamp the SMOOTHED value too (Codex nit 1): a corrupt prev_state or a
         # narrowed band must never let ema_mult escape [floor, ceil].
         ema = round(max(float(c["mult_floor"]), min(ema, float(c["mult_ceil"]))), 4)
+        # 2026-08-05 (Codex MED): a lane whose CURRENT target is not a fresh win (<=1.0) must never
+        # stay oversized from a stale winner EMA — the wider mult_ceil=2.5 makes this bite. Clamp the
+        # smoothed value to <=1.0 whenever the fresh target isn't >1.0 (loser / neutral / unproven).
+        if target <= 1.0 and ema > 1.0:
+            ema = 1.0
+        # 2026-08-04 WR-GATE self-flip override. Applied AFTER the [mult_floor,ceil] clamp so
+        # a sit-out can go BELOW mult_floor. Allowlisted lanes only (protects winners /
+        # collection lanes from a global WR sweep). Only ever SHRINKS (min), never grows, and
+        # self-reverses: when wr climbs back above the floor the override lifts and ema returns
+        # to the ROI value on the next recompute. wr is a percent (0..100) here.
+        wg = c.get("wr_gate") or {}
+        if wg.get("enabled") and lane in set(wg.get("lanes") or []) and n >= int(_num(wg.get("min_n", 8), 8)):
+            _sit_wr = 100.0 * _num(wg.get("sitout_wr", 0.35), 0.35)
+            _dn_wr = 100.0 * _num(wg.get("downsize_wr", 0.45), 0.45)
+            if wr < _sit_wr:
+                _sm = _num(wg.get("sitout_mult", 0.10), 0.10)
+                if ema > _sm:
+                    ema = round(_sm, 4)
+                    reason = "wr_sitout(wr=%.0f,n=%d)" % (wr, n)
+            elif wr < _dn_wr:
+                _dm = _num(wg.get("downsize_mult", 0.40), 0.40)
+                if ema > _dm:
+                    ema = round(_dm, 4)
+                    reason = "wr_downsize(wr=%.0f,n=%d)" % (wr, n)
         strat, window, action = lane.split("|")
         lanes.append({
             "lane": lane, "strategy": strat, "window": window, "action": action,
@@ -185,7 +251,12 @@ def build(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 
 def write(state: Dict[str, Any]) -> None:
-    STATE_PATH.write_text(json.dumps(state, indent=2))
+    # Atomic write (Codex P3): in-process recompute + the 10-min out-of-process daemon both
+    # write this file; a temp-file + os.replace() makes each write atomic so a concurrent
+    # reader never sees a half-written state (avoids the transient partial-line fallback).
+    tmp = STATE_PATH.with_name(STATE_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(STATE_PATH)
     row = {"ts": state["generated_at"], "mode": state["mode"],
            "lanes": {l["lane"]: l["ema_mult"] for l in state["lanes"]}}
     with SHADOW_LOG.open("a") as f:
@@ -225,6 +296,53 @@ def resolve_size_mult(config: Dict[str, Any], *, strategy: str, window: str, act
         return 1.0
     key = "%s|%s|%s" % (strategy, window, action)
     return float(_load_mult_map().get(key, 1.0))
+
+
+# Proven-lane record cache (mtime-keyed, same pattern as _load_mult_map).
+_REC_CACHE: Dict[str, Any] = {"mtime": None, "map": {}}
+
+
+def _load_lane_records() -> Dict[str, Dict[str, Any]]:
+    try:
+        mtime = STATE_PATH.stat().st_mtime
+    except OSError:
+        return {}
+    if _REC_CACHE["mtime"] != mtime:
+        try:
+            st = json.loads(STATE_PATH.read_text())
+            _REC_CACHE["map"] = {l["lane"]: l for l in st.get("lanes", [])}
+            _REC_CACHE["mtime"] = mtime
+        except Exception:
+            return _REC_CACHE.get("map", {})
+    return _REC_CACHE["map"]
+
+
+def resolve_lane_cap(config: Dict[str, Any], *, strategy: str, window: str, action: str) -> float:
+    """2026-08-05 PROVEN-LANE CAP. Return proven_lane_max_usd if this lane is PROVEN
+    (n>=min_n_up AND wr>=proven_wr_min AND ROI>=proven_roi_min), else 0.0 (=> caller uses
+    the normal max_position_size). Lets a proven winner grow PAST the uniform $ cap while
+    losers/unproven stay capped (the winners-too-small / sizing-inversion fix). Returns 0.0
+    unless enabled + mode==live (no-op in shadow), so it can never lift the cap by accident.
+    """
+    c = _cfg(config)
+    if not bool(c["enabled"]) or c["mode"] != "live":
+        return 0.0
+    pmax = _num(c.get("proven_lane_max_usd", 0.0), 0.0)
+    if pmax <= 0:
+        return 0.0
+    rec = _load_lane_records().get("%s|%s|%s" % (strategy, window, action))
+    if not rec:
+        return 0.0
+    n = int(rec.get("n", 0) or 0)
+    wr = float(rec.get("wr", 0.0) or 0.0)  # percent 0..100
+    avg_pnl = float(rec.get("avg_pnl", 0.0) or 0.0)
+    avg_cost = float(rec.get("avg_cost", 0.0) or 0.0)
+    roi = (avg_pnl / avg_cost) if avg_cost > 0 else 0.0
+    wr_min = 100.0 * _num(c.get("proven_wr_min", 0.55), 0.55)
+    roi_min = _num(c.get("proven_roi_min", 0.05), 0.05)
+    if n >= int(c["min_n_up"]) and wr >= wr_min and roi >= roi_min:
+        return float(pmax)
+    return 0.0
 
 
 def main() -> None:
