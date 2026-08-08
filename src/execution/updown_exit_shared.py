@@ -114,6 +114,13 @@ class UpdownExitGlobals:
     # then suppresses ngc/stop/time/flatten; only the floor + -50% catastrophic fire. Reversible.
     hold_5m_all: bool = False
     hold_5m_loser_floor_pct: float = 0.30
+    # 2026-08-06 (operator GO) HOLD-ALL — pure hold-to-resolution on EVERY window (not just 5m). The %
+    # stop (updown_stop_loss) is THE leak: 243 exits / 2% WR / -$730, knifing directionally-right (57%
+    # clean Binance) shorts at -29% right before they'd resolve green. Binary math: hold at 57% right =
+    # +14%/trade; the stop locks ~-$3/trade. Forces hold=true + stop=0.0 (pure hold, loser-floor won't
+    # fire); only the -50% catastrophic backstop remains. Safe NOW because sizing was flattened to $11-15
+    # (a full loser is bounded) and <50% lanes are sat out. OFF by default => zero behavior change.
+    hold_all: bool = False
 
 
 @dataclass(frozen=True)
@@ -284,6 +291,7 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         ),
         hold_5m_all=bool(ec.get("hold_5m_all", False)),
         hold_5m_loser_floor_pct=float(ec.get("hold_5m_loser_floor_pct", 0.30) or 0.30),
+        hold_all=bool(ec.get("hold_all", False)),
         updown_stop_loss_pct=float(ec.get("updown_stop_loss_pct", 0.20) or 0.20),
         updown_stop_cents=base_stop,
         updown_exit_window_mins=base_win,
@@ -525,6 +533,14 @@ def resolve_updown_exit_params_for_position(
         _floor = float(getattr(g, "hold_5m_loser_floor_pct", 0.30) or 0.30)
         if _cur_stop != 0.0:
             params["updown_stop_loss_pct"] = max(_cur_stop, _floor)
+        params["dynamic_stop_enabled"] = False
+    # 2026-08-06 (operator GO) HOLD-ALL — the TRUE final word for EVERY window. PURE hold-to-resolution:
+    # kills the % stop entirely (stop=0.0 => loser-floor won't fire; only the -50% catastrophic remains).
+    # This is the fix for the -$730 / 2%-WR updown_stop_loss leak on directionally-right lanes. Applied
+    # AFTER hold_5m_all + regime-conditioning so nothing re-tightens. OFF by default => zero behavior change.
+    if getattr(g, "hold_all", False):
+        params["updown_hold_winners_to_resolution"] = True
+        params["updown_stop_loss_pct"] = 0.0
         params["dynamic_stop_enabled"] = False
     return UpdownResolvedExitParams(
         take_profit_pct=float(params["take_profit_pct"]),

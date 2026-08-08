@@ -95,6 +95,16 @@ class KellySizer:
         self._min_position = float(trading_cfg.get("default_position_size", 1.0) or 1.0)
         self._max_position = float(trading_cfg.get("max_position_size", 0.0) or 0.0)
         self._max_position_pct = float(trading_cfg.get("max_exposure_per_trade", 0.05) or 0.05)
+        # 2026-08-05 FLAT SIZING (est_prob -> size DECOUPLE; operator-flagged sizing inversion).
+        # est_prob is ~coinflip (AUC~0.5) yet size_binary_position's Kelly scales size UP with p, so
+        # the false-confident LOSERS get sized BIGGER than the winners within a lane (measured: eth
+        # 15m NO losers avg $12.8 vs winners $7.8; xrp 15m NO losers $5.8 vs $4.5 — 50-58% WR lanes
+        # still RED). When enabled, every admitted trade gets the SAME flat $ base; the per-lane
+        # REALIZED-ROI mult (adaptive_lane_sizer, applied downstream in main.py) becomes the ONLY size
+        # differentiator, so proven lanes scale and losers can't be bet bigger than winners. Admission
+        # is unchanged (full_kelly<=0 still returns 0). Hot-reloadable. Reversible: enabled:false.
+        self._flat_sizing_enabled = bool(trading_cfg.get("flat_sizing_enabled", False))
+        self._flat_base_usd = float(trading_cfg.get("flat_base_usd", 8.0) or 8.0)
 
         self._recent_outcomes: Dict[str, list] = {s: [] for s in self._defaults}
         self._recent_outcomes_by_window: Dict[tuple, list] = {}
@@ -120,6 +130,14 @@ class KellySizer:
         self._max_position_pct = float(
             trading_cfg.get("max_exposure_per_trade", self._max_position_pct)
             or self._max_position_pct
+        )
+        # 2026-08-05 FLAT SIZING — refresh on hot-reload too (no restart needed to flip it).
+        self._flat_sizing_enabled = bool(
+            trading_cfg.get("flat_sizing_enabled", getattr(self, "_flat_sizing_enabled", False))
+        )
+        self._flat_base_usd = float(
+            trading_cfg.get("flat_base_usd", getattr(self, "_flat_base_usd", 8.0))
+            or getattr(self, "_flat_base_usd", 8.0)
         )
         self._root_config = config
 
@@ -317,8 +335,19 @@ class KellySizer:
         if full_kelly <= 0:
             return 0.0
 
-        wager_fraction = full_kelly * frac
-        base_size = bankroll * wager_fraction
+        # 2026-08-05 FLAT SIZING (est_prob -> size DECOUPLE; Codex-ranked #1 fix for the within-lane
+        # inversion). est_prob AUC ~0.5, so Kelly's p-scaling (base = bankroll*full_kelly*frac) bets
+        # MORE on the trades it loses -> losers sized bigger than winners inside a lane. When enabled,
+        # every admitted trade gets the SAME flat $ base; the per-lane REALIZED-ROI mult
+        # (adaptive_lane_sizer, applied downstream in main.py) becomes the ONLY size differentiator.
+        # The full_kelly<=0 admission guard ABOVE still runs (edge-positive check), so flat sizing
+        # only replaces the dollar MAGNITUDE, never which trades are admitted. Kelly path is the
+        # unchanged else-branch. Hot-reloadable. Reversible: flat_sizing_enabled:false.
+        if self._flat_sizing_enabled:
+            base_size = self._flat_base_usd
+        else:
+            wager_fraction = full_kelly * frac
+            base_size = bankroll * wager_fraction
         cap = bankroll * self._max_position_pct
         if self._max_position > 0:
             cap = min(cap, self._max_position)

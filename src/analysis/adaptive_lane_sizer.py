@@ -98,6 +98,11 @@ def _cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     # at ~0 risk and self-reverses as WR recovers. Kept OUT of DEFAULTS/params (it's a dict).
     _w = blk.get("wr_gate")
     c["wr_gate"] = _w if isinstance(_w, dict) else {}
+    # 2026-08-06 PER-LANE CEILING map (operator sizing model): "strategy|window|action" -> $ ceiling
+    # (fade longs $12, catch longs $17, good shorts $28, proven shorts $40). A dict, so kept OUT of
+    # DEFAULTS (mirrors wr_gate). Consumed in resolve_lane_cap as the hard per-lane max.
+    _lm = blk.get("lane_max_usd")
+    c["lane_max_usd"] = _lm if isinstance(_lm, dict) else {}
     return c
 
 
@@ -327,6 +332,19 @@ def resolve_lane_cap(config: Dict[str, Any], *, strategy: str, window: str, acti
     c = _cfg(config)
     if not bool(c["enabled"]) or c["mode"] != "live":
         return 0.0
+    # 2026-08-06 PER-LANE CEILING (operator sizing model). An explicit lane_max_usd entry is the HARD
+    # ceiling this lane may reach — fade longs $12, catch longs $17, good shorts $28, proven shorts $40.
+    # Returned regardless of proven status (unlike the uniform cap below): the adaptive MULT still gates
+    # the actual climb — unproven lanes ride 0.60x -> floored low; only realized-ROI growth lifts a lane
+    # toward this ceiling. Caller (main._apply_adaptive_realized_size) uses this AS the cap (higher OR
+    # lower than max_position_size), so a fade long is clamped DOWN to $12 while a proven short reaches $40.
+    lm = c.get("lane_max_usd") or {}
+    if isinstance(lm, dict):
+        _lc = lm.get("%s|%s|%s" % (strategy, window, action))
+        if _lc is not None:
+            _lcv = _num(_lc, 0.0)
+            if _lcv > 0:
+                return _lcv
     pmax = _num(c.get("proven_lane_max_usd", 0.0), 0.0)
     if pmax <= 0:
         return 0.0

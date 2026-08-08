@@ -500,7 +500,17 @@ class BitcoinStrategy:
                 pass
             else:
                 require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
-                if require_mom and mom is not None and momentum_side != quant_side:
+                # 2026-08-05 SHORTS-THE-BULL FIX (operator GO): the momentum-confirm guard was
+                # suppressing the CORRECTIVE flip too. When the fast-TF set a wrong-side base
+                # (e.g. allowed_side=SHORT) but htf_bias + est_prob both favor the OTHER side, the
+                # quant flip is a CORRECTION toward the htf — allow it without momentum. Only keep
+                # the momentum requirement for a SPECULATIVE flip that goes AGAINST the htf. Gated
+                # so it can revert: btc_quant_flip_allow_htf_aligned:false restores old behaviour.
+                _htf_aligned_flip = (
+                    quant_side == htf_side
+                    and bool(self.config.get("btc_quant_flip_allow_htf_aligned", True))
+                )
+                if require_mom and mom is not None and momentum_side != quant_side and not _htf_aligned_flip:
                     if quant_side == "SHORT":
                         reason_parts.append(f"quant_flip_suppressed=no_down_momentum(raw={float(raw_est_prob):.3f})")
                     else:
@@ -1464,10 +1474,22 @@ class BitcoinStrategy:
         elif bias == "BEARISH":
             base = "SHORT"
         else:
-            return None
+            return self._apply_direction_override(None)
         if bool(self.config.get("fade_regime", False)):
-            return "SHORT" if base == "LONG" else "LONG"
-        return base
+            quant_side = "SHORT" if base == "LONG" else "LONG"
+        else:
+            quant_side = base
+        # Direction-override seam (default quant; SHADOW unless direction.enforce=true).
+        return self._apply_direction_override(quant_side)
+
+    def _apply_direction_override(self, quant_side: Optional[str]) -> Optional[str]:
+        """Route the quant-resolved BTC side through the direction-override seam. Fail-safe:
+        any problem => the quant side, unchanged. Default config (mode=quant) is a no-op."""
+        try:
+            from src.analysis import direction_override as _dir_override
+            return _dir_override.resolve(self._signal_strategy_name, None, quant_side, self.full_config)
+        except Exception:
+            return quant_side
 
     def _get_btc_tf_state(self, ta: TechnicalAnalysis, tf: str) -> Any:
         state = getattr(ta, f"tf_{tf}", None)
@@ -4878,7 +4900,12 @@ class BitcoinStrategy:
             if self._btc_1h_regime_gates.get("enabled", False):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
 
-            if lane_policy.size_multiplier > 0:
+            # 2026-08-06 (Codex bundle review): under flat sizing + the per-lane CEILING model, the legacy
+            # static per-lane size multiplier is NEUTRALIZED so the flat base flows FULL to the adaptive sizer
+            # (per-lane ceiling + realized climb is the single size authority). The old 0.3x lane shrink made
+            # the new $40 btc-short ceiling unreachable ($15*0.3*2.5=$11). Reverts with flat_sizing:false.
+            _flat_sizing = bool((self.config.get("trading", {}) or {}).get("flat_sizing_enabled", False))
+            if lane_policy.size_multiplier > 0 and not _flat_sizing:
                 raw_size *= lane_policy.size_multiplier
             if _bias_quant_size_multiplier > 0 and _bias_quant_size_multiplier < 0.999:
                 raw_size *= _bias_quant_size_multiplier
@@ -5200,4 +5227,102 @@ class BitcoinStrategy:
                             _tsr["overconfidence_sitout"] = _tsr.get("overconfidence_sitout", 0) + _oc_dropped
                 except Exception:
                     pass
+        # ── FAVORITE-LONGSHOT lane (08-07) ──────────────────────────────────
+        # Separate structural pass appended AFTER the normal scan. Buys the
+        # favorite side (our-side price >= floor) regardless of est_prob/edge —
+        # favorites are structurally underpriced. Fail-safe: never crashes the
+        # scan; deduped against market_ids the normal scan already emitted.
+        try:
+            _fav_existing_ids = {getattr(s, "market_id", None) for s in signals}
+            _fav_signals = self._favorite_lane_signals(btc_markets, bankroll)
+            for _fs in _fav_signals:
+                if getattr(_fs, "market_id", None) in _fav_existing_ids:
+                    continue
+                signals.append(_fs)
+                _fav_existing_ids.add(getattr(_fs, "market_id", None))
+        except Exception as _fav_e:
+            logger.warning("favorite_lane pass error (skipped, scan unaffected): %s", _fav_e)
         return signals
+
+    def _favorite_lane_signals(self, markets: List[Market], bankroll: float) -> List["BitcoinSignal"]:
+        """FAVORITE-LONGSHOT structural lane (side-agnostic 'buy the favorite').
+
+        For each BTC updown market, bet the side priced >= floor. This bypasses
+        the est_prob/edge/price-band machinery entirely: the bot's est_prob is
+        ~coinflip so a 0.90 favorite computes NEGATIVE edge and is killed by the
+        edge gate — but favorite-longshot bias makes the structural bet +EV with
+        no direction prediction. PAPER only. Fully fail-safe: any error → [].
+        """
+        try:
+            cfg = self.full_config.get("favorite_lane", {}) or {}
+            if not bool(cfg.get("enabled", False)):
+                return []
+            floor = float(cfg.get("floor", 0.85))
+            size_usd = float(cfg.get("size_usd", 8.0))
+            windows = set(str(w) for w in (cfg.get("windows", ["15m", "1h"]) or []))
+            min_mins_left = float(cfg.get("min_mins_left", 3.0))
+            now = datetime.now(timezone.utc)
+            out: List[BitcoinSignal] = []
+            for market in markets:
+                try:
+                    # BTC updown only, freshly-priced (reuse the scan's freshness guard).
+                    if not (self._is_bitcoin_market(market) and self._is_updown_market(market)):
+                        continue
+                    if not is_tradably_priced(market):
+                        continue
+                    tf = updown_timeframe_label(resolved_updown_window_minutes(market))
+                    if tf not in windows:
+                        continue
+                    yes_price = market.yes_price
+                    if yes_price is None:
+                        continue
+                    yes_price = float(yes_price)
+                    fav_price = max(yes_price, 1.0 - yes_price)
+                    if fav_price < floor:
+                        continue
+                    # minutes-left from end_date (matches the normal scan's derivation).
+                    if not market.end_date:
+                        continue
+                    end_utc = (
+                        market.end_date.replace(tzinfo=timezone.utc)
+                        if market.end_date.tzinfo is None else market.end_date
+                    )
+                    mins_left = (end_utc - now).total_seconds() / 60.0
+                    if mins_left < min_mins_left:
+                        continue
+                    fav_action = "BUY_YES" if yes_price >= 0.5 else "BUY_NO"
+                    direction = "UP" if fav_action == "BUY_YES" else "DOWN"
+                    order_price = yes_price if fav_action == "BUY_YES" else (1.0 - yes_price)
+                    out.append(BitcoinSignal(
+                        market_id=market.id,
+                        market_question=market.question,
+                        action=fav_action,
+                        price=order_price,
+                        size=round(size_usd, 2),
+                        confidence=round(fav_price, 4),
+                        edge=round(fav_price - 0.5, 4),
+                        token_id_yes=market.token_id_yes,
+                        token_id_no=market.token_id_no,
+                        condition_id=getattr(market, "condition_id", None),
+                        market_slug=getattr(market, "slug", None),
+                        outcome_label_yes=getattr(market, "outcome_label_yes", None),
+                        outcome_label_no=getattr(market, "outcome_label_no", None),
+                        end_date=market.end_date,
+                        direction=direction,
+                        reason="favorite_lane",
+                        window_size=tf,
+                        hour_utc=now.hour,
+                        est_prob=round(fav_price, 4),
+                        side_source="favorite_lane",
+                    ))
+                    logger.info(
+                        "  [favorite-lane] %s '%s' tf=%s fav_price=%.3f size=$%.2f (%.1fm left)",
+                        fav_action, market.question[:40], tf, fav_price, size_usd, mins_left,
+                    )
+                except Exception as _fe:
+                    logger.debug("favorite_lane per-market skip: %s", _fe)
+                    continue
+            return out
+        except Exception as _e:
+            logger.warning("favorite_lane_signals error (returning []): %s", _e)
+            return []

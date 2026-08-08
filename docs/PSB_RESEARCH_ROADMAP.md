@@ -39,10 +39,24 @@ is confirmed +/-, move it to §1 findings and drop the row.
 | 14 | xrp/eth 15m tape-adaptive side-veto SHADOW (#111) | tape_map_validator | veto agrees with realized wrong-side | ⏳ verify live vs shadow |
 | — | exit-AI shadow daemon | — | — | ❌ KILLED 08-05 (operator) — no longer pending |
 
-### C. Built-not-live / needs porting (task labels say "BUILT" but NO flags in this tree)
-#79 WS FixA+B · #80 fee-aware edge gate · #81 same-side concentration cap · #82 RSI FixA+B ·
-#83 maker-first. Verified 08-05: **zero config flags present locally** → NOT staged-here;
-need actual build/port + Codex + GO, not a restart.
+### C. ~~Built-not-live~~ → RESOLVED 08-05: ALL 5 ALREADY EXIST LIVE — do NOT rebuild
+The earlier "zero config flags present locally" read was WRONG (checked wrong flag names).
+Codex + Claude re-audit 08-05 (session test_20260805_120550): all 5 are ALREADY implemented
+in the active tree. Building the "queued" versions = redundant duplication / conflict / band-aid.
+**Verdict: SKIP all. Nothing to build, nothing to deploy.**
+- **#79 WS FixA+B** — EXISTS-LIVE: `src/market/websocket.py:171,279`, `src/main.py:3095`; warmup is
+  freshness-based by design (`src/main.py:1608`). WSS overlay was deliberately reverted to baseline; feed
+  staleness is benign/self-healing. SKIP.
+- **#80 fee-aware edge gate** — EXISTS-LIVE: `config/settings.yaml:88` (operator GO 07-30),
+  `src/strategies/fee_util.py:35`, wired `sol_macro.py:6560`/`eth_macro.py:3006`, fresh-book fix `main.py:6248`. SKIP.
+- **#81 same-side concentration cap** — EXISTS-LIVE: `config/settings.yaml:2827` `max_same_side_positions:3`,
+  enforced `clob_client.py:2634`. (BTC-keyed `reversal_halt` disabled 2977 = redundant; old
+  `correlation_entry_guard` already reverted as a restrictive gate, AGENT_CHANGELOG:263.) SKIP.
+- **#82 RSI post-flip re-gate** — PARTIAL/ALREADY PRESENT: `sol_macro.py:5117,5438`, `eth_macro.py:2343`
+  (spec `RSI_POSTFLIP_IMPL.md`). A NEW hard RSI block = new restrictive gate → violates no-new-gates rule,
+  likely band-aid over exit-leak/sizing-inversion. SKIP absent live-realized proof.
+- **#83 maker-first** — EXISTS-LIVE: `config/settings.yaml:93` `entry_mode:hybrid` + `109` `exit_mode:hybrid`
+  (operator GO 07-30), path `clob_client.py:1622,1792`, params `main.py:1262`. SKIP.
 
 ### D. 2026-08-05 status snapshot (sess test_20260805_005317, +$21 realized, 60% WR)
 
@@ -61,6 +75,14 @@ need actual build/port + Codex + GO, not a restart.
 **QUEUED BUILD — Per-lane directional breaker (scoped, Codex+restart pending):** spec at scratchpad `perlane_breaker_spec.md`. From the 12-day-dead breaker shadow (now nohup-daemon fixed, PID 47638). Blanket breaker=wash (+8.80); PER-LANE decisive. ENABLE-set (net+ both shadows, k3/45m default): xrp5m±, bitcoin1h-up, sol5m-down, xrp15m-down, bnb15m-down, doge1h-up, eth1h-up (~+$86/32-sess). HARD-EXCLUDE (breaker net-HURTS): doge5m-down (−36!), eth5m-up, doge5m-up, eth/btc/sol 15m — their stops are noise, cutting loses; doge5m-down = EXIT problem not admission. Mechanism: per-lane consec-stop counter → pause k stops for cooldown_min, persisted state, reset on TP.
 
 **TAPE-VETO P&L (ghost, real outcomes) — mostly not earning their keep:** `eth_15m_long_not_bearish_tape` n=9860 → **50% WR/−0.011 EV = WASH** (biggest veto, blocks coinflips; DROP candidate). `tape_flat_block` (dropped tonight) n=2885 → 51% WR/−0.029 = near-wash (dropping re-opens marginal coinflips; watch 15m WR). `tape_veto_60s` n=153 → **46% WR/−0.062 = GOOD (blocks losers), KEEP.** Consistent w/ tape_map 45% directional + attribution tape-block −$54 (cut winners > saved losers by $). Net: tape *direction* gates are washes-to-negative; keep only the 60s veto. eth-15m-long veto = next drop candidate.
+
+**★★ 2026-08-05 12:05 PT — BUNDLE NOW LIVE. Restart applied a2ed55f7 → fresh session `test_20260805_120550` (pid 74565, --paper, $500). Verified loaded: lane_breaker.enabled=true/8 lanes, adaptive_sizer mult_ceil=2.5 + proven_lane_max_usd=45 mode=live, tape_hold_stop.by_lane has xrp_macro:BUY_NO+eth_macro:BUY_NO, eth_15m veto=false; lane_breaker imports; no startup errors. Watcher re-armed (pid 75156, SESS/BOTPID updated). Watch for first "TAPE-HOLD deferred stop (... BUY_NO)" + "LANE_BREAKER" lines as runtime proof.**
+**★★★ 2026-08-05 ~14:47 PT — SIZING INVERSION FIX (operator's weeks-old complaint), all LIVE via hot-reload:** Root cause (Codex-confirmed): 50-58%WR lanes still RED because LOSERS were sized BIGGER than winners within a lane. Two mechanisms: (a) `size_binary_position` Kelly scales size with est_prob p (AUC~0.5) AND with price (win_prob=price+edge → expensive entries bet bigger) → bot bets more on the trades it loses; (b) `lane_min_notional` FLOORS re-inflate losers past any downsizing. FIXES: (1) **flat sizing** — `trading.flat_sizing_enabled:true` + `flat_base_usd:8`; kelly_sizer.size_binary_position now gives every ADMITTED trade a flat $8 base (admission guard full_kelly<=0 kept), so per-lane realized-ROI mult (adaptive_lane_sizer) is the sizer. Codex-GO. Verified: size flat $8 across est_prob 0.51-0.70 (was $0→$15). (2) **dropped 2 min-notional floors** — btc `lane_min_notional_1h_up 12→0` (33%WR loser) + xrp `lane_min_notional_5m_down 15→0` (the "60%WR but RED" lane; floor+$40max overrode flat sizing entirely). AUDIT of the other 6 size mults: regime+degraded-corr DORMANT; lane_policy(≤1.0)/exposure-tier/tape-freshness DE-SIZE only (protective); lane_MAX caps protective. Floors were the only inversion survivor. All hot-reloaded (kelly_sizer.reload_from_config + self.config.get gates). Backups .bak_pre_flatsize_enable_*, .bak_pre_drop_minfloors_*. WATCH: entry sizes should flatten (~$8×lane_mult), loser lanes shrink, winners-in-red close the gap. Reversible: flat_sizing_enabled:false / floors>0.
+
+**★ 2026-08-05 ~15:2x PT — NGC-DEFER KILLED (operator GO): redundant with the re-enabled eth-15m BUY_YES bearish-tape veto (veto blocks the bearish-tape longs; defer only helped the thin up-tape slice). Removed staged config `never_green_cut.tape_defer` + reverted `src/execution/live_testing.py` to HEAD. Never went live (bot __init__ predated it; 0 fires). No pending-restart/staged code remains — working tree == live (sizing fixes only). Re-derive from git if ever wanted. Original build note below (historical):**
+**★ 2026-08-05 ~14:20 PT — NGC-DEFER BUILT + Codex GO (no findings), STAGED (restart-class, NOT live on pid 74565).** The eth-15m-NGC leak the 4-item bundle left open. `never_green_cut.tape_defer` (config) + live_testing.py: defers the never_green_cut cut for `eth_macro:15m:BUY_YES` ONLY while the asset tape confirms the long (UP, dscore>=2, 1h-MACD up, conf>=0.60, fresh) AND loss shallower than max_defer_loss_pct=0.15 (hard floor — runaway loser still cut). Mirrors the tape_hold %-stop defer (which doesn't cover ngc). Keyed strategy:window:side so eth 5m/1h longs untouched; self-flips; fail-closed. Validated 6/6 unit tests + Codex 7/7. Applies on NEXT restart. Backup pending. Reversible: enabled:false. Next session will show whether it clips the +$33 ngc holdΔ leak (watch "NGC-TAPE-DEFER" log lines).
+
+**★ PRIOR SESSION test_20260805_005317 FINAL AUDIT (pre-restart): realized -43.81 (WR 43%, 22W/29L). Single-lane bleed = eth_macro 15m BUY_YES -18.87 (WR 29%, n14). Exit-mix: TP +33 (well-timed, holdΔ -34), updown_stop_loss -42.76/holdΔ +53.33, never_green_cut -30/holdΔ +33.48. BOTH stop-classes leaked ~$86 recoverable; the bundle's tape-stops target updown_stop_loss (the $53 leak) — GOOD; NGC (+$33 holdΔ, hit eth-15m-long hardest) is NOT covered → NEXT SCOPE = tape-conditioned NGC-defer for eth 15m BUY_YES (or add it to the breaker/tape-hold allowlist).**
 
 **★ BUILD STATUS 2026-08-05 — all 3 BUILT + Codex-reviewed + fixes applied, STAGED for next restart (NOT live yet):**
 - Files: NEW `src/analysis/lane_breaker.py`; `src/analysis/adaptive_lane_sizer.py` (resolve_lane_cap + MED-fix ema clamp); `src/main.py` (_lane_breaker_blocks + 2 admission checks + record_exit + proven-cap in _apply_adaptive_realized_size); `config/settings.yaml` (trading.lane_breaker 8 lanes, adaptive_sizer mult_ceil 1.40→2.5 + proven_lane_max_usd 45 / proven_wr_min 0.55 / proven_roi_min 0.05, eth_15m veto→false).

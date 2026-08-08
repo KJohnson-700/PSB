@@ -266,6 +266,17 @@ class PositionExitManager:
         # stop. hold_means_hold_enforce hot-reloads OFF; catastrophic pct is fraction (0.5=-50%).
         self._hold_means_hold_enforce = bool(exit_cfg.get("hold_means_hold_enforce", True))
         self._hold_catastrophic_stop_pct = float(exit_cfg.get("hold_catastrophic_stop_pct", 0.5) or 0.0)
+        # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
+        # updown_hold_winners_to_resolution=True, which DISABLES the regular take_profit (_tp_mark_ready
+        # requires `not hold_winners`) — so a winner that peaks then reverses has NO way to bank and rides
+        # to resolution or the catastrophic. Data (12:51 audit): 17 exits peaked avg +49% MFE then round-
+        # tripped to -65%. This TRAILING TP fires UNDER hold: once peak MFE >= arm, exit if price retraces
+        # >= retrace from the peak — banks a REVERSING winner (peak+30/retrace20 => exit ~+10%, still green)
+        # WITHOUT cutting a STILL-CLIMBING runner (no retrace => no fire; that's what sank the 07-13/07-16
+        # fixed-level trails). Enabled:false => off. RESTART-CLASS.
+        self._tp_giveback_enabled = bool(exit_cfg.get("tp_giveback_enabled", False))
+        self._tp_giveback_arm_pct = float(exit_cfg.get("tp_giveback_arm_pct", 0.30) or 0.30)
+        self._tp_giveback_retrace_pct = float(exit_cfg.get("tp_giveback_retrace_pct", 0.20) or 0.20)
         # 2026-07-31 LOSER-FLOOR (operator GO; restart-class). Root cause of the dominant
         # loss bucket: hold-enforce suppressed a hold lane's OWN configured stop, so a loser
         # rode from entry to -catastrophic (hold_catastrophic_stop, default -50%) before
@@ -1011,6 +1022,20 @@ class PositionExitManager:
                     and pnl_pct >= resolved.take_profit_late_pct
                 ):
                     reason = "take_profit_late"
+                elif (
+                    # 2026-08-06 GIVE-BACK TRAILING TP — fires UNDER hold (not gated by hold_winners) so a
+                    # winner that peaked then REVERSED is banked instead of round-tripping to catastrophic.
+                    # Arms only once the position was clearly green (peak MFE >= arm), then triggers on a
+                    # real retrace from the peak (>= retrace). A still-climbing runner never retraces, so
+                    # it is NOT cut (the failure mode of the old fixed-level trails). arm 0.30 + retrace
+                    # 0.20 => banks at >= +10% (still green). NOT gated by the executable-net guard (a
+                    # retracing winner should exit even into a thinning book — realistic_paper_fills models
+                    # the slippage).
+                    self._tp_giveback_enabled
+                    and peak_pnl_pct >= self._tp_giveback_arm_pct
+                    and pnl_pct <= (peak_pnl_pct - self._tp_giveback_retrace_pct)
+                ):
+                    reason = "take_profit_giveback"
                 elif _tp_mark_ready and _tp_net_ok:
                     reason = "take_profit"
                 elif (
@@ -1303,6 +1328,30 @@ class PositionExitManager:
                     setattr(pos, "_hold_policy_applied", "hold_to_resolution")
                     setattr(pos, "_hold_suppressed_exit_reason", reason)
                     reason = None
+
+            # 2026-08-07 CATASTROPHIC-STOP INDEPENDENCE (Codex NO-GO fix). Under hold_all the
+            # normal % stop is zeroed (updown_stop_loss_pct->0), so `reason` never becomes
+            # updown_stop_loss and the hold-enforce block above is NEVER entered — a loser rode
+            # all the way to -100% past the -cat backstop (the cap was inert). Fire the
+            # catastrophic cut INDEPENDENTLY on any hold-to-resolution lane whenever pnl_pct<=-cat,
+            # regardless of whether a premature reason was set. The cap sits below the observed
+            # winner worst-MAE (favorite winners dipped to -51%), so it cuts genuine failures, not
+            # recoverable dips. This is what makes hold_catastrophic_stop_pct a REAL loss cap.
+            if (
+                is_updown
+                and resolved.updown_hold_winners_to_resolution
+                and getattr(self, "_hold_means_hold_enforce", True)
+                and reason is None
+            ):
+                _cat_ind = float(getattr(self, "_hold_catastrophic_stop_pct", 0.0) or 0.0)
+                if _cat_ind > 0.0 and pnl_pct <= -_cat_ind:
+                    setattr(pos, "_hold_policy_applied", "catastrophic_stop")
+                    reason = "hold_catastrophic_stop"
+                    logger.info(
+                        "HOLD CATASTROPHIC-STOP (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% "
+                        "— cutting loser (was riding to -100%%)",
+                        pos.market_id, pnl_pct * 100.0, _cat_ind * 100.0,
+                    )
 
             # Phantom-exit floor: suppress the EARLY % stop/TP until the position has
             # aged past the min-hold. Leaves the late-window cents/time/expiry stops

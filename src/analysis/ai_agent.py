@@ -1878,9 +1878,18 @@ OUTPUT (machine-parseable — follow exactly):
                 conf,
                 anchor_yes_price,
             )
+        # 2026-08-06 FIX (probation caught recurrence): _coerce_confidence_score can return None
+        # when the provider omits confidence; float(None) raised the raw TypeError logged as
+        # "Minimax API error: float() ... not 'NoneType'". Mirror the _parse_response guard: conf
+        # None -> 0.0 (benign, observe-only AI); est None here means inference also failed -> raise
+        # the validation error so the caller falls back cleanly instead of crashing the parse.
+        if est is None:
+            raise AIResponseValidationError(
+                f"market={market_id} estimated_probability None after inference fallback"
+            )
         return AIAnalysis(
             reasoning=reasoning,
-            confidence_score=float(conf),
+            confidence_score=float(conf) if conf is not None else 0.0,
             estimated_probability=float(est),
             recommendation=rec,
             market_id=market_id,
@@ -3474,10 +3483,21 @@ Reply with only the JSON object required by the system message — decision fiel
             raise AIResponseValidationError(
                 f"market={market_id} normalized output failed schema validation: {e}"
             ) from e
+        # 2026-08-05 FIX: guard float(None). When the provider omits a field it can
+        # normalize to None; float(None) raised a raw TypeError ("Minimax API error:
+        # ... not 'NoneType'"). For estimated_probability, raise the validation error so
+        # the allow-inference wrapper catches it and falls to the inference fallback
+        # (intended flow); confidence None -> 0.0 (benign, observe-only AI).
+        _conf = typed.confidence_score
+        _est = typed.estimated_probability
+        if _est is None:
+            raise AIResponseValidationError(
+                f"market={market_id} estimated_probability is None after normalization"
+            )
         return AIAnalysis(
             reasoning=typed.reasoning,
-            confidence_score=float(typed.confidence_score),
-            estimated_probability=float(typed.estimated_probability),
+            confidence_score=float(_conf) if _conf is not None else 0.0,
+            estimated_probability=float(_est),
             recommendation=typed.recommendation.value,
             market_id=market_id,
             timestamp=datetime.now(),

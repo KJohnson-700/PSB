@@ -2599,6 +2599,38 @@ def _get_status_payload_sync(_force: bool = False):
         except Exception:
             _live_pulse = None
 
+    # 2026-08-07 PAPER BANKROLL DISPLAY FIX: the paper card previously showed
+    # `cfg_disk.initial_bankroll + summary.realized`, which read the stale $500
+    # default whenever the running dashboard predated an initial_bankroll change
+    # (500->1000) or summary.json carried bankroll=None (the engine writes it None
+    # for paper). The engine already publishes its authoritative sizing bankroll
+    # (initial + realized, computed with the CORRECT initial) to ops_pulse every
+    # cycle for paper too — prefer that pulse when it matches the live session,
+    # mirroring the live_wallet fix above. Falls back to the reconstruction below
+    # if no matching paper pulse exists yet. Does NOT touch _live_pulse so the
+    # open-position reconciliation stays on the paper disk/summary path.
+    if dry_run:
+        try:
+            from src.ops_pulse import _iter_recent_ops_pulses
+
+            _pp_list = _iter_recent_ops_pulses(1)
+            _pcand = _pp_list[-1] if _pp_list else None
+            if (
+                _pcand
+                and _pcand.get("dry_run") is True
+                and _pcand.get("bankroll") is not None
+                and (
+                    not summary.get("session_id")
+                    or _pcand.get("session_id") == summary.get("session_id")
+                )
+            ):
+                bankroll_payload = {
+                    "bankroll": round(float(_pcand["bankroll"]), 2),
+                    "source": "engine_pulse",
+                }
+        except Exception:
+            pass
+
     open_disk = len(disk_positions)
     open_sum = int(summary.get("open_positions", 0) or 0)
     total_pos = open_disk if open_disk else open_sum

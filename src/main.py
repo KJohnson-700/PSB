@@ -93,7 +93,7 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
 TRADING_PROCESS_LOCK_FILE = RUNTIME_DIR / "trading_bot.lock"
-_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management"})
+_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management", "direction"})
 
 # Strategy modules for CODE hot-reload (option 1, 2026-07-11), in dependency order:
 # shared leaves -> sol_macro/bitcoin base -> alt subclasses. Reload in THIS order so each
@@ -3470,44 +3470,65 @@ class PolyBot:
         realized sizer is the single per-lane outcome layer (see 2b consolidation).
         """
         try:
-            from src.analysis.adaptive_lane_sizer import resolve_size_mult
+            from src.analysis.adaptive_lane_sizer import resolve_size_mult, resolve_lane_cap
+            t = self.config.get("trading", {}) or {}
+            _sz = t.get("adaptive_sizer", {})
+            _sizer_live = isinstance(_sz, dict) and _sz.get("mode") == "live"
+            # 2026-08-06 (Codex MED R1): when the sizer is NOT live, return UNCHANGED — a true no-op. This
+            # also avoids the max(1.0, ...) venue-floor touching a sub-$1 size in shadow/off. All the
+            # per-lane cap + dust-floor logic below therefore runs ONLY in live.
+            if not _sizer_live:
+                return final_size
             mult = float(resolve_size_mult(
                 self.config, strategy=strategy,
                 window=str(window_size or ""), action=action or "",
             ) or 1.0)
-            if mult == 1.0:
-                return final_size
+            # 2026-08-06 NOTE: the old `mult==1.0 -> return final_size` early-out was REMOVED so the
+            # per-lane CEILING and NO-DUST FLOOR always bind, even for a lane whose realized mult is 1.0
+            # (a fade long at mult 1.0 must still be clamped DOWN to its $12 ceiling).
             new_size = final_size * mult
             # De-size venue floor FIRST (~$1)...
             new_size = max(1.0, new_size)
-            # ...then the RISK CAPS are authoritative and ALWAYS win over the floor
-            # (Codex 2c review b/c: a cap resolving below $1 — incl bankroll None/0 =>
-            # max_exposure cap 0 — must NOT be overridden back up to $1).
-            t = self.config.get("trading", {}) or {}
             _max = float(t.get("max_position_size", 0.0) or 0.0)
             _max_exp = float(t.get("max_exposure_per_trade", 0.0) or 0.0)
-            # 2026-08-05 PROVEN-LANE CAP (winners-too-small fix): a lane the adaptive sizer
-            # flags PROVEN (n>=min_n_up, WR/ROI above thresholds) may grow PAST max_position_size
-            # up to proven_lane_max_usd. Losers/unproven stay at _max. No-op unless the sizer is
-            # live AND proven_lane_max_usd>0 (returns 0.0 otherwise). Never lowers _max.
+            # 2026-08-06 PER-LANE CEILING (operator sizing model, supersedes the 08-05 uniform proven cap):
+            # resolve_lane_cap returns this lane's explicit $ ceiling (fade long $12 / catch long $17 /
+            # good short $28 / proven short $40) when set, else the proven-gated uniform cap. Used AS the
+            # cap — it may be HIGHER or LOWER than max_position_size (a fade long clamps DOWN to $12). The
+            # realized MULT still gates the actual climb toward it.
             try:
-                from src.analysis.adaptive_lane_sizer import resolve_lane_cap
                 _pcap = float(resolve_lane_cap(
                     self.config, strategy=strategy,
                     window=str(window_size or ""), action=action or "") or 0.0)
-                if _pcap > _max:
+                if _pcap > 0:
                     _max = _pcap
             except Exception:
                 pass
-            if _max > 0:
-                new_size = min(new_size, _max)
+            # 2026-08-06 (Codex HIGH): build ONE effective cap = min(lane/position cap, bankroll-exposure
+            # cap). BOTH are hard risk limits; the dust floor below must never push size above EITHER. The
+            # prior code clamped the floor only to the lane cap, so at low bankroll an $8 exposure cap could
+            # be floored back up to $11 — a risk-cap violation.
+            _eff_cap = _max if _max > 0 else None
             if _max_exp > 0:
-                new_size = min(new_size, float(self.bankroll or 0.0) * _max_exp)
+                _exp_cap = float(self.bankroll or 0.0) * _max_exp
+                _eff_cap = _exp_cap if _eff_cap is None else min(_eff_cap, _exp_cap)
+            if _eff_cap is not None:
+                new_size = min(new_size, _eff_cap)
+            # 2026-08-06 NO-DUST FLOOR (operator: "no $1 trades; lowest $10-12"). Floor every admitted trade
+            # to trading.min_live_notional, but NEVER above the effective risk cap. REPLACES the wr_gate ~$1
+            # near-sitout (now disabled): a losing-but-kept lane rides this floor and climbs only on realized
+            # proof; a true loser is SAT OUT via disable_buy_* flags. If the effective cap is itself below the
+            # floor (tiny bankroll), the cap wins — the trade stays at the cap, not floored above it.
+            _dust = float(t.get("min_live_notional", 0.0) or 0.0)
+            if _dust > 0 and new_size > 0:
+                new_size = max(new_size, _dust)
+                if _eff_cap is not None:
+                    new_size = min(new_size, _eff_cap)
             logging.info(
                 "[adaptive-sizer:live] %s %s %s size %.2f -> %.2f (mult=%.2f)",
                 strategy, window_size, action, final_size, new_size, mult,
             )
-            return new_size
+            return round(new_size, 2)
         except Exception as _e:  # never break execution on a sizing helper
             logging.error("[adaptive-sizer] size apply error: %s", _e, exc_info=True)
         return final_size
@@ -6609,13 +6630,28 @@ class PolyBot:
             self._log_decision_skip(decision, reason)
             return
 
+        # 2026-08-06 (Codex HIGH): apply per-lane adaptive sizing BEFORE the risk/exposure check so the risk
+        # manager sees the TRUE notional. The sizer can UPsize $15->~$37.50 for a proven short; running it
+        # AFTER evaluate_entry meant topic/category exposure was validated at the pre-upsize size and a trade
+        # approved at $15 could place at $37.50 unchecked. Now evaluate_entry has final say on the real size.
+        # 2026-08-07 FAVORITE-LANE SIZING BYPASS (Codex NO-GO fix) — see general path. Favorite
+        # stake is verbatim; risk-manager exposure/position cap below still applies.
+        if getattr(signal, "side_source", "") == "favorite_lane":
+            _req_size = float(signal.size or 0.0)
+        else:
+            _req_size = self._apply_tape_adapter_size(
+                signal.size, "bitcoin", signal.window_size, signal.action
+            )
+            _req_size = self._apply_adaptive_realized_size(
+                _req_size, "bitcoin", signal.window_size, signal.action
+            )
         # Term-based risk check across the active crypto-only bot.
         can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
             bankroll=self.bankroll,
             strategy="bitcoin",
-            requested_size=signal.size,
+            requested_size=_req_size,
             market_id=signal.market_id,
             action=signal.action,
             direction=signal.direction,
@@ -6629,13 +6665,6 @@ class PolyBot:
             )
             self._log_decision_skip(decision, skip_reason)
             return
-
-        final_size = self._apply_tape_adapter_size(
-            final_size, "bitcoin", signal.window_size, signal.action
-        )
-        final_size = self._apply_adaptive_realized_size(
-            final_size, "bitcoin", signal.window_size, signal.action
-        )
 
         intent = self._resolve_execution_intent(signal, strategy="bitcoin")
         if intent is None:
@@ -7048,13 +7077,30 @@ class PolyBot:
             self._log_decision_skip(decision, reason)
             return
 
+        # 2026-08-06 (Codex HIGH): apply per-lane adaptive sizing BEFORE the risk/exposure check so the risk
+        # manager sees the TRUE notional. The sizer can UPsize $15->~$37.50 for a proven short; running it
+        # AFTER evaluate_entry meant topic/category exposure was validated at the pre-upsize size and a trade
+        # approved at $15 could place at $37.50 unchecked. Now evaluate_entry has final say on the real size.
+        # 2026-08-07 FAVORITE-LANE SIZING BYPASS (Codex NO-GO fix): the favorite lane's size is a
+        # deliberate structural stake — NOT subject to the realized-ROI mult, the direction-lane $
+        # ceilings, or the dust floor (which had floored $8->$11). Use signal.size verbatim; the
+        # risk manager's exposure/position cap below STILL applies (fan-out protection).
+        if getattr(signal, "side_source", "") == "favorite_lane":
+            _req_size = float(signal.size or 0.0)
+        else:
+            _req_size = self._apply_tape_adapter_size(
+                signal.size, strat, signal.window_size, signal.action
+            )
+            _req_size = self._apply_adaptive_realized_size(
+                _req_size, strat, signal.window_size, signal.action
+            )
         # Term-based risk check across the active crypto-only bot.
         can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
             bankroll=self.bankroll,
             strategy=strat,
-            requested_size=signal.size,
+            requested_size=_req_size,
             market_id=signal.market_id,
             action=signal.action,
             direction=signal.direction,
@@ -7068,13 +7114,6 @@ class PolyBot:
             )
             self._log_decision_skip(decision, skip_reason)
             return
-
-        final_size = self._apply_tape_adapter_size(
-            final_size, strat, signal.window_size, signal.action
-        )
-        final_size = self._apply_adaptive_realized_size(
-            final_size, strat, signal.window_size, signal.action
-        )
 
         intent = self._resolve_execution_intent(signal, strategy=strat)
         if intent is None:
