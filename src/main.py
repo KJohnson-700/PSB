@@ -93,7 +93,7 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
 TRADING_PROCESS_LOCK_FILE = RUNTIME_DIR / "trading_bot.lock"
-_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management", "direction", "favorite_lane"})
+_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management", "direction"})
 
 # Strategy modules for CODE hot-reload (option 1, 2026-07-11), in dependency order:
 # shared leaves -> sol_macro/bitcoin base -> alt subclasses. Reload in THIS order so each
