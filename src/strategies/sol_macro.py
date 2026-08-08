@@ -7502,6 +7502,46 @@ class SolMacroStrategy:
                     fav_action = "BUY_YES" if yes_price >= 0.5 else "BUY_NO"
                     direction = "UP" if fav_action == "BUY_YES" else "DOWN"
                     order_price = yes_price if fav_action == "BUY_YES" else (1.0 - yes_price)
+                    # 2026-08-08 HONOR THE AI DIRECTION DRIVER (operator: "is AI driving? why not
+                    # fixing this"). The favorite lane is side-agnostic and had been IGNORING the AI
+                    # override entirely — so when the driver said an asset was FLAT/sit-out, the
+                    # favorite lane bought its favorite anyway (the sol whipsaw: AI said sol=FLAT,
+                    # favorite bought BOTH YES and NO, lost both). Gate the favorite on the SAME
+                    # override the direction trades use: FLAT/none => sit out this asset; LONG =>
+                    # only UP favorites; SHORT => only DOWN favorites. Config-gated; on any read the
+                    # seam is fail-safe (returns None only for a genuine FLAT/stale, else the side).
+                    if bool(cfg.get("respect_ai_direction", False)):
+                        _ai_side = self._apply_direction_override(None, tf)  # 'LONG'/'SHORT'/None
+                        if _ai_side is None:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s: AI driver FLAT/sit-out this asset",
+                                fav_action, tf)
+                            continue
+                        _want = "BUY_YES" if _ai_side == "LONG" else ("BUY_NO" if _ai_side == "SHORT" else None)
+                        if _want is not None and fav_action != _want:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s: AI driver says %s (favorite side disagrees)",
+                                fav_action, tf, _ai_side)
+                            continue
+                    # 2026-08-08 REALIZED TAPE DEFERENCE (build-it-right; NOT a tape-blind gate).
+                    # Sit out this favorite side WHILE the realized adapter says the side is
+                    # net-losing / never-green in the CURRENT tape (get_tape_admission_delta > 0
+                    # = tighten). Self-flips: when the tape turns, the per-(asset,window,side)
+                    # delta flips sign and admission flips with it — no hardcoded direction, no
+                    # per-regime threshold. Choppy tape => BOTH sides losing => both sit out
+                    # (kills the sol YES-then-NO whipsaw). Recovery => delta drops => auto re-admit.
+                    # Requires lane_tape_adapter.admission_mode: live; 0/absent delta => no effect.
+                    _sit = float(cfg.get("tape_sit_out_delta", 0.0) or 0.0)
+                    if _sit > 0.0:
+                        _tape_delta = float(
+                            get_tape_admission_delta(self._signal_strategy_name, tf, direction) or 0.0)
+                        if _tape_delta >= _sit:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s side=%s: realized tape delta "
+                                "%.3f >= %.3f (side losing in current tape; self-flips on recovery)",
+                                fav_action, tf, direction, _tape_delta, _sit,
+                            )
+                            continue
                     out.append(SolMacroSignal(
                         market_id=market.id,
                         market_question=market.question,

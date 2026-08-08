@@ -276,6 +276,16 @@ class PositionExitManager:
         self._fav_presettle_secs = float(_fav_cfg.get("presettle_derisk_secs", 0.0) or 0.0)
         self._fav_presettle_price = float(_fav_cfg.get("presettle_derisk_price", 0.5) or 0.5)
         self._fav_derisk_min_entry = max(0.0, float(_fav_cfg.get("floor", 0.85) or 0.85) - 0.03)
+        # 2026-08-08 FAVORITE CONTINUOUS HARD-STOP (operator: "losers too big for this to work").
+        # The two existing favorite exits both leave the SMALLEST loss at ~-$30: hold_catastrophic
+        # can't even trigger until the mark hits entry*(1-0.55)~0.38 (a -55% loss), and the presettle
+        # de-risk only fires in the final _fav_presettle_secs. So a favorite winning +8..18% pays a
+        # -30..-66 loser — break-even needs ~80% WR (measured 81% WR still -$43/session). This cuts a
+        # favorite the moment its our-side mark walks down to hard_stop_price at ANY point in the hold,
+        # capping the loss early (0.70 from 0.87 = -20%, not -55%): break-even WR = (p-x)/(1-x) falls
+        # 79%->57%. 0.70 sits DEEP inside the plausible band (delta 0.17 << 0.50) so it fires on the
+        # real walk-down, never on an inverted/junk print. OFF unless favorite_lane.hard_stop_price>0.
+        self._fav_hard_stop_price = float(_fav_cfg.get("hard_stop_price", 0.0) or 0.0)
         # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
         # updown_hold_winners_to_resolution=True, which DISABLES the regular take_profit (_tp_mark_ready
         # requires `not hold_winners`) — so a winner that peaks then reverses has NO way to bank and rides
@@ -507,11 +517,51 @@ class PositionExitManager:
         except Exception:
             return 0.0
 
+    def _mark_plausible_band(self, entry_price: float) -> float:
+        """Max |mark - entry| still treated as a REAL price (vs inverted token ordering).
+
+        2026-08-08 CAP-UNREACHABLE FIX (autowake: doge 15m BUY_NO -$44.46 bust, mkt 3398369).
+        The band was a flat 0.50, which is BELOW where the catastrophic loss cap fires on a
+        favorite. Cap trigger mark = entry*(1-cat); blind edge = entry-0.50. At cat=0.55:
+
+            entry 0.85 -> cap 0.3825 vs blind 0.3500   (3.3c of visible headroom)
+            entry 0.88 -> cap 0.3960 vs blind 0.3800   (1.6c  <- the bust)
+            entry 0.90 -> cap 0.4050 vs blind 0.4000   (0.5c)
+            entry>=0.909 -> cap BELOW blind edge       (cap can NEVER fire in-band)
+
+        So for the whole favorite_lane price range (floor 0.85 .. price_max 0.93) the -55%
+        cap was either unreachable or reachable only inside a 1-2 cent slice. A collapsing
+        favorite steps straight from "cap not triggered" to "invisible to every exit", and
+        the cap only fires later, after the out-of-band confirm ticks, at whatever worse
+        price the tape has reached. Measured on the bust: exits evaluated every ~3.5s, last
+        in-band mark 0.81 (-8%), cap trigger 0.396 never observed, next evaluated mark 0.35
+        (-60.2%) one confirm cycle later. That is the cap MISSING, not the tape gapping.
+
+        Fix: give the cap real headroom below its trigger (entry*cat + 0.10), while keeping
+        the band strictly INSIDE the inverted-ordering signature. Inversion reads the other
+        leg, i.e. |mark - entry| == |1 - 2*entry| exactly; staying 0.05 under that keeps
+        every inversion the old 0.50 band caught still caught (verified: with cat=0.55 the
+        band only rises above 0.50 for entry > ~0.775, and inversion delta there is already
+        > 0.55). Lower entries keep the original flat 0.50 — no change outside favorites.
+
+        NOTE this returns the OUTER (visibility) edge only. Marks between 0.50 and this band
+        are still confirm-gated in _mark_delta_blind_skip; 0.50 stays the evaluate-immediately
+        line. So widening buys VISIBILITY for the cap, not a faster trigger on a junk print.
+        """
+        cat = float(getattr(self, "_hold_catastrophic_stop_pct", 0.0) or 0.0)
+        if cat <= 0.0 or entry_price <= 0.0:
+            return 0.50
+        # Headroom the cap needs to be observable, capped just inside the inversion delta.
+        want = entry_price * cat + 0.10
+        inversion_guard = abs(1.0 - 2.0 * entry_price) - 0.05
+        return max(0.50, min(want, inversion_guard))
+
     def _mark_delta_blind_skip(self, pos, mark: float, leg_label: str) -> bool:
         """Implausible-mark guard that can no longer go BLIND on a real collapse.
 
         2026-08-08 GAP-THROUGH BLINDNESS FIX (autowake: doge 1h BUY_NO -$32.00 bust).
-        The old guard was a bare `continue` whenever |mark - entry| > 0.50. It exists to
+        The old guard was a bare `continue` whenever |mark - entry| > the plausible band
+        (see _mark_plausible_band; was a flat 0.50). It exists to
         catch INVERTED TOKEN ORDERING from the scanner, but `continue` skips the ENTIRE
         exit evaluation for that tick — loss cap (hold_catastrophic_stop_pct), favorite
         pre-settlement de-risk AND `updown_expired` included. Consequence: a favorite
@@ -533,11 +583,23 @@ class PositionExitManager:
         Returns True to skip this position's exit check (caller `continue`s).
         """
         entry_price = float(getattr(pos, "entry_price", 0.0) or 0.0)
-        if abs(mark - entry_price) <= 0.50:
+        _delta = abs(mark - entry_price)
+        band = self._mark_plausible_band(entry_price)
+        # Inside the ORIGINAL flat 0.50: unambiguously a real price. Evaluate immediately —
+        # this is where a favorite's cap trigger now lives (entry 0.88 -> trigger delta 0.484),
+        # so the cap fires on the FIRST tick that reaches it, with no confirm delay.
+        if _delta <= 0.50:
             setattr(pos, "_mark_ever_in_band", True)
             if getattr(pos, "_mark_out_of_band_ticks", 0):
                 setattr(pos, "_mark_out_of_band_ticks", 0)
             return False
+
+        # Between 0.50 and the widened band: real-but-deep. The position stays VISIBLE (that
+        # is the headroom the cap needs), but a single spurious mark must not cut a winner
+        # here, so it goes through the same N-tick confirm as a true out-of-band mark
+        # (~7s at exit_check_interval_sec=3, vs the ~56s scan-cycle blindness it replaces).
+        # Only a delta beyond the widened band still carries the inverted-ordering signature.
+        _inversion_suspect = _delta > band
 
         # Past-expiry computed FIRST: an EXPIRED position must ALWAYS be evaluated for
         # close, regardless of in-band history — else a never-in-band position (incl. one
@@ -553,7 +615,11 @@ class PositionExitManager:
         except Exception:
             _past_expiry = False
 
-        if not getattr(pos, "_mark_ever_in_band", False) and not _past_expiry:
+        if (
+            _inversion_suspect
+            and not getattr(pos, "_mark_ever_in_band", False)
+            and not _past_expiry
+        ):
             # Never once marked in band AND not expired => the inverted-token-ordering
             # signature this guard was built for. Keep skipping (original fail-closed).
             logger.debug(
@@ -1424,6 +1490,29 @@ class PositionExitManager:
                         "HOLD CATASTROPHIC-STOP (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% "
                         "— cutting loser (was riding to -100%%)",
                         pos.market_id, pnl_pct * 100.0, _cat_ind * 100.0,
+                    )
+
+            # 2026-08-08 FAVORITE CONTINUOUS HARD-STOP (see __init__). Fires BEFORE the presettle
+            # de-risk so it can cut the loser early — any tick in the hold, not just the final
+            # window — the moment the our-side mark walks down to hard_stop_price. Same favorite
+            # identification as the presettle block (high entry). Bypasses the min-hold floor like
+            # the catastrophic/presettle cuts (a collapsing favorite must be cuttable immediately).
+            if (
+                is_updown
+                and resolved.updown_hold_winners_to_resolution
+                and reason is None
+                and float(getattr(self, "_fav_hard_stop_price", 0.0) or 0.0) > 0.0
+                and float(getattr(pos, "entry_price", 0.0) or 0.0) >= float(getattr(self, "_fav_derisk_min_entry", 0.82))
+            ):
+                _hs_entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                _hs_mark = _hs_entry * (1.0 + pnl_pct)
+                if _hs_mark <= self._fav_hard_stop_price:
+                    setattr(pos, "_hold_policy_applied", "favorite_hard_stop")
+                    reason = "favorite_hard_stop"
+                    logger.info(
+                        "FAVORITE HARD-STOP: %s entry=%.2f mark=%.2f (<= %.2f) — capping loss early "
+                        "(pnl=%.1f%%)",
+                        pos.market_id, _hs_entry, _hs_mark, self._fav_hard_stop_price, pnl_pct * 100.0,
                     )
 
             # 2026-08-07 FAVORITE PRE-SETTLEMENT DE-RISK (the gap-through fix — see __init__).

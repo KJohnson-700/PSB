@@ -5298,6 +5298,39 @@ class BitcoinStrategy:
                     fav_action = "BUY_YES" if yes_price >= 0.5 else "BUY_NO"
                     direction = "UP" if fav_action == "BUY_YES" else "DOWN"
                     order_price = yes_price if fav_action == "BUY_YES" else (1.0 - yes_price)
+                    # 2026-08-08 HONOR THE AI DIRECTION DRIVER (operator: "is AI driving? why not
+                    # fixing this"). The side-agnostic favorite lane had been ignoring the AI
+                    # override; gate it on the SAME override the direction trades use: FLAT/none =>
+                    # sit out; LONG => only UP favorites; SHORT => only DOWN favorites. Config-gated.
+                    if bool(cfg.get("respect_ai_direction", False)):
+                        _ai_side = self._apply_direction_override(None)  # 'LONG'/'SHORT'/None (btc override key is tf-agnostic)
+                        if _ai_side is None:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s: AI driver FLAT/sit-out this asset",
+                                fav_action, tf)
+                            continue
+                        _want = "BUY_YES" if _ai_side == "LONG" else ("BUY_NO" if _ai_side == "SHORT" else None)
+                        if _want is not None and fav_action != _want:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s: AI driver says %s (favorite side disagrees)",
+                                fav_action, tf, _ai_side)
+                            continue
+                    # 2026-08-08 REALIZED TAPE DEFERENCE (build-it-right; NOT a tape-blind gate).
+                    # Sit out this favorite side WHILE the realized adapter says the side is
+                    # net-losing / never-green in the CURRENT tape (delta > 0 = tighten). Self-flips
+                    # with the tape (per-(asset,window,side) realized signal); no hardcoded
+                    # direction. Requires lane_tape_adapter.admission_mode: live; 0/absent => no effect.
+                    _sit = float(cfg.get("tape_sit_out_delta", 0.0) or 0.0)
+                    if _sit > 0.0:
+                        _tape_delta = float(
+                            get_tape_admission_delta(self._signal_strategy_name, tf, direction) or 0.0)
+                        if _tape_delta >= _sit:
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s side=%s: realized tape delta "
+                                "%.3f >= %.3f (side losing in current tape; self-flips on recovery)",
+                                fav_action, tf, direction, _tape_delta, _sit,
+                            )
+                            continue
                     out.append(BitcoinSignal(
                         market_id=market.id,
                         market_question=market.question,

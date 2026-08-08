@@ -2323,6 +2323,18 @@ direction:
   # NOT a fair trial. Now that _mark_delta_blind_skip() lets the cap/de-risk actually run, RE-TEST
   # favorites with working exits and judge on CLEAN data. Freshness was ruled out (losers had
   # fresher prices). If it still loses with working caps -> then cut for real.
+lane_tape_adapter:
+  mode: "off"                 # size multiplier stays OFF (sizing is LAST, separate lever)
+  admission_mode: "live"      # 2026-08-08 PLUG IN THE REALIZED SELF-FLIPPING BRAIN. Was default-off, so every gate calling get_tape_admission_delta() (eth/btc/sol min_edge + favorite sit-out) read a hardcoded 0.0 = tape-blind. Per-(asset|window|side) delta from the last k realized closes: >0 tightens a net-losing/never-green side, <0 loosens a winning+green side; flips sign automatically as the tape turns.
+  window_closes: 6            # rolling realized closes per lane (fast reaction)
+  min_samples: 3              # need >=3 closes before adapting; else neutral 0.0
+  green_arm_pct: 0.08         # a close counts green if MFE reached +8%
+  green_keep_rate: 0.5        # a net-losing lane still hitting green >=50% is variance, not tape-turn -> not de-admitted
+  loss_ref_dollars: 4.0       # avg realized loss at which tighten maxes
+  recency_ramp: 2.0           # newest close weighted 2x oldest
+  admission_tighten_max: 0.05 # max +delta on a losing never-green side
+  admission_loosen_max: 0.02  # max -delta on a winning side (gentle)
+
 favorite_lane:
   enabled: true
   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
@@ -2332,6 +2344,9 @@ favorite_lane:
   min_mins_left: 3.0     # avoid last-candle settlement manipulation
   presettle_derisk_secs: 180     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled. 08-08 NUDGE 120->180: give slower 1h favorites more runway to be caught.
   presettle_derisk_price: 0.55   # 08-08 NUDGE 0.5->0.55: the bnb 1h loser expired at mark ~0.53 (entry 0.88, -40%), JUST above the 0.5 threshold, so the de-risk missed it (updown_expired -$32.39). 0.55 catches a favorite that has slipped to a coinflip-ish underdog. Still well below a winning favorite (>0.6), so it won't cut winners.
+  hard_stop_price: 0.70    # 2026-08-08 06:1x DISABLED (was 0.70) — AUTOWAKE REVERT, it cut WINNERS 3-for-3 in its first 4 minutes live. Session test_20260808_060714, the 9:00-9:15AM ET window: sol entry 0.86 cut 0.695 -$15.41 | btc entry 0.90 cut 0.415 -$39.75 (the paged bust) | xrp entry 0.86 cut 0.675 -$17.09 = -$72.25 realized. CLOB prices-history says ALL THREE Up tokens settled 0.995 (WON): sol 0.875->0.685 dip->0.995, btc 0.705->0.755->0.995, xrp whipsaw->0.995. doge (control, same window, never dipped below 0.90) was never cut and won. A 15m favorite bought at 0.85-0.93 routinely dips to 0.60-0.70 mid-window and still settles 1.0 — a 0.70 mark stop is structurally guaranteed to cut the lane's winners, which IS the lane's 94%-WR edge (hold to resolution). The btc one is worse still: it fired on mark 0.415 (best_bid 0.41/ask 0.42, ws age 6.9ms) at 13:09:44 when the real tape was ~0.62-0.755 — a mark that never existed, after 106s where the position was invisible to check_exits (mfe=0.0, mae==exit pnl => not one intervening tick was evaluated). 0 => off; loss control reverts to hold_catastrophic_stop_pct -55% + the presettle de-risk above (the config the proven favorite lane ran in). Do NOT re-enable without evidence from settled favorites that a mid-window dip below 0.70 actually predicts a LOSS.
+  tape_sit_out_delta: 0.02  # 2026-08-08 REALIZED TAPE DEFERENCE: sit out a favorite side while get_tape_admission_delta(asset,window,side) >= this (side net-losing/never-green in CURRENT tape). Self-flips with the tape; both sides losing (chop) => both sit out. Needs lane_tape_adapter.admission_mode: live. 0 => off.
+  respect_ai_direction: true  # 2026-08-08 favorite lane HONORS the AI direction driver (was side-agnostic, ignored it): AI FLAT/sit-out => skip asset; AI LONG => only UP favorites; AI SHORT => only DOWN. Kills the sol whipsaw (AI said sol=FLAT, favorite bought both sides+lost). false => legacy side-agnostic.
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
