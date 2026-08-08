@@ -4540,12 +4540,34 @@ function applyHeroMetrics(d) {
     const _liveWallet = (d.bankroll_source === 'live_wallet'
         && d.bankroll !== null && d.bankroll !== undefined && Number.isFinite(Number(d.bankroll)))
         ? Number(d.bankroll) : null;
+    // 2026-08-07 BASE FIX: the paper card used a HARDCODED _INITIAL_BANKROLL=500 (above)
+    // + realized, so after the bankroll base was raised to $1000 the card showed a stale
+    // ~$500 base (e.g. 500+155.58=$656 while the account was 1000+155.58=$1,155.58 — the
+    // "// TODO surface from config in payload" it flagged). The server already resolves the
+    // authoritative sizing bankroll = config_initial + realized as `cash_bankroll`
+    // (source=config_initial; measured exactly 1000+realized, no bot.bankroll drift), which
+    // honors the 07-20 ruling (initial+realized off the SAME realized field as Session P&L,
+    // NOT equity). Prefer it; the 500+realized formula is now only a last-resort fallback
+    // if the server omits cash_bankroll (cold poll).
+    const _cashAuth = (d.cash_bankroll !== null && d.cash_bankroll !== undefined
+        && Number.isFinite(Number(d.cash_bankroll))) ? Number(d.cash_bankroll) : null;
+    // Cache the server's TRUE initial base (config_initial = cash_bankroll - realized, e.g. $1000)
+    // whenever an authoritative full /api/status poll carries cash_bankroll. The ~2s SSE snapshots
+    // (sseSnapshotToStatusShape) DON'T carry cash_bankroll but DO carry positions (=> _fullTick), so
+    // without this they'd fall to the hardcoded 500 base and flicker the card to $656 between the 5s
+    // full polls. Using the cached base keeps every SSE tick consistent with the account's real base.
+    if (_cashAuth !== null && _realizedForBankroll !== null && Number.isFinite(_realizedForBankroll)) {
+        window._brInitialBase = _cashAuth - _realizedForBankroll;
+    }
+    const _effInitial = (typeof window._brInitialBase === 'number' && Number.isFinite(window._brInitialBase))
+        ? window._brInitialBase : _INITIAL_BANKROLL;
     const bankroll = (_liveWallet !== null)
         ? _liveWallet
-        : ((_realizedForBankroll !== null && Number.isFinite(_realizedForBankroll))
-            ? _INITIAL_BANKROLL + _realizedForBankroll
-            : ((d.cash_bankroll !== null && d.cash_bankroll !== undefined) ? Number(d.cash_bankroll)
-            : ((d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null)));
+        : ((_cashAuth !== null)
+            ? _cashAuth
+            : ((_realizedForBankroll !== null && Number.isFinite(_realizedForBankroll))
+                ? _effInitial + _realizedForBankroll
+                : ((d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null)));
     const bankEl = document.getElementById('hero-bankroll');
     // 2026-07-20 BANKROLL FLASH FIX: the two poll channels report DIFFERENT bankrolls
     // (/api/status 509.78 vs /api/ops/summary 498.27, measured same instant), and BOTH
@@ -4815,6 +4837,7 @@ function sseSnapshotToStatusShape(raw) {
     const sessOpen = raw.session_open != null && raw.session_open !== undefined ? Number(raw.session_open) : openN;
     return {
         bankroll: raw.bankroll,
+        cash_bankroll: raw.cash_bankroll,  // passthrough if server emits it in the SSE flat snapshot
         bankroll_source: raw.bankroll_source,
         bankroll_warning: raw.bankroll_warning,
         session_id: raw.session_id,
