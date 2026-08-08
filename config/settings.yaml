@@ -2320,9 +2320,12 @@ direction:
 favorite_lane:
   enabled: true
   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
+  price_max: 0.93        # 08-07 HUGE-LOSS FIX: skip DEEP favorites (>=0.93). A 0.96 fav pays ~4% per win but loses ~96% of stake when it gaps to $0 at settlement (the xrp -$70.37 was entry 0.96) — worst risk/reward. The 0.85-0.93 band pays enough per win (~9-18%) to survive its own loss ratio.
   size_usd: 70.0         # 08-07 raised 8->70: bigger wins (~$10/win) now that loss is capped at -55% + bankroll $1k gives exposure headroom; bypasses adaptive sizer
   windows: [15m, 1h]     # eligible windows — NOT 5m
   min_mins_left: 3.0     # avoid last-candle settlement manipulation
+  presettle_derisk_secs: 120     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage ~half instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled.
+  presettle_derisk_price: 0.5
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1

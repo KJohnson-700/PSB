@@ -7460,6 +7460,11 @@ class SolMacroStrategy:
             if not bool(cfg.get("enabled", False)):
                 return []
             floor = float(cfg.get("floor", 0.85))
+            # price_max: skip DEEP favorites. A 0.96 favorite pays only ~4% on a win but
+            # loses ~96% of stake when it gaps to $0 at settlement (worst risk/reward) — the
+            # xrp -$70.37 (entry 0.96) loss. The 0.85-0.92 band pays enough per win (~9-18%)
+            # to survive its own loss ratio. 0 / >=1.0 => no cap (disabled).
+            price_max = float(cfg.get("price_max", 1.0) or 1.0)
             size_usd = float(cfg.get("size_usd", 8.0))
             windows = set(str(w) for w in (cfg.get("windows", ["15m", "1h"]) or []))
             min_mins_left = float(cfg.get("min_mins_left", 3.0))
@@ -7483,6 +7488,8 @@ class SolMacroStrategy:
                     fav_price = max(yes_price, 1.0 - yes_price)
                     if fav_price < floor:
                         continue
+                    if fav_price > price_max:
+                        continue  # deep favorite: pennies-per-win vs ~full-stake settlement gap
                     if not market.end_date:
                         continue
                     end_utc = (

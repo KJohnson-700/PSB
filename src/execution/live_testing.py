@@ -266,6 +266,16 @@ class PositionExitManager:
         # stop. hold_means_hold_enforce hot-reloads OFF; catastrophic pct is fraction (0.5=-50%).
         self._hold_means_hold_enforce = bool(exit_cfg.get("hold_means_hold_enforce", True))
         self._hold_catastrophic_stop_pct = float(exit_cfg.get("hold_catastrophic_stop_pct", 0.5) or 0.0)
+        # 2026-08-07 FAVORITE PRE-SETTLEMENT DE-RISK: a %-stop CANNOT catch a favorite gapping
+        # ~0.85->$0 in the final settlement candle (the sol -$70.81 rode entry 0.87 to RESOLVED:NO).
+        # For a favorite HOLD (identified by a high our-side entry >= floor-0.03, since favorites
+        # enter >=0.85 while direction trades enter near 0.5), in the final N secs, if our side has
+        # FLIPPED to <= presettle_derisk_price (now the underdog = losing), exit to salvage instead
+        # of riding to $0. Winners mark toward 1.0 near settlement so they are NEVER touched.
+        _fav_cfg = (config.get("favorite_lane", {}) or {})
+        self._fav_presettle_secs = float(_fav_cfg.get("presettle_derisk_secs", 0.0) or 0.0)
+        self._fav_presettle_price = float(_fav_cfg.get("presettle_derisk_price", 0.5) or 0.5)
+        self._fav_derisk_min_entry = max(0.0, float(_fav_cfg.get("floor", 0.85) or 0.85) - 0.03)
         # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
         # updown_hold_winners_to_resolution=True, which DISABLES the regular take_profit (_tp_mark_ready
         # requires `not hold_winners`) — so a winner that peaks then reverses has NO way to bank and rides
@@ -1351,6 +1361,35 @@ class PositionExitManager:
                         "HOLD CATASTROPHIC-STOP (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% "
                         "— cutting loser (was riding to -100%%)",
                         pos.market_id, pnl_pct * 100.0, _cat_ind * 100.0,
+                    )
+
+            # 2026-08-07 FAVORITE PRE-SETTLEMENT DE-RISK (the gap-through fix — see __init__).
+            # Catches the loss a %-stop can't: a favorite priced ~0.85 for the whole window that
+            # gaps straight to $0 at settlement. Fires ONLY on a favorite-priced HOLD (high entry)
+            # whose our-side mark has flipped to <= presettle price in the final seconds — a winner
+            # is marking toward 1.0 there, so this never cuts one.
+            if (
+                is_updown
+                and resolved.updown_hold_winners_to_resolution
+                and reason is None
+                and float(getattr(self, "_fav_presettle_secs", 0.0) or 0.0) > 0.0
+                and float(getattr(pos, "entry_price", 0.0) or 0.0) >= float(getattr(self, "_fav_derisk_min_entry", 0.82))
+                and pos.end_date is not None
+            ):
+                _fd_end = pos.end_date
+                if _fd_end.tzinfo is None:
+                    _fd_end = _fd_end.replace(tzinfo=timezone.utc)
+                _fd_secs_left = (_fd_end - datetime.now(timezone.utc)).total_seconds()
+                _fd_entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                _fd_mark = _fd_entry * (1.0 + pnl_pct)
+                if 0.0 < _fd_secs_left <= self._fav_presettle_secs and _fd_mark <= self._fav_presettle_price:
+                    setattr(pos, "_hold_policy_applied", "favorite_presettle_derisk")
+                    reason = "favorite_presettle_derisk"
+                    logger.info(
+                        "FAVORITE PRE-SETTLEMENT DE-RISK: %s entry=%.2f mark=%.2f (<= %.2f) %.0fs left "
+                        "— salvaging before settlement gap-to-0 (pnl=%.1f%%)",
+                        pos.market_id, _fd_entry, _fd_mark, self._fav_presettle_price,
+                        _fd_secs_left, pnl_pct * 100.0,
                     )
 
             # Phantom-exit floor: suppress the EARLY % stop/TP until the position has

@@ -5258,6 +5258,9 @@ class BitcoinStrategy:
             if not bool(cfg.get("enabled", False)):
                 return []
             floor = float(cfg.get("floor", 0.85))
+            # price_max: skip DEEP favorites (pennies-per-win vs ~full-stake settlement gap).
+            # See sol_macro._favorite_lane_signals. 0 / >=1.0 => no cap.
+            price_max = float(cfg.get("price_max", 1.0) or 1.0)
             size_usd = float(cfg.get("size_usd", 8.0))
             windows = set(str(w) for w in (cfg.get("windows", ["15m", "1h"]) or []))
             min_mins_left = float(cfg.get("min_mins_left", 3.0))
@@ -5280,6 +5283,8 @@ class BitcoinStrategy:
                     fav_price = max(yes_price, 1.0 - yes_price)
                     if fav_price < floor:
                         continue
+                    if fav_price > price_max:
+                        continue  # deep favorite: pennies-per-win vs ~full-stake settlement gap
                     # minutes-left from end_date (matches the normal scan's derivation).
                     if not market.end_date:
                         continue
