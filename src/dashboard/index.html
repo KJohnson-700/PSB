@@ -7974,15 +7974,20 @@ function updateLaneGates(d) {
     const sideLabel = { BUY_YES: 'Y', BUY_NO: 'N' };
 
     function pill(side, status) {
-        const cls = status.open
-            ? 'lane-gate-pill--open'
-            : status.kind === 'conditional'
-                ? 'lane-gate-pill--conditional'
-                : 'lane-gate-pill--closed';
-        const dotColor = status.open ? 'var(--gr)' : status.kind === 'conditional' ? 'var(--ye)' : 'var(--re)';
-        const title = status.open
-            ? `${side}: open`
-            : `${side}: ${status.kind}${status.flag ? ' · ' + status.flag : ''}${status.condition ? ' · ' + status.condition : ''}`;
+        const isFav = status.kind === 'favorite';
+        const cls = isFav
+            ? 'lane-gate-pill--favorite'
+            : status.open
+                ? 'lane-gate-pill--open'
+                : status.kind === 'conditional'
+                    ? 'lane-gate-pill--conditional'
+                    : 'lane-gate-pill--closed';
+        const dotColor = isFav ? 'var(--cy)' : status.open ? 'var(--gr)' : status.kind === 'conditional' ? 'var(--ye)' : 'var(--re)';
+        const title = isFav
+            ? `${side}: favorite-lane only (normal gate closed${status.flag ? ' · ' + status.flag : ''})`
+            : status.open
+                ? `${side}: open`
+                : `${side}: ${status.kind}${status.flag ? ' · ' + status.flag : ''}${status.condition ? ' · ' + status.condition : ''}`;
         return `<span class="lane-gate-pill ${cls}" title="${title.replace(/"/g, '&quot;')}">
             <span class="lane-gate-dot" style="color:${dotColor};background:${dotColor}"></span>
             ${sideLabel[side]}
@@ -8009,6 +8014,7 @@ function updateLaneGates(d) {
         '<span><span class="lane-gate-dot" style="color:var(--gr);background:var(--gr)"></span> Open</span>' +
         '<span><span class="lane-gate-dot" style="color:var(--re);background:var(--re)"></span> Closed by config</span>' +
         '<span><span class="lane-gate-dot" style="color:var(--ye);background:var(--ye)"></span> Conditional on bias</span>' +
+        '<span><span class="lane-gate-dot" style="color:var(--cy);background:var(--cy)"></span> Favorite-lane only</span>' +
         '</div>';
     gridEl.innerHTML = html;
 

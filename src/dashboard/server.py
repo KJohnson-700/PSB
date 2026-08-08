@@ -501,6 +501,14 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if cfg is None:
         cfg = _load_yaml_config()
     strategies_cfg = dict(cfg.get("strategies") or {})
+    # 2026-08-07: the card was BLIND to the favorite lane. Favorites trade side-agnostically on
+    # ANY updown market whose favorite side is priced in [floor, price_max], in the favorite
+    # windows, BYPASSING the disable_* gates — so a lane shown "closed by config" is actually
+    # trading (e.g. doge 15m/1h: disable_*=true but 14 favorite fills, all wins). Mark those cells
+    # kind="favorite" so the card reflects the ACTUAL open/closed state, not just the normal-scan gate.
+    _fav_cfg = dict(cfg.get("favorite_lane") or {})
+    _fav_on = bool(_fav_cfg.get("enabled", False))
+    _fav_windows = set(str(w) for w in (_fav_cfg.get("windows", ["15m", "1h"]) or []))
     out: Dict[str, Any] = {"updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z", "strategies": []}
     for strategy_id, label in _LANE_GATE_STRATEGIES:
         strategy_cfg = dict(strategies_cfg.get(strategy_id) or {})
@@ -508,6 +516,9 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         # is effectively closed regardless of per-window gate flags. Without this
         # the card showed e.g. hype "active" while hype_macro was fully off.
         strat_enabled = bool(strategy_cfg.get("enabled", True))
+        # Favorites cover BTC + the sol_macro family (sol/xrp/hype/bnb/doge); eth_macro has no
+        # favorite pass. Only relevant when the strategy is enabled and favorites are on.
+        _fav_covered = _fav_on and strat_enabled and strategy_id != "eth_macro"
         windows: Dict[str, Any] = {}
         for window in _LANE_GATE_WINDOWS:
             if not strat_enabled:
@@ -516,10 +527,23 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                     for side in _LANE_GATE_SIDES
                 }
             else:
-                windows[window] = {
+                cells = {
                     side: _resolve_lane_gate(strategy_cfg, window, side, strategy_id)
                     for side in _LANE_GATE_SIDES
                 }
+                # Favorite-lane overlay: a gate-closed lane in a favorite window STILL trades
+                # favorites (side-agnostic), so surface it as "favorite" — the ACTUAL open state.
+                if _fav_covered and window in _fav_windows:
+                    for side in _LANE_GATE_SIDES:
+                        c = cells[side]
+                        if not c.get("open"):
+                            cells[side] = {
+                                "open": True,
+                                "kind": "favorite",
+                                "flag": c.get("flag"),
+                                "note": "favorite-lane (bypasses gate)",
+                            }
+                windows[window] = cells
         closed_count = sum(1 for w in windows.values() for s in w.values() if not s["open"])
         out["strategies"].append(
             {
