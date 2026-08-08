@@ -2318,11 +2318,11 @@ direction:
 # Runs as a SEPARATE pass appended after the normal scan (deduped vs normal signals).
 # PAPER only. Skips 5m (thin books / settlement manipulation near expiry).
 favorite_lane:
-  enabled: true
+  enabled: false         # 08-08 CUT (operator go, cause-verified): favorite lane is a realized LOSER at every window — pooled ~73% WR but break-even needs ~77-87% at price 0.87 (win ~$10 vs loss $35 de-risked/$70 gap). VERIFIED not a freshness bug: losers had FRESHER WS prices than winners (46ms vs 292ms med), asof_age ~6-7s both, entry level ~0.87 both. No indicators used (pure price). Efficient/overconfident price, not fixable. Direction (AI cascade) is the go-forward.
   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
   price_max: 0.93        # 08-07 HUGE-LOSS FIX: skip DEEP favorites (>=0.93). A 0.96 fav pays ~4% per win but loses ~96% of stake when it gaps to $0 at settlement (the xrp -$70.37 was entry 0.96) — worst risk/reward. The 0.85-0.93 band pays enough per win (~9-18%) to survive its own loss ratio.
   size_usd: 70.0         # 08-07 raised 8->70: bigger wins (~$10/win) now that loss is capped at -55% + bankroll $1k gives exposure headroom; bypasses adaptive sizer
-  windows: [15m, 1h]     # eligible windows — NOT 5m
+  windows: [1h]          # 08-08 CUT 15m: realized data (n=159) — 15m favorites bled -$185 (BUY_NO -$143 @38%WR, BUY_YES -$42 @42%WR); the -$70 settlement-gap losses live ENTIRELY in 15m. 1h favorites are net +$26 (the only slice carrying weight). WR fine everywhere (~40%); profit died from 15m -$70 loss SIZE, not win rate. Cut removes the big-loss events; keeps the +EV 1h slice. Was [15m, 1h].
   min_mins_left: 3.0     # avoid last-candle settlement manipulation
   presettle_derisk_secs: 180     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled. 08-08 NUDGE 120->180: give slower 1h favorites more runway to be caught.
   presettle_derisk_price: 0.55   # 08-08 NUDGE 0.5->0.55: the bnb 1h loser expired at mark ~0.53 (entry 0.88, -40%), JUST above the 0.5 threshold, so the de-risk missed it (updown_expired -$32.39). 0.55 catches a favorite that has slipped to a coinflip-ish underdog. Still well below a winning favorite (>0.6), so it won't cut winners.

@@ -507,6 +507,83 @@ class PositionExitManager:
         except Exception:
             return 0.0
 
+    def _mark_delta_blind_skip(self, pos, mark: float, leg_label: str) -> bool:
+        """Implausible-mark guard that can no longer go BLIND on a real collapse.
+
+        2026-08-08 GAP-THROUGH BLINDNESS FIX (autowake: doge 1h BUY_NO -$32.00 bust).
+        The old guard was a bare `continue` whenever |mark - entry| > 0.50. It exists to
+        catch INVERTED TOKEN ORDERING from the scanner, but `continue` skips the ENTIRE
+        exit evaluation for that tick — loss cap (hold_catastrophic_stop_pct), favorite
+        pre-settlement de-risk AND `updown_expired` included. Consequence: a favorite
+        entered at 0.87 goes INVISIBLE to every exit the moment its mark drops below 0.37
+        — which is exactly the settlement gap-through those caps were built to catch.
+        Measured on the doge 6AM 2026-08-08 window: our NO mark left the band at 10:56:52,
+        8 SECONDS before the 180s presettle window opened, so no de-risk and no cap could
+        ever evaluate; MAE froze at -51.15% (the last in-band tick, hence just under the
+        -55% cap) and expiry finally fired 796s LATE at a 0.50 mark. The bnb -$32.39 and
+        sol -$70.81 "rode to resolution" losses have the same signature — they were
+        misdiagnosed as threshold problems and nudged, when the exits were simply blind.
+
+        Discriminator: inverted ordering is wrong from the FIRST tick and STAYS wrong; a
+        real collapse WALKS DOWN through the plausible band first. So once a position has
+        been marked in-band at least once, the feed is provably not inverted for it and a
+        later out-of-band mark is REAL — evaluate exits instead of skipping. Never having
+        seen an in-band mark keeps the original skip (fails closed, unchanged behavior).
+
+        Returns True to skip this position's exit check (caller `continue`s).
+        """
+        entry_price = float(getattr(pos, "entry_price", 0.0) or 0.0)
+        if abs(mark - entry_price) <= 0.50:
+            setattr(pos, "_mark_ever_in_band", True)
+            if getattr(pos, "_mark_out_of_band_ticks", 0):
+                setattr(pos, "_mark_out_of_band_ticks", 0)
+            return False
+
+        # Past-expiry computed FIRST: an EXPIRED position must ALWAYS be evaluated for
+        # close, regardless of in-band history — else a never-in-band position (incl. one
+        # reloaded after a restart, which loses the in-memory _mark_ever_in_band flag)
+        # would ride past expiry forever. (Codex fix.)
+        _past_expiry = False
+        try:
+            _end = getattr(pos, "end_date", None)
+            if _end is not None:
+                if _end.tzinfo is None:
+                    _end = _end.replace(tzinfo=timezone.utc)
+                _past_expiry = (_end - datetime.now(timezone.utc)).total_seconds() < 0
+        except Exception:
+            _past_expiry = False
+
+        if not getattr(pos, "_mark_ever_in_band", False) and not _past_expiry:
+            # Never once marked in band AND not expired => the inverted-token-ordering
+            # signature this guard was built for. Keep skipping (original fail-closed).
+            logger.debug(
+                f"Skip exit check {pos.market_id}: {leg_label} price delta implausible "
+                f"({entry_price:.3f} → {mark:.3f}); likely inverted token ordering in scanner"
+            )
+            return True
+
+        # Provably-real collapse (ever-in-band) OR expired-must-close. Require N consecutive
+        # out-of-band ticks (the same confirm count the % stop uses) so ONE junk print can't
+        # cut a winner. Past expiry there is nothing left to confirm — close now.
+        _n = int(getattr(pos, "_mark_out_of_band_ticks", 0)) + 1
+        setattr(pos, "_mark_out_of_band_ticks", _n)
+        _need = max(1, int(getattr(self, "_updown_stop_confirm_ticks", 2) or 2))
+        if not _past_expiry and _n < _need:
+            logger.debug(
+                "Out-of-band mark pending confirm %d/%d for %s (%s %.3f → %.3f)",
+                _n, _need, pos.market_id, leg_label, entry_price, mark,
+            )
+            return True
+
+        logger.warning(
+            "MARK COLLAPSE (real, not inverted ordering): %s %s entry=%.3f mark=%.3f "
+            "delta=%.3f confirm=%d/%d past_expiry=%s — EVALUATING exits (this tick used "
+            "to be skipped blind, which is what let the caps miss)",
+            pos.market_id, leg_label, entry_price, mark,
+            abs(mark - entry_price), _n, _need, _past_expiry,
+        )
+        return False
+
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
         return resolve_updown_exit_params(self._ude, strategy_name)
@@ -628,32 +705,18 @@ class PositionExitManager:
             current_no_price = 1.0 - current_yes_price
 
             if entry_leg == "NO":
-                if abs(current_no_price - pos.entry_price) > 0.50:
-                    logger.debug(
-                        f"Skip exit check {pos.market_id}: NO price delta implausible "
-                        f"({pos.entry_price:.3f} → {current_no_price:.3f})"
-                    )
+                if self._mark_delta_blind_skip(pos, current_no_price, "NO"):
                     continue
                 unrealized_pnl = pos.size * (current_no_price - pos.entry_price)
                 cost_basis = pos.entry_price * pos.size
             elif pos.outcome == "NO":
                 # Short YES: lent/sold YES; mark in YES space.
-                if abs(current_yes_price - pos.entry_price) > 0.50:
-                    logger.debug(
-                        f"Skip exit check {pos.market_id}: price delta implausible "
-                        f"({pos.entry_price:.3f} → {current_yes_price:.3f}); "
-                        f"likely inverted token ordering in scanner"
-                    )
+                if self._mark_delta_blind_skip(pos, current_yes_price, "short-YES"):
                     continue
                 unrealized_pnl = pos.size * (pos.entry_price - current_yes_price)
                 cost_basis = (1.0 - pos.entry_price) * pos.size
             else:
-                if abs(current_yes_price - pos.entry_price) > 0.50:
-                    logger.debug(
-                        f"Skip exit check {pos.market_id}: price delta implausible "
-                        f"({pos.entry_price:.3f} → {current_yes_price:.3f}); "
-                        f"likely inverted token ordering in scanner"
-                    )
+                if self._mark_delta_blind_skip(pos, current_yes_price, "YES"):
                     continue
                 unrealized_pnl = pos.size * (current_yes_price - pos.entry_price)
                 cost_basis = pos.entry_price * pos.size
