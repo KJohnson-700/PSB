@@ -127,13 +127,26 @@ def latest_ai_by_h(horizons=(15, 60)):
                 continue
             # same (asset,horizon) from a different engine instance -> MERGE decisions,
             # keep the newest ts so freshness is judged on the most recent write.
+            # 2026-08-12 PER-PROVIDER FRESHNESS (Codex catch). Merging two engine rows and
+            # keeping the NEWEST row ts let a STALE provider decision inherit freshness from a
+            # newer row written by a different engine (e.g. a dead sonnet reading riding on a
+            # fresh qwen tick). Stamp each decision with ITS OWN row ts so resolve_asset can
+            # judge providers independently.
             merged = dict(prev)
             d = dict(prev.get("decisions") or {})
-            d.update(r.get("decisions") or {})
+            _r_ts = r.get("ts")
+            for _pname, _pdec in (r.get("decisions") or {}).items():
+                if isinstance(_pdec, dict):
+                    _pdec = dict(_pdec)
+                    _pdec.setdefault("_ts", _r_ts)
+                d[_pname] = _pdec
+            for _pname, _pdec in list(d.items()):
+                if isinstance(_pdec, dict) and "_ts" not in _pdec:
+                    _pdec["_ts"] = prev.get("ts")
             merged["decisions"] = d
             try:
-                if float(r.get("ts", 0)) >= float(prev.get("ts", 0)):
-                    merged["ts"] = r.get("ts")
+                if float(_r_ts or 0) >= float(prev.get("ts", 0)):
+                    merged["ts"] = _r_ts
             except (TypeError, ValueError):
                 pass
             out[key] = merged
@@ -206,6 +219,12 @@ def resolve_asset(asset, ai_rec, manual, now, tier_order=None):
                     break
             if p is None or p.get("error") is not None:
                 continue  # provider absent or errored -> fall back to next tier
+            # per-provider staleness (see latest_ai_by_h): a merged row carries each decision's
+            # OWN ts; if this provider's reading is stale, treat it as a failure and fall through
+            # instead of trading on it under a sibling's fresh timestamp.
+            _p_ts = p.get("_ts")
+            if _p_ts is not None and not _fresh(_p_ts, now, FRESH_SEC):
+                continue
             # provider ANSWERED. conf gate: too-unsure => sit out (do NOT fall through).
             conf = p.get("conf")
             try:
