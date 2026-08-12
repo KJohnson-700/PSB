@@ -110,7 +110,18 @@ def main():
                     help="comma list of prediction horizons in minutes, e.g. 5,15,60")
     ap.add_argument("--once", action="store_true")
     args = ap.parse_args()
-    specs = [s.strip() for s in args.providers.split(",") if s.strip()]
+    # 2026-08-12: support "name:model" so a provider's model can be pinned from the CLI
+    # (e.g. claude:sonnet -> ClaudeProvider(model="sonnet") -> `claude --model sonnet`).
+    # Plain "name" keeps the provider's own default. ModelFactory.create() accepts a dict spec.
+    specs = []
+    for _s in (x.strip() for x in args.providers.split(",")):
+        if not _s:
+            continue
+        if ":" in _s:
+            _n, _m = _s.split(":", 1)
+            specs.append({"name": _n.strip(), "model": _m.strip()})
+        else:
+            specs.append(_s)
     horizons = [int(h.strip()) for h in args.horizons.split(",") if h.strip()]
     providers = ModelFactory.create_all(specs)
     print(f"AI-direction engine: providers={[p.name for p in providers]} "

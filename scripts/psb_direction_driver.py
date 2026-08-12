@@ -98,6 +98,50 @@ def latest_ai():
     return out
 
 
+def latest_ai_by_h(horizons=(15, 60)):
+    """Freshest AI decision per (asset, horizon). Merges rows from MULTIPLE engine instances
+    (e.g. a cheap local minimax/qwen engine + a separate claude:sonnet engine restricted to one
+    horizon), so a provider that only runs at one horizon still lands in that horizon's record.
+    2026-08-12: added for per-horizon provider routing (sonnet drives 15m, qwen drives 1h)."""
+    out = {}
+    if not os.path.exists(SHADOW):
+        return out
+    try:
+        lines = subprocess.run(["tail", "-n", "1200", SHADOW], capture_output=True, text=True).stdout.splitlines()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            h = r.get("horizon_min")
+            a = r.get("asset")
+            if h not in horizons or a not in ASSETS:
+                continue
+            key = (a, h)
+            prev = out.get(key)
+            if prev is None:
+                out[key] = dict(r)
+                continue
+            # same (asset,horizon) from a different engine instance -> MERGE decisions,
+            # keep the newest ts so freshness is judged on the most recent write.
+            merged = dict(prev)
+            d = dict(prev.get("decisions") or {})
+            d.update(r.get("decisions") or {})
+            merged["decisions"] = d
+            try:
+                if float(r.get("ts", 0)) >= float(prev.get("ts", 0)):
+                    merged["ts"] = r.get("ts")
+            except (TypeError, ValueError):
+                pass
+            out[key] = merged
+    except Exception as ex:
+        log(f"latest_ai_by_h err: {ex}")
+    return out
+
+
 def load_manual():
     try:
         if os.path.exists(MANUAL):
@@ -123,10 +167,19 @@ def _fresh(ts, now, window):
 # beats tape_map champion 47% + coinflip) >> minimax_tape 49.3% >> minimax 43.8% (WORST).
 # minimax as primary degenerated the override to all-LONG (it emits UP~0.55 for every asset).
 # qwen (vision/chart-reader) is the measured-best signal => PRIMARY. minimax demoted to fallback.
-_TIERS = (("qwen", ("qwen_vision", "qwen")), ("minimax", ("minimax_tape", "minimax")))
+_TIERS = (("qwen", ("qwen_vision", "qwen", "ollama_local")), ("minimax", ("minimax_tape", "minimax")))
+
+# 2026-08-12 OPERATOR ROUTING: sonnet drives 15m, qwen drives 1h. Each horizon has its own
+# cascade; fallback within a horizon is still FAILURE-ONLY (a provider that answers stops it).
+_TIERS_15M = (("claude", ("claude", "sonnet")),
+              ("qwen", ("qwen_vision", "qwen", "ollama_local")),
+              ("minimax", ("minimax_tape", "minimax")))
+_TIERS_1H = (("qwen", ("qwen_vision", "qwen", "ollama_local")),
+             ("minimax", ("minimax_tape", "minimax")))
+_H_ROUTE = ((15, "15m", _TIERS_15M), (60, "1h", _TIERS_1H))  # 2026-08-12: added "ollama_local" — that is the provider NAME the engine emits for qwen3-vl; without it the qwen tier never matched and every read fell through to minimax.
 
 
-def resolve_asset(asset, ai_rec, manual, now):
+def resolve_asset(asset, ai_rec, manual, now, tier_order=None):
     """Return (side, conf, tier, why) applying Claude->minimax->qwen, or (None,...,'quant',...).
 
     Cascade FALLBACK is on FAILURE ONLY (provider errored / absent / stale). A provider
@@ -145,7 +198,7 @@ def resolve_asset(asset, ai_rec, manual, now):
     dec = (ai_rec or {}).get("decisions", {}) or {}
     ai_fresh = bool(ai_rec) and _fresh(ai_rec.get("ts", 0), now, FRESH_SEC)
     if ai_fresh:
-        for tname, keys in _TIERS:
+        for tname, keys in (tier_order or _TIERS):
             p = None
             for k in keys:
                 if isinstance(dec.get(k), dict):
@@ -172,9 +225,26 @@ def main():
         try:
             now = time.time()
             ai = latest_ai()
+            ai_h = latest_ai_by_h()          # 2026-08-12 per-horizon records (sonnet@15m / qwen@1h)
             manual = load_manual()
             out = {}
             tiers = {}
+            # 2026-08-12 PER-HORIZON OVERRIDE KEYS. The seam resolves "<asset>:<tf>" BEFORE the
+            # asset-wide key, so writing both routes each window to its own provider while the
+            # asset-wide entry stays the safety net for any other tf.
+            for a in ASSETS:
+                for _h, _tf, _to in _H_ROUTE:
+                    _rec = ai_h.get((a, _h))
+                    _s, _c, _t, _w = resolve_asset(a, _rec, manual, now, tier_order=_to)
+                    if _t == "quant":
+                        continue
+                    _key = f"{a}:{_tf}"
+                    if _s is None:
+                        out[_key] = {"side": "FLAT", "conf": _c if _c is not None else 0.5,
+                                     "ts": int(now), "ttl": TTL, "why": f"{_t}@{_tf}:sitout:{_w}"}
+                    else:
+                        out[_key] = {"side": _s, "conf": _c if _c is not None else 0.6,
+                                     "ts": int(now), "ttl": TTL, "why": f"{_t}@{_tf}:{_w}"}
             for a in ASSETS:
                 side, conf, tier, why = resolve_asset(a, ai.get(a), manual, now)
                 tiers[a] = tier

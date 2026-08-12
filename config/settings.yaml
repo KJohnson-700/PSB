@@ -469,7 +469,7 @@ trading:
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
-    tp_giveback_enabled: false  # 2026-08-11 RIPPED (operator: "rip out the bullshit bandaids I don't need"). Feed-blind: proven this session it MISSES the give-backs it was built for (every big BNB give-back had mae==exit = no intervening tick observed, so a reactive trail can't bank a retrace it never sees). Confirmed-peak/green-floor sub-patches are now dead code (fire-condition first clause is self._tp_giveback_enabled). The ever-green MFE stop is the real exit fix and stays ON.  # 2026-08-10 RE-ENABLED (operator: "+108 to nothing is not okay"). The 08-09 off-decision was made on 4 fires, 2 of which were the RARE settlement-gap failure. Re-measured on the FULL log: of 200 give-backs (peak>=30% then lost), 96% are WALK-DOWNS the trail banks; only 4% are gaps. Both live BNB give-backs (1h YES peak +108% and +72%) are walk-downs -> trail converts -$15.21 to +$15.68 (+$31 swing). Only the 2 bitcoin-15m fade give-backs gap (trail misses those; separate fix). STAGED (frozen at init) -> rides the MFE-cond restart. WATCH first live fires bank real green.  # 2026-08-09 ENABLED (operator GO). ROOT of the deep-loss bleed: 74% of Aug catastrophic-stops were EVER-GREEN round-trips (median peaked +50% -> died -65%); 77 Aug losses peaked >=+30% then round-tripped (-$611). This banks a reversing winner on a >=retrace(0.20) from peak(>=arm 0.30) => exits >=+10% green instead of riding to -55%/-68% catastrophic. Fires UNDER hold (reason take_profit_giveback NOT in the hold-enforce suppression tuple). Only fires on a REAL retrace so a still-climbing runner is never cut (the 07-13/07-16 fixed-trail failure mode is avoided). Projected +~$977 swing on the 77 round-trip losses. WATCH first fires = banking real green not phantom-mark noise.
+    tp_giveback_enabled: true   # 2026-08-12 EMERGENCY RE-ENABLE after clean baseline failure: since 20260811_2059, losers with MFE>=30% totaled -$131.71; BTC 15m/1h alone repeatedly went +50% to +350% MFE then closed red/zero. The win-rate problem is partly an exit-conversion problem, not just entry selection. Restart-class: restart paper bot for this to take effect.
   execution_fees:
     enabled: true
     crypto_updown_15m_taker_fee_rate: 0.07
@@ -683,7 +683,7 @@ strategies:
       15m:
         min_edge: 0.06
         entry_window_min: 2.0
-        entry_window_max: 19.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 19): entry_window_max = MAX minutes-to-expiry allowed at entry. 19 let the bot enter a 15m market 19min (~0.3h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.09
         entry_window_min: 1.0
@@ -759,7 +759,7 @@ strategies:
             entry_price_min: 0.45
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 19.0
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 19): entry_window_max = MAX minutes-to-expiry allowed at entry. 19 let the bot enter a 15m market 19min (~0.3h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
           down:
             min_edge: 0.08
             ai_override_min_edge: 0.1
@@ -793,7 +793,7 @@ strategies:
     prediction_window_bonus_5m: 0.0
     disable_buy_yes: false
     disable_buy_no_counter_trend: true
-    disable_buy_no_15m_when_bearish: false
+    disable_buy_no_15m_when_bearish: true   # 2026-08-12 CUT: clean baseline since 20260811_2059 had BTC 15m BUY_NO net -$30.57; drift subset 0/3, -$38.85 despite huge MFE round-trips. Block bearish 15m shorts until a separate exit/banking retest proves it.
     window_delta_confirm_enabled: true
     window_delta_flip_margin: 0.05
     entry_admission_calibration_shrink: 0.28
@@ -945,11 +945,11 @@ strategies:
         min_edge: 0.06
         min_edge_buy_no: 0.06
         entry_window_min: 1.0
-        entry_window_max: 135
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 135): entry_window_max = MAX minutes-to-expiry allowed at entry. 135 let the bot enter a 15m market 135min (~2.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -1068,7 +1068,7 @@ strategies:
             entry_price_min: 0.48
             entry_price_max: 0.53
             entry_window_min: 1.0
-            entry_window_max: 32.0
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
           down:
             min_edge: 0.12
             hard_min_edge: 0.0
@@ -1082,14 +1082,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1133,7 +1133,7 @@ strategies:
     disable_buy_no_15m: false
     disable_buy_no_5m: false
     disable_buy_yes_1h: false
-    disable_buy_yes_15m: false
+    disable_buy_yes_15m: true   # 2026-08-12 CUT: clean baseline ETH 15m BUY_YES net -$38.35, PF 0.57; standard ETH 15m longs were -$30.58. Keep ETH shorts/live native winners, stop this long-side bleed.
     disable_buy_yes_5m: false
     eth_pocket_only: false
     eth_buy_no_rsi_min: 35.0
@@ -1173,11 +1173,11 @@ strategies:
       15m:
         min_edge: 0.09
         entry_window_min: 1.0
-        entry_window_max: 120.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 120): entry_window_max = MAX minutes-to-expiry allowed at entry. 120 let the bot enter a 15m market 120min (~2.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
     min_edge_15m_when_ltf_unconfirmed: 0.06
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -1313,7 +1313,7 @@ strategies:
             entry_price_min: 0.47
             entry_price_max: 0.55
             entry_window_min: 0.5
-            entry_window_max: 6.0
+            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 6): entry_window_max = MAX minutes-to-expiry allowed at entry. 6 let the bot enter a 5m market 6min (~0.1h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.25
         15m:
           up:
@@ -1321,7 +1321,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 1.0
-            entry_window_max: 120.0
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 120): entry_window_max = MAX minutes-to-expiry allowed at entry. 120 let the bot enter a 15m market 120min (~2.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.25
           down:
             min_edge: 0.025
@@ -1335,14 +1335,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.0
@@ -1455,11 +1455,11 @@ strategies:
         min_edge: 0.08
         min_edge_buy_no: 0.07
         entry_window_min: 2.0
-        entry_window_max: 36.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 36): entry_window_max = MAX minutes-to-expiry allowed at entry. 36 let the bot enter a 15m market 36min (~0.6h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.0
         entry_window_min: 1.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: false
@@ -1553,7 +1553,7 @@ strategies:
             entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 11.0
+            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 11): entry_window_max = MAX minutes-to-expiry allowed at entry. 11 let the bot enter a 5m market 11min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         15m:
           up:
             min_edge: 0.03
@@ -1568,7 +1568,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 135
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 135): entry_window_max = MAX minutes-to-expiry allowed at entry. 135 let the bot enter a 15m market 135min (~2.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         1h:
           up:
             min_edge: 0.06
@@ -1576,14 +1576,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.15
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.15
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1656,6 +1656,7 @@ strategies:
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
     disable_buy_yes_15m: false
+    disable_buy_no_5m: true     # 2026-08-12 CUT: clean baseline XRP 5m BUY_NO net -$18.24, PF 0.68, 30% WR. Preserve XRP 15m lanes, which were the strongest positive cohort.
     flip_exempt_min_edge_1h: false
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
@@ -1689,12 +1690,12 @@ strategies:
         min_edge_buy_no: 0.5
         min_est_prob_conviction_buy_yes: 0.6
         entry_window_min: 2.0
-        entry_window_max: 32.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1839,21 +1840,21 @@ strategies:
             min_edge: 0.1
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 135
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 135): entry_window_max = MAX minutes-to-expiry allowed at entry. 135 let the bot enter a 15m market 135min (~2.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         1h:
           up:
             min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 30
-            entry_window_max: 150
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 150): entry_window_max = MAX minutes-to-expiry allowed at entry. 150 let the bot enter a 1h market 150min (~2.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             entry_price_min: 0.53
             min_edge: 0.02
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1948,11 +1949,11 @@ strategies:
       15m:
         min_edge: 0.04
         entry_window_min: 2.0
-        entry_window_max: 32.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -2058,7 +2059,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 32.0
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
           down:
             min_edge: 0.06
             entry_price_min: 0.42
@@ -2078,7 +2079,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -2124,6 +2125,7 @@ strategies:
       atr_low_pct: 0.0026
       atr_high_pct: 0.0038
     disable_buy_yes: false
+    disable_buy_yes_15m: true   # 2026-08-12 CUT: clean baseline BNB 15m BUY_YES net -$36.59, PF 0.22, 17% WR. This was one of the main standard-family bleeds.
     disable_buy_yes_5m_when_bullish: false
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
@@ -2162,18 +2164,18 @@ strategies:
         min_edge: 0.085
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 10.0
+        entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         min_est_prob_conviction: 0.52
       15m:
         min_edge: 0.04
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
-        entry_window_max: 150.0
+        entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 150): entry_window_max = MAX minutes-to-expiry allowed at entry. 150 let the bot enter a 15m market 150min (~2.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         min_est_prob_conviction: 0.52
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360
+        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         min_est_prob_conviction: 0.52
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
@@ -2268,7 +2270,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 10.0
+            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
@@ -2283,7 +2285,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
-            entry_window_max: 150.0
+            entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 150): entry_window_max = MAX minutes-to-expiry allowed at entry. 150 let the bot enter a 15m market 150min (~2.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             min_edge: 0.04
@@ -2298,14 +2300,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360
+            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -2319,7 +2321,7 @@ strategies:
         BULL: 1.0
         RANGE: 0.7
         BEAR: 0.5
-    disable_buy_yes_15m: false
+    disable_buy_yes_15m: true   # 2026-08-12 effective duplicate override: keep BNB 15m longs disabled; earlier key in this block is also true.
     overconfidence_sitout:
       enabled: true
       band: 0.01
@@ -2341,12 +2343,12 @@ updown_composite:
 # enforce=true; enforce=false = SHADOW (logs DIRECTION_OVERRIDE, never changes a side).
 # Toggle live with scripts/claude_direction.py. Fail-safe: any problem => quant side.
 direction:
-  mode: claude           # CLAUDE-DRIVEN 08-07: Claude writes tape-aligned direction overrides (fixes coinflip native bias)
-  enforce: true           # 2026-08-12 UN-BENCHED (operator: never authorized benching). Was set false in the 08-12 resolver strip-down (wrongly treated as blunt accretion). AI engine DRIVES again, now off qwen_vision (measured best 50.6%, not minimax's long-bias). Applies on next bot restart (direction block = restart-class).
+  mode: claude    # 2026-08-12 RESTORED BY OPERATOR ORDER (2nd restore today; Codex benched it twice). Journal proof it was NOT the bleed: all 96 closes of the prior session were ai=False (native); BTC 5m/15m DIRECTION_OVERRIDE applied=True stayed 0 for 9h.
+  enforce: true
   override_file: data/runtime/claude_direction_override.json
   max_age_sec: 900       # override staleness belt (each entry may also carry its own ttl)
   override_when_quant_neutral: true    # CLAUDE-DRIVEN: my calls apply even where quant sat out
-  apply_windows: ['1h', '15m']    # 2026-08-12 OPERATOR FIX: 15m WAS ALWAYS MEANT TO BE AI-DRIVEN TOO (operator directive; I mis-scoped item-2 to 1h-only). Session audit: 15m native = -$94 (35% WR, 80% of bleed) while qwen called the tape right all day. 5m stays native+RSI-fade (structural, +$7.55).
+  apply_windows: ['1h', '15m']    # operator directive: 15m was ALWAYS meant to be AI-driven.
   min_conf: 0.0          # ignore overrides below this confidence
 # ── FAVORITE-LONGSHOT lane (08-07) ──────────────────────────────────────────
 # Structural price bet: buy the FAVORITE (our-side price >= floor) side-agnostic.
@@ -2404,6 +2406,7 @@ ai:
   consensus_min_agree: 2
   direct_decision_provider_names:
   - minimax
+  - ollama_local    # 2026-08-12 QWEN FIX: ollama_local (qwen3-vl:4b) was in provider_chain but NOT named here, and fallback_to_chain=false -> the engine ONLY ever called minimax (43.8% right-side, worst) while qwen_vision (50.6%, best) never produced a reading, so the driver's qwen-first _TIERS had nothing to prefer.
   direct_decision_fallback_to_chain: false
   provider_chain:
   - name: minimax
@@ -2515,14 +2518,14 @@ notifications:
 risk:
   favorite_lane_enabled: false   # 2026-08-10 KILL THE FAVORITE LANE (operator: revert to +869 winning config, which had NO favorite lane). Favorites 0.85+ = win-11%/lose-90% payoff-trap, b=0.13, need 88% WR, −$448 all-time. Under `risk` = HOT-RELOADABLE (no restart). Set true to re-enable. Read by sol_macro + bitcoin _favorite_lane_signals.
   rsi_fade:                # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED >coinflip edge, project_rsi_fade_edge_found_2026_08_10). Under `risk` so it's HOT-RELOADABLE => REVERT TRIGGER = flip enabled:false (no restart) if fade-WR < breakeven. Read by sol_macro._resolve_alt_bias_for_tf (shared by ALL alts + eth): fades the direction-lane side when RSI < rsi_below AND trend NOT fully-aligned (align-gate = regime safety; fading a strong aligned trend gets run over). Favorites bypass the resolver = UNAFFECTED. Measured: RSI<40 native 30%WR => FADE 69.6% (4 sessions, never <56%). rsi_above 101 = overbought-fade OFF (ship strongest zone first). side_source retagged *_rsi_fade for attribution/monitoring.
-    enabled: true    # 2026-08-12 RE-ENABLED (item 2) WITH the fresh-tape regime gate that fixes the 08-11 bleed. The -$90 loss was the oversold-long fade buying the falling knife in a DOWN tape; the lagging align-gate missed it. sol_macro now vetoes the fade when a CONFIDENT tape_map (conf>=0.6) runs against the faded side. 5m/15m only (1h uses the AI direction). Hot-reloadable REVERT = flip false if fade-WR < breakeven.
+    enabled: false   # 2026-08-12 EMERGENCY CUT: current config still had RSI fade ON; clean baseline since 20260811_2059 shows rsi_fade families net -$68.85, led by BTC 15m rsi_fade -$54.38 and BNB 15m rsi_fade -$36.59. Hot-reloadable.
     rsi_below: 40.0
     rsi_above: 101.0
     windows: [5m, 15m]   # 2026-08-12 dropped 1h — 1h side comes from the AI direction override (route direction to 1h); 5m/15m trade the structural fade edge
     flat_edge: 0.05          # 2026-08-10 fade sizes on THIS flat edge, NOT est_prob (which is anti-predictive in the band). The fade is exempted from lane_min_edge + est_prob conviction floors (sol_macro scan loop) because est_prob-edge is ~0/NEGATIVE by construction on the faded side => without this the fade takes ZERO trades (measured: 74 resolutions -> 0 fills). Conservative 0.05 (below alt_1h_simple_long 0.06). Hot-reloadable. Set higher to size faded bets up once WR confirms.
   max_concurrent_positions: 50   # 2026-08-08 NOW HOT-RELOADABLE (operator): raise/lower the max simultaneous OPEN trades in settings.yaml and it applies live WITHOUT restart (can_trade reads it from self.config each check; "risk" is in _HOT_RELOAD_TOP_LEVEL_KEYS). NOTE: 50 is high vs a $1k bankroll at $70/favorite — lower it here anytime to cap concurrent exposure. Per-strategy override: strategies.<name>.max_concurrent_positions.
   max_trades_per_day: 500
-  paper_max_trades_per_day: 2000
+  paper_max_trades_per_day: 200
   check_interval: 60
   emergency_stop_loss: 0.25
 term_risk:
