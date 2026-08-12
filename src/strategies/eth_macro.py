@@ -747,6 +747,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             _log_side_veto_shadow(
                 strategy="eth_macro", window="5m", side="up", target_action="BUY_YES",
                 tape_dir=(_sv_dir or None), tape_strength=(_sv_ts or {}).get("strength"),
+                tape_conf=(_sv_ts or {}).get("confidence"),  # 2026-08-12: was NEVER logged -> tape_conf null in 22k rows
                 adm=round(_sv_adm, 4), would_veto=bool(_sv_dir == "DOWN" and _sv_adm >= 0.0),
             )
         except Exception:
@@ -1058,7 +1059,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             # flag gates the loop's late flips (fresh_cross / wd_flip / 5m
             # no->yes) so a faded side is never double-flipped, and gates the
             # 07-06 fade-shadow logger (live fade supersedes the counterfactual).
-            _fade_active = "fade_native" in (side_source or "")
+            # 2026-08-10 Codex-fix (port of sol_macro): treat rsi_fade as fade-active too, else
+            # late flip paths (fresh_cross_override / window_delta_flip / posterior) silently UNDO
+            # the deliberate RSI fade. Both are intentional side inversions that must stick.
+            _fade_active = any(t in (side_source or "") for t in ("fade_native", "rsi_fade"))
             if market_allowed_side is None:
                 # No usable bias = the lane has no side, so there is no rejected
                 # *candidate* to counterfactually score (action would be NONE).
@@ -2384,6 +2388,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 lane_policy.hard_min_edge,
             )
             effective_min_edge += follow_penalty_min_edge_add
+            # 2026-08-10 RSI-FADE marker (port of sol_macro). Faded candidates bet AGAINST
+            # est_prob, so est_prob-based gates (conviction floor, lane_min_edge, centered edge)
+            # must be exempted or the fade takes zero trades. Reverts byte-identical when
+            # risk.rsi_fade.enabled:false (=> no *_rsi_fade producer => _is_rsi_fade always False).
+            _is_rsi_fade = bool(side_source and "rsi_fade" in side_source)
             # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only.
             # 2026-07-28: per-tf resolution (by_tf.<tf> > defaults > flat) so the floor
             # is per-lane, matching sol/btc — flat self.config.get ignored by_tf overrides.
@@ -2394,6 +2403,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 action == "BUY_YES"
                 and _yes_conv_floor > 0.0
                 and float(estimated_prob) < _yes_conv_floor
+                and not _is_rsi_fade  # fade bets against est_prob => conviction floor N/A
             ):
                 _bump_skip("buy_yes_conviction_floor")
                 continue
@@ -3000,6 +3010,16 @@ class ETHMacroStrategy(SolMacroStrategy):
             _admit_marginal_no_ai = self._admit_marginal_quant_short(
                 edge, action, _timing_window_open, window=_updown_tf
             )
+            # 2026-08-10 RSI-FADE min-edge EXEMPTION (port of sol_macro). Placed AFTER all
+            # effective_min_edge mutations (tape_adm/repair/rsi_min_edge_add) and BEFORE the
+            # fee-aware net_edge calc so the floored edge flows into _net_edge. est_prob is
+            # unusable on the fade side => size on flat fade edge, drop the min_edge bar.
+            if _is_rsi_fade:
+                _rf_cfg = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
+                _rf_flat_edge = float(_rf_cfg.get("flat_edge", 0.05) or 0.05)
+                effective_min_edge = 0.0
+                if edge < _rf_flat_edge:
+                    edge = _rf_flat_edge
             # 2026-07-29 FEE-AWARE GATE (mirror of sol_macro): subtract the venue taker-fee
             # hurdle so admission is net-of-fee, and drop the marginal rescue if the net edge
             # no longer clears the marginal floor. No-op when fee_aware_edge.enabled=false.
@@ -3232,7 +3252,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             if self.center_price_band > 0:
                 _is_centered = abs(yes_price - 0.50) <= self.center_price_band
                 if _is_centered:
-                    _center_min_edge = max(effective_min_edge, self.min_edge_when_centered)
+                    # 2026-08-10 RSI-fade exemption (port of sol_macro): the fade lives in the
+                    # CENTERED coinflip band by construction; min_edge_when_centered would
+                    # re-reject the exact candidates the fade targets. Skip for faded.
+                    _center_min_edge = 0.0 if _is_rsi_fade else max(effective_min_edge, self.min_edge_when_centered)
                     if edge < _center_min_edge:
                         _bump_skip("centered_price_edge_below_min")
                         continue

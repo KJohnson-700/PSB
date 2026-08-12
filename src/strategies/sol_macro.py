@@ -1825,6 +1825,9 @@ class SolMacroStrategy:
                         # CONFIDENT tape (conf>=0.6) is NOT running AGAINST the faded side. Fail-open
                         # (missing/low-conf tape => fade as before, preserving the measured edge).
                         _tape_ok = True
+                        _tp_dir = None      # captured for the gate-decision log emit below
+                        _tp_conf = 0.0
+                        _tp_fresh = False
                         try:
                             import time as _t
                             from src.analysis.tape_map import latest_tape_state
@@ -1833,14 +1836,28 @@ class SolMacroStrategy:
                             # may veto the fade — a stale high-conf read must NOT silently kill the
                             # measured 69.6% edge (latest_tape_state is in-memory, age-blind on its own).
                             _tp_fresh = (_t.time() - float(_tp.get("ts") or 0.0)) <= 90.0
-                            if _tp_fresh and float(_tp.get("confidence") or 0.0) >= 0.6:
-                                _tp_dir = _tp.get("direction")
+                            _tp_conf = float(_tp.get("confidence") or 0.0)
+                            _tp_dir = _tp.get("direction")
+                            if _tp_fresh and _tp_conf >= 0.6:
                                 if _faded_to == "LONG" and _tp_dir == "DOWN":
                                     _tape_ok = False
                                 elif _faded_to == "SHORT" and _tp_dir == "UP":
                                     _tape_ok = False
                         except Exception:
                             _tape_ok = True
+                        # 2026-08-12 GATE EMIT (item-2 instrumentation): make the fade veto DECISION
+                        # visible so we stop GUESSING whether it fired (the bnb fade-longs bled into a
+                        # DOWN tape and we had no log to see if the veto engaged). Grep RSI_FADE_GATE.
+                        try:
+                            logger.info(
+                                "RSI_FADE_GATE strat=%s tf=%s rsi=%.0f faded_to=%s tape_dir=%s "
+                                "tape_conf=%.2f fresh=%s decision=%s",
+                                self._signal_strategy_name or asset, tf, _rf_rsi, _faded_to,
+                                _tp_dir, _tp_conf, _tp_fresh,
+                                ("APPLIED" if _tape_ok else "VETOED"),
+                            )
+                        except Exception:
+                            pass
                         if _tape_ok:
                             allowed_side = _faded_to
                             side_source = f"{asset}_{tf}_rsi_fade"
@@ -3308,6 +3325,7 @@ class SolMacroStrategy:
                 _log_side_veto_shadow(
                     strategy="xrp_macro", window="15m", side="down", target_action="BUY_NO",
                     tape_dir=(_sv_dir or None), tape_strength=(_sv_ts or {}).get("strength"),
+                    tape_conf=(_sv_ts or {}).get("confidence"),  # 2026-08-12: was NEVER logged -> tape_conf null in 22k rows
                     adm=round(_sv_adm, 4), would_veto=bool(_sv_dir == "UP" and _sv_adm >= 0.0),
                 )
         except Exception:
