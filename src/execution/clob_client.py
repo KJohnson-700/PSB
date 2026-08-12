@@ -2266,10 +2266,77 @@ class CLOBClient:
             )
         return self._readonly_py_client
 
+    _BOOK_REST_URL = "https://clob.polymarket.com/book"
+
+    def _fetch_book_rest(self, token_id: str):
+        """Blocking direct GET of the PUBLIC book endpoint. Returns the normalized snapshot
+        dict, or None to let the caller fall back. Own session => not affected by the vendored
+        client's shared HTTP/2 connection."""
+        try:
+            import requests  # local import: keeps module import cost unchanged
+        except Exception:
+            return None
+        sess = getattr(self, "_book_rest_session", None)
+        if sess is None:
+            sess = requests.Session()
+            self._book_rest_session = sess
+        base = (getattr(self, "api_endpoint", None) or "https://clob.polymarket.com").rstrip("/")
+        try:
+            r = sess.get(f"{base}/book", params={"token_id": token_id}, timeout=8)
+        except Exception:
+            return None
+        if r.status_code != 200:
+            return None
+        try:
+            d = r.json()
+        except Exception:
+            return None
+
+        def _norm(rows):
+            out = []
+            for o in (rows or []):
+                try:
+                    out.append({"price": float(o.get("price", 0)), "size": float(o.get("size", 0))})
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            return out
+
+        return {
+            "token_id": token_id,
+            "asset_id": d.get("asset_id"),
+            "market": d.get("market"),
+            "timestamp": d.get("timestamp"),
+            "bids": _norm(d.get("bids")),
+            "asks": _norm(d.get("asks")),
+        }
+
     async def fetch_order_book_snapshot(self, token_id: str) -> Optional[Dict[str, Any]]:
         """Public CLOB GET order book (REST). Works without trading keys."""
+        if not token_id:
+            return None
+
+        # 2026-08-12 BOOK FIX. py_clob_client routes every call through ONE module-level
+        # httpx.Client(http2=True) created at import (site-packages/py_clob_client/http_helpers/
+        # helpers.py:19) and converts any httpx.RequestError into
+        # PolyApiException("Request exception!") with NO status code — the exact signature of
+        # 3,837 failures in a single session (~300-500/hour, continuously). Ruled out first:
+        # network (clob /ok = HTTP 200 in 0.37s, VPN up) and concurrency (64 parallel
+        # get_order_book calls from this host: 40/40 OK). The book is a PUBLIC REST endpoint,
+        # so fetch it directly over our own session — measured 15/15 OK with real spreads/depth
+        # — and keep the py-clob path as fallback. Without this the bot has NO book: entries
+        # record no bid/ask/spread/depth and fills cannot be audited.
+        try:
+            loop = asyncio.get_event_loop()
+            _direct = await loop.run_in_executor(
+                None, lambda: self._fetch_book_rest(str(token_id))
+            )
+            if _direct is not None:
+                return _direct
+        except Exception as exc:
+            logger.debug("[fetch_order_book_snapshot] direct REST failed, falling back: %s", exc)
+
         pc = self._py_client_for_public_reads()
-        if not pc or not token_id:
+        if not pc:
             return None
         try:
             loop = asyncio.get_event_loop()
