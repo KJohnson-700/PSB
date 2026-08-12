@@ -2521,7 +2521,22 @@ risk:
   # = -$751 combined, vs a flat-to-positive rest of the clock. NOT a fixed trading schedule —
   # it is a measured per-hour sit-out; re-measure and shrink/drop it as the data moves.
   # Empty list [] => OFF (fail-open). Hot-reloadable (risk is a hot-reload top-level key).
-  blocked_pt_hours: [17, 18, 19]
+  blocked_pt_hours: []          # MANUAL pin list (unioned with the adaptive set). Emptied
+                                # 2026-08-12 now that hour_adapter measures this from realized
+                                # pnl — keep [] unless you want to force an hour by hand.
+  hour_adapter:                 # 2026-08-12 ADAPTIVE per-hour sit-out (operator: "no set
+                                # trading times — must be ADAPTIVE"). Scores each entry-hour on
+                                # rolling REALIZED $/trade over the RECENT era and self-flips:
+                                # sits an hour out while it bleeds, restores it when it recovers.
+    enabled: true
+    lookback_sessions: 40       # recent-era window. 40 chosen by sweep: 10 gave n<15 in nearly
+                                # every hour (fail-open, gated nothing); 40 yields ~890 closes and a
+                                # STABLE outlier set (01/05/22 PT reproduce at 60 too).
+    min_samples: 25             # closes needed in an hour before it may be gated (else fail-open)
+    sit_out_delta: -1.50        # hour avg $/trade THIS FAR BELOW the same-era baseline => sit out
+    recover_delta: -0.50        # ...stays out until it climbs back above this (hysteresis)
+    max_blocked_hours: 4        # HARD frequency floor: never gate more than N hours (worst first)
+    refresh_sec: 900
   favorite_lane_enabled: false   # 2026-08-10 KILL THE FAVORITE LANE (operator: revert to +869 winning config, which had NO favorite lane). Favorites 0.85+ = win-11%/lose-90% payoff-trap, b=0.13, need 88% WR, −$448 all-time. Under `risk` = HOT-RELOADABLE (no restart). Set true to re-enable. Read by sol_macro + bitcoin _favorite_lane_signals.
   rsi_fade:                # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED >coinflip edge, project_rsi_fade_edge_found_2026_08_10). Under `risk` so it's HOT-RELOADABLE => REVERT TRIGGER = flip enabled:false (no restart) if fade-WR < breakeven. Read by sol_macro._resolve_alt_bias_for_tf (shared by ALL alts + eth): fades the direction-lane side when RSI < rsi_below AND trend NOT fully-aligned (align-gate = regime safety; fading a strong aligned trend gets run over). Favorites bypass the resolver = UNAFFECTED. Measured: RSI<40 native 30%WR => FADE 69.6% (4 sessions, never <56%). rsi_above 101 = overbought-fade OFF (ship strongest zone first). side_source retagged *_rsi_fade for attribution/monitoring.
     enabled: false   # 2026-08-12 EMERGENCY CUT: current config still had RSI fade ON; clean baseline since 20260811_2059 shows rsi_fade families net -$68.85, led by BTC 15m rsi_fade -$54.38 and BNB 15m rsi_fade -$36.59. Hot-reloadable.

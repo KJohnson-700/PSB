@@ -6176,13 +6176,13 @@ class SolMacroStrategy:
             # (empty/absent => OFF, fail-open). Re-measure and shrink/drop as the data moves.
             if is_updown:
                 try:
-                    _bh = (self.full_config.get("risk", {}) or {}).get("blocked_pt_hours") or []
-                    if _bh:
-                        import datetime as _dtm
-                        _pt = (_dtm.datetime.now(_dtm.timezone.utc).hour - 7) % 24
-                        if _pt in {int(h) for h in _bh}:
-                            _bump_skip("bleed_hour_sit_out")
-                            continue
+                    from src.analysis.hour_pnl_adapter import is_blocked_now as _hour_blocked
+                    if _hour_blocked(self.full_config):
+                        # ADAPTIVE: hour sits out only while its ROLLING REALIZED $/trade is
+                        # bleeding (recent-era only, hysteresis on recovery), UNION any manual
+                        # risk.blocked_pt_hours. Self-flips back on when the hour recovers.
+                        _bump_skip("bleed_hour_sit_out")
+                        continue
                 except Exception:
                     pass
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
