@@ -286,6 +286,34 @@ class PositionExitManager:
         # 79%->57%. 0.70 sits DEEP inside the plausible band (delta 0.17 << 0.50) so it fires on the
         # real walk-down, never on an inverted/junk print. OFF unless favorite_lane.hard_stop_price>0.
         self._fav_hard_stop_price = float(_fav_cfg.get("hard_stop_price", 0.0) or 0.0)
+        # 2026-08-08 WINDOW-CONDITIONAL EARLY STOPS (operator GO; held-projection this session).
+        # The early hold-lane cuts (favorite_hard_stop + the independent -catastrophic backstop)
+        # GAP THROUGH on fast windows: the stop-hold sweep showed 5m/15m winners routinely dip to
+        # -20..-46% MAE mid-window and STILL resolve GREEN, so those stops fire on recoverable
+        # noise and lock a gap-through loss (hold beats stop on sol/xrp/hype 5m+15m; doge 1h is the
+        # LONE lane where holding LOSES ~-35). Gate the early cuts to the windows where holding
+        # actually loses -> default {"1h"}. On 5m/15m the position rides to resolution; the
+        # final-seconds presettle de-risk (favorite gap-to-0 salvage) is a SEPARATE block that
+        # stays active on EVERY window. Tokens: "all" => keep the stop on every window (pre-change
+        # behavior); [] => keep it nowhere. RESTART-CLASS (execution code; not hot-reloadable).
+        _esw = _fav_cfg.get("early_stop_windows", None)
+        if _esw is None:
+            _esw = exit_cfg.get("hold_early_stop_windows", ["1h"])
+        self._hold_early_stop_windows = {str(w).lower() for w in (_esw or [])}
+        # 2026-08-09 MFE-CONDITIONAL STOP (operator GO; ghost-confirmed; SUPERSEDES the window axis).
+        # Ghost-settling the 130 hold_catastrophic_stop trades held-to-resolution: 88% (105/120) would
+        # STILL resolve to $0 — they were wrong-side entries that never went green (100% had MFE<5%).
+        # Only 12% recovered, and those dipped BELOW -55% then came back, so the -55% stop already cut
+        # them regardless. Root regression vs the +$450 June era: June cut losers at ~-34% (b=1.2-1.7);
+        # Aug rides them to -47%+ (b=0.49). The WINDOW axis (1h stops / 5m-15m ride) is the wrong
+        # discriminator — it lets never-green 5m/15m losers ride to -100%. The right axis is MFE:
+        #   * NEVER went green (peak_pnl_pct < arm) => wrong-side entry => cut SHALLOW (~June -34%).
+        #   * went green THEN dipped (peak >= arm)  => recoverable winner => ride; deep -cat backstop only.
+        # When enabled this REPLACES _window_keeps_early_stop for the catastrophic + favorite-hard cuts.
+        # Falls back to the window axis when disabled. RESTART-CLASS (execution; not hot-reloadable).
+        self._mfe_cond_stop_enabled = bool(exit_cfg.get("hold_mfe_conditional_stop_enabled", True))
+        self._hold_never_green_mfe_arm = float(exit_cfg.get("hold_never_green_mfe_arm", 0.08) or 0.0)
+        self._hold_never_green_stop_pct = float(exit_cfg.get("hold_never_green_stop_pct", 0.34) or 0.0)
         # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
         # updown_hold_winners_to_resolution=True, which DISABLES the regular take_profit (_tp_mark_ready
         # requires `not hold_winners`) — so a winner that peaks then reverses has NO way to bank and rides
@@ -297,6 +325,12 @@ class PositionExitManager:
         self._tp_giveback_enabled = bool(exit_cfg.get("tp_giveback_enabled", False))
         self._tp_giveback_arm_pct = float(exit_cfg.get("tp_giveback_arm_pct", 0.30) or 0.30)
         self._tp_giveback_retrace_pct = float(exit_cfg.get("tp_giveback_retrace_pct", 0.20) or 0.20)
+        # 2026-08-12 PER-WINDOW retrace override (see _tpgb_retrace_for). Absent => global.
+        _tpgb_bw = exit_cfg.get("tp_giveback_retrace_pct_by_window") or {}
+        self._tp_giveback_retrace_by_window = (
+            {str(k).lower(): float(v) for k, v in _tpgb_bw.items()}
+            if isinstance(_tpgb_bw, dict) else {}
+        )
         # 2026-07-31 LOSER-FLOOR (operator GO; restart-class). Root cause of the dominant
         # loss bucket: hold-enforce suppressed a hold lane's OWN configured stop, so a loser
         # rode from entry to -catastrophic (hold_catastrophic_stop, default -50%) before
@@ -435,6 +469,16 @@ class PositionExitManager:
         if not _entry_mode:
             _entry_mode = "marketable" if _t.get("entry_marketable", True) else "maker"
         self._entry_taker = _entry_mode != "maker"
+        # 2026-08-08 MAKER-FIRST FEE WEIGHTING (#1, operator go). The exit/entry fee block
+        # below charged the FULL taker fee on BOTH legs for every crypto up/down lane — but
+        # LIVE runs maker-first on the hybrid windows (15m/1h), where a maker leg that fills
+        # pays 0%. So paper was systematically PESSIMISTIC on 15m/1h fees (see the block's own
+        # KNOWN-CROSS-LANE-BIAS #2 note). This weights each leg's fee by (1 - maker_fill_rate)
+        # on the hybrid windows ONLY (5m is FAK/taker -> unchanged, still fair vs live). The
+        # rate is MEASURED from data/calibration/order_lifecycle.jsonl (maker_full/partial/only
+        # vs marketable/zero_cross_fak = ~0.56 over n=27; config set to a conservative 0.50),
+        # NOT a fabricated constant. 0.0 => OFF (byte-identical to the old full-taker behavior).
+        self._hybrid_maker_fill_rate = float(fee_cfg.get("hybrid_maker_fill_rate", 0.0) or 0.0)
         # 2026-07-31 STAGED paper execution-realism knobs (#4b + #1). ALL gated below on
         # self._paper_mode so LIVE (dry_run=false) exit accounting is byte-for-byte unchanged.
         # Read here (with the rest of exit_rules) so they HOT-RELOAD; dry_run itself hot-reloads
@@ -485,6 +529,103 @@ class PositionExitManager:
         return self._updown_min_hold_by_window.get(
             label, self._updown_min_hold_sec_before_pct_exit
         )
+
+    def _window_keeps_early_stop(self, pos) -> bool:
+        """Whether this position's window still fires the early hold-lane cuts
+        (favorite_hard_stop + independent -catastrophic backstop). Default: 1h
+        only — 5m/15m ride to resolution because their mid-window drawdown is
+        recoverable noise (see reload_from_config note). "all" => every window;
+        empty set => none. Robust to a missing window_size via inference."""
+        ws = getattr(self, "_hold_early_stop_windows", None)
+        if ws is None or "all" in ws:
+            return True
+        label = infer_updown_window_size(
+            getattr(pos, "window_size", "") or "",
+            opened_at=getattr(pos, "opened_at", None),
+            end_date=getattr(pos, "end_date", None),
+        )
+        return str(label).lower() in ws
+
+    def _tpgb_retrace_for(self, pos) -> float:
+        """Give-back retrace for THIS position's window. Global default unless the window
+        has an explicit override.
+
+        2026-08-12 (Codex NO-GO on a GLOBAL 0.20->0.10; this is the per-lane form it
+        sanctioned instead). Measured session test_20260812_154419: every winner exited
+        take_profit_giveback surrendering 24-42 points of peak, and the 1h lanes ran
+        furthest and bled most (bnb 1h peak +64.3% -> banked +40.5%; xrp 1h +61.9% ->
+        +20.2%; sol 1h +38.6% -> +12.5%). That matches the DURABLE prior finding
+        "1h give-back = time-gated TP is the fix" — so 1h is the lane with standing
+        evidence, not a 5-trade hunch.
+
+        5m/15m deliberately KEEP 0.20: Codex's runner-chop objection stands there — at
+        0.42-0.47 entries a 10-point retrace is only 4-5 cents of token price, plausibly
+        inside normal intra-window noise, and I have no tick path proving those winners
+        did not wobble that much while climbing. Do not tighten a window without its own
+        evidence.
+
+        NOTE this does NOT address the gap-through: fills land 3-10 cents BELOW the
+        trigger (xrp trigger 0.596 -> filled 0.500), which may dominate the economics.
+        That is a separate defect and the reason this change is expected to help, not fix.
+        """
+        base = float(getattr(self, "_tp_giveback_retrace_pct", 0.20) or 0.20)
+        by_win = getattr(self, "_tp_giveback_retrace_by_window", None)
+        if not by_win:
+            return base
+        try:
+            label = str(infer_updown_window_size(
+                getattr(pos, "window_size", "") or "",
+                opened_at=getattr(pos, "opened_at", None),
+                end_date=getattr(pos, "end_date", None),
+            )).lower()
+            val = by_win.get(label)
+            return float(val) if val is not None else base
+        except Exception:
+            return base
+
+    def _hold_ever_green(self, pos, peak_pnl_pct: float) -> bool:
+        """True if this position ever went green past the MFE arm — i.e. a recoverable
+        winner that dipped, not a wrong-side entry. Ghost-confirmed discriminator: 88% of
+        NEVER-green catastrophic-stopped trades resolve to $0; ever-green dippers recover."""
+        arm = float(getattr(self, "_hold_never_green_mfe_arm", 0.08) or 0.0)
+        return float(peak_pnl_pct or 0.0) >= arm
+
+    def _hold_stop_pct_for(self, pos, base_cat_pct: float, peak_pnl_pct: float):
+        """Loss fraction at which to cut this hold position, or None to ride. MFE-conditional
+        (2026-08-09, ghost-confirmed — SUPERSEDES the window axis):
+          * never went green -> cut SHALLOW at hold_never_green_stop_pct (~June -34%);
+          * went green then dipped -> deep -base_cat backstop only (ride otherwise).
+        Falls back to the legacy window axis when hold_mfe_conditional_stop_enabled is off."""
+        base = float(base_cat_pct or 0.0)
+        if not getattr(self, "_mfe_cond_stop_enabled", True):
+            # legacy window-conditional behavior
+            return base if (base > 0.0 and self._window_keeps_early_stop(pos)) else None
+        # The never-green shallow cut applies ONLY to non-favorite entries. A FAVORITE
+        # (entry >= _fav_derisk_min_entry) wins by settling to $1 WITHOUT ever going green —
+        # it routinely dips to 0.60-0.70 mid-window and still resolves 1.0 (settings.yaml
+        # favorite hard_stop_price note: a mark-stop there cut 3 winners for -$72). So
+        # "never green" is NOT a wrong-side signal for favorites; they keep the deep -cat
+        # backstop + presettle de-risk (their proven config). The ghost-confirmed never-green
+        # population was entirely mid/low-priced entries (0.27-0.61), zero favorites.
+        _fav_min = float(getattr(self, "_fav_derisk_min_entry", 0.82) or 0.82)
+        _is_fav = float(getattr(pos, "entry_price", 0.0) or 0.0) >= _fav_min
+        if not _is_fav and not self._hold_ever_green(pos, peak_pnl_pct):
+            ng = float(getattr(self, "_hold_never_green_stop_pct", 0.0) or 0.0)
+            if ng > 0.0:
+                # shallow cut; never deeper than the configured catastrophic backstop
+                return min(ng, base) if base > 0.0 else ng
+            return base if base > 0.0 else None
+        # 2026-08-11 REGRESSION FIX: an EVER-GREEN non-favorite must ride exactly as the
+        # window axis did BEFORE MFE-cond (5m/15m ride to resolution; only 1h keeps the
+        # -cat backstop). Returning a flat `base` here (the original MFE-cond behavior)
+        # ADDED a -55% catastrophic cut to ever-green 5m/15m positions that used to ride
+        # free — and those recover to a WIN 99% of the time (peak 8-30% held, n=296). That
+        # flat cut chopped the fresh-session eth-5m / xrp-15m trades (peak +15% -> cut -57%)
+        # right before they'd have recovered. The never-green shallow cut above is the ONLY
+        # intended change vs the window axis; ever-green defers to the window axis unchanged.
+        if _is_fav:
+            return base if base > 0.0 else None
+        return base if (base > 0.0 and self._window_keeps_early_stop(pos)) else None
 
     def _preopen_lag_secs(self, pos) -> float:
         """Seconds between entry and the window OPEN for pre-open entries.
@@ -750,6 +891,14 @@ class PositionExitManager:
         token_map = market_token_ids or {}
 
         for pos_id, pos in active_positions.items():
+            # 2026-08-11 (Codex NO-GO fix): _hold_policy_applied is sticky — set only in a
+            # few hold branches and never reset — so a later exit (updown_expired,
+            # take_profit_*, etc.) could log a STALE tag from a prior suppressed tick. Clear
+            # it at the top of every per-position evaluation so the tag on each closed row
+            # reflects THIS exit only. (The never-green measurement was already safe via the
+            # reason=="hold_catastrophic_stop" co-filter, but this keeps ALL rows honest.)
+            if getattr(pos, "_hold_policy_applied", None) is not None:
+                setattr(pos, "_hold_policy_applied", None)
             opened_at = pos.opened_at
             tzinfo = getattr(opened_at, "tzinfo", None)
             now = datetime.now(tzinfo) if tzinfo is not None else datetime.now()
@@ -802,6 +951,31 @@ class PositionExitManager:
                 setattr(pos, "peak_token_price", peak_token_price)
             peak_pnl_pct = (
                 (peak_token_price - pos.entry_price) / pos.entry_price
+                if pos.entry_price > 0
+                else 0.0
+            )
+            # 2026-08-11 (Codex NO-GO fix for tp_giveback): peak_token_price is a running
+            # max updated from a SINGLE accepted mark — one junk high mark inside the
+            # plausible band permanently corrupts it, and a fire-confirm can't help because
+            # the corrupted peak stays high every subsequent tick. So the give-back trail
+            # arms/fires off a CONFIRMED peak = the SECOND-highest token mark seen (top1 =
+            # highest, top2 = highest from a *different* tick). A one-tick spike becomes
+            # top1 only; top2 stays the real sustained peak. A genuine walk-down (the BNB
+            # +108%/+72% give-backs) climbs through many marks so top2 ~= top1 and the trail
+            # fires correctly. Confirmed-peak is used ONLY by the give-back trail; the raw
+            # peak_pnl_pct still drives MFE telemetry + the never-green discriminator.
+            _tpgb_t1 = float(getattr(pos, "_tpgb_top1_token", 0.0) or 0.0)
+            _tpgb_t2 = float(getattr(pos, "_tpgb_top2_token", 0.0) or 0.0)
+            if current_token_price > _tpgb_t1:
+                _tpgb_t2 = _tpgb_t1  # old top1 was seen on a prior tick => now confirmed as top2
+                _tpgb_t1 = current_token_price
+                setattr(pos, "_tpgb_top1_token", _tpgb_t1)
+                setattr(pos, "_tpgb_top2_token", _tpgb_t2)
+            elif current_token_price > _tpgb_t2:
+                _tpgb_t2 = current_token_price
+                setattr(pos, "_tpgb_top2_token", _tpgb_t2)
+            tpgb_confirmed_peak_pct = (
+                (_tpgb_t2 - pos.entry_price) / pos.entry_price
                 if pos.entry_price > 0
                 else 0.0
             )
@@ -1170,11 +1344,42 @@ class PositionExitManager:
                     # 0.20 => banks at >= +10% (still green). NOT gated by the executable-net guard (a
                     # retracing winner should exit even into a thinning book — realistic_paper_fills models
                     # the slippage).
+                    # 2026-08-11: arm/fire off the CONFIRMED peak (2nd-highest mark), not the
+                    # raw running-max — a single junk high mark can't create a fake peak that
+                    # cuts a still-climbing runner (Codex NO-GO fix). tpgb_confirmed_peak_pct
+                    # ~= peak_pnl_pct for a real sustained peak (the give-backs we target).
                     self._tp_giveback_enabled
-                    and peak_pnl_pct >= self._tp_giveback_arm_pct
-                    and pnl_pct <= (peak_pnl_pct - self._tp_giveback_retrace_pct)
+                    and tpgb_confirmed_peak_pct >= self._tp_giveback_arm_pct
+                    and pnl_pct <= (tpgb_confirmed_peak_pct - self._tpgb_retrace_for(pos))
+                    # 2026-08-11 (Codex NO-GO fix #2): only BANK GREEN. If an ever-green
+                    # position GAPPED straight past catastrophic (peak +30% -> -60% in one
+                    # tick), pnl_pct <= peak-retrace is still true at -60% and giveback would
+                    # PREEMPT hold_catastrophic_stop, mislabeling a catastrophic loss as a TP.
+                    # Require the exit to still be in profit so the give-back only ever banks
+                    # a reversing WINNER; a gap into the red is left to the catastrophic stop.
+                    and pnl_pct > 0.0
                 ):
                     reason = "take_profit_giveback"
+                    # 2026-08-12 GIVE-BACK TELEMETRY. The surrendered peak is invisible in
+                    # the trade row today (only the realized pct lands), so the leak had to
+                    # be reconstructed by hand. Emit peak / effective retrace / THEORETICAL
+                    # trigger vs the mark we actually fired at: the delta between them IS the
+                    # gap-through, which Codex flagged as possibly dominating the economics.
+                    try:
+                        _tpgb_r = self._tpgb_retrace_for(pos)
+                        _tpgb_ep = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                        logger.info(
+                            "TPGB_EXIT market=%s peak_pct=%.3f retrace=%.3f trigger_pct=%.3f "
+                            "fired_pct=%.3f surrendered_pct=%.3f trigger_px=%.4f entry_px=%.4f",
+                            getattr(pos, "market_id", "?"), tpgb_confirmed_peak_pct, _tpgb_r,
+                            tpgb_confirmed_peak_pct - _tpgb_r, pnl_pct,
+                            tpgb_confirmed_peak_pct - pnl_pct,
+                            _tpgb_ep * (1.0 + tpgb_confirmed_peak_pct - _tpgb_r), _tpgb_ep,
+                        )
+                        setattr(pos, "_tpgb_peak_pct", tpgb_confirmed_peak_pct)
+                        setattr(pos, "_tpgb_retrace_used", _tpgb_r)
+                    except Exception:
+                        pass
                 elif _tp_mark_ready and _tp_net_ok:
                     reason = "take_profit"
                 elif (
@@ -1456,9 +1661,22 @@ class PositionExitManager:
                         _lane_stop * 100.0, pos.market_id, pnl_pct * 100.0, _cat * 100.0,
                     )
                     # leave reason == "updown_stop_loss": the lane's % stop fires at the floor.
-                elif _cat > 0.0 and pnl_pct <= -_cat:
-                    setattr(pos, "_hold_policy_applied", "catastrophic_stop")
+                elif (
+                    _cat > 0.0
+                    and (_eff_cat := self._hold_stop_pct_for(pos, _cat, peak_pnl_pct)) is not None
+                    and pnl_pct <= -_eff_cat
+                ):
+                    _shallow = _eff_cat < _cat - 1e-9
+                    setattr(pos, "_hold_policy_applied",
+                            "never_green_stop" if _shallow else "catastrophic_stop")
                     reason = "hold_catastrophic_stop"
+                    if _shallow:
+                        logger.info(
+                            "HOLD NEVER-GREEN STOP: %s never went green (peak=%.1f%%) — cutting at "
+                            "-%.0f%% (pnl=%.1f%%) instead of riding to -%.0f%% catastrophic",
+                            pos.market_id, peak_pnl_pct * 100.0, _eff_cat * 100.0,
+                            pnl_pct * 100.0, _cat * 100.0,
+                        )
                 else:
                     logger.info(
                         "HOLD-TO-RESOLUTION: suppressed premature '%s' on %s (pnl=%.1f%%) — riding to resolution",
@@ -1483,13 +1701,17 @@ class PositionExitManager:
                 and reason is None
             ):
                 _cat_ind = float(getattr(self, "_hold_catastrophic_stop_pct", 0.0) or 0.0)
-                if _cat_ind > 0.0 and pnl_pct <= -_cat_ind:
-                    setattr(pos, "_hold_policy_applied", "catastrophic_stop")
+                _eff_cat_ind = self._hold_stop_pct_for(pos, _cat_ind, peak_pnl_pct)
+                if _cat_ind > 0.0 and _eff_cat_ind is not None and pnl_pct <= -_eff_cat_ind:
+                    _shallow = _eff_cat_ind < _cat_ind - 1e-9
+                    setattr(pos, "_hold_policy_applied",
+                            "never_green_stop" if _shallow else "catastrophic_stop")
                     reason = "hold_catastrophic_stop"
                     logger.info(
-                        "HOLD CATASTROPHIC-STOP (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% "
+                        "HOLD %s (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% peak=%.1f%% "
                         "— cutting loser (was riding to -100%%)",
-                        pos.market_id, pnl_pct * 100.0, _cat_ind * 100.0,
+                        "NEVER-GREEN STOP" if _shallow else "CATASTROPHIC-STOP",
+                        pos.market_id, pnl_pct * 100.0, _eff_cat_ind * 100.0, peak_pnl_pct * 100.0,
                     )
 
             # 2026-08-08 FAVORITE CONTINUOUS HARD-STOP (see __init__). Fires BEFORE the presettle
@@ -1503,6 +1725,7 @@ class PositionExitManager:
                 and reason is None
                 and float(getattr(self, "_fav_hard_stop_price", 0.0) or 0.0) > 0.0
                 and float(getattr(pos, "entry_price", 0.0) or 0.0) >= float(getattr(self, "_fav_derisk_min_entry", 0.82))
+                and self._window_keeps_early_stop(pos)
             ):
                 _hs_entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
                 _hs_mark = _hs_entry * (1.0 + pnl_pct)
@@ -1639,6 +1862,12 @@ class PositionExitManager:
                     # qualifying tick — which is exactly the execution gap the sim assumed
                     # away and where the previous 3 give-back attempts died.
                     "take_profit_late",
+                    # 2026-08-09 (Codex HIGH on the giveback enable): the give-back trailing TP
+                    # banks a REVERSING winner on a retrace from peak — it MUST cross the bid NOW
+                    # (FAK) like take_profit/take_profit_late. Left non-marketable it would rest a
+                    # GTC/maker limit and hand back the very gains this exit exists to protect,
+                    # exactly the failure the give-back TP was built to fix.
+                    "take_profit_giveback",
                     # 2026-07-29 (Codex hold-fix review): the catastrophic stop is the ONLY
                     # exit left on a hold lane — it fires on a deep drawdown and must cross
                     # NOW (FAK), not rest as a GTC limit that hands back more.
@@ -1787,6 +2016,20 @@ class PositionExitManager:
                     _cfg_rate = float(self._crypto_updown_15m_taker_fee_rate or 0.0)
                     if _cfg_rate > 0:
                         _fee_rate = min(_fee_rate, _cfg_rate)
+                    # 2026-08-08 MAKER-FIRST FEE WEIGHTING (#1, see __init__). Codex-revised:
+                    # (1) PAPER-ONLY (self._paper_mode) so LIVE (dry_run=false) bankroll/journal
+                    #     accounting is byte-for-byte unchanged.
+                    # (2) ENTRY LEG ONLY. Live entries on 15m/1h ALWAYS route maker-first
+                    #     (entry_mode: hybrid), so the entry-side taker fee is systematically
+                    #     over-charged by the maker-fill share. The EXIT leg is left at FULL
+                    #     taker: live only routes NON-urgent exits maker-first (stops/TP/time/
+                    #     pre-resolution stay FAK/taker), so weighting all hybrid exits would
+                    #     under-charge the taker exits — full-taker exit is the safe, conservative
+                    #     choice. rate 0.0 (or non-15m/1h, or live) => factor 1.0 => old behavior.
+                    _maker_factor = 1.0
+                    _mfr = min(1.0, max(0.0, self._hybrid_maker_fill_rate))
+                    if self._paper_mode and _window in ("15m", "1h") and _mfr > 0.0:
+                        _maker_factor = 1.0 - _mfr
                     _exit_fee = polymarket_taker_fee_usdc(
                         pos.size,
                         exit_price,
@@ -1809,7 +2052,7 @@ class PositionExitManager:
                     # NOT a guessed constant. Until that rate is wired, leave the full
                     # taker fee on both legs and read 15m/1h paper fee as an upper bound.
                     _entry_fee = (
-                        polymarket_taker_fee_usdc(pos.size, pos.entry_price, _fee_rate)
+                        polymarket_taker_fee_usdc(pos.size, pos.entry_price, _fee_rate) * _maker_factor
                         if self._entry_taker
                         else 0.0
                     )

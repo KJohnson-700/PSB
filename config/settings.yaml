@@ -470,6 +470,10 @@ trading:
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
     tp_giveback_enabled: true   # 2026-08-12 EMERGENCY RE-ENABLE after clean baseline failure: since 20260811_2059, losers with MFE>=30% totaled -$131.71; BTC 15m/1h alone repeatedly went +50% to +350% MFE then closed red/zero. The win-rate problem is partly an exit-conversion problem, not just entry selection. Restart-class: restart paper bot for this to take effect.
+    tp_giveback_arm_pct: 0.30       # 2026-08-12 made EXPLICIT — was running on the code default, invisible in config.
+    tp_giveback_retrace_pct: 0.20   # GLOBAL default (5m/15m). Codex NO-GO on tightening this globally: at 0.42-0.47 entries a 10pt retrace is only 4-5c of token price, plausibly inside normal intra-window noise, and there is no tick path proving 5m/15m winners didn't wobble that much while climbing. Do NOT tighten a window without its OWN evidence.
+    tp_giveback_retrace_pct_by_window:
+      1h: 0.15                      # 2026-08-12 PER-LANE form Codex sanctioned instead of the global cut. Session test_20260812_154419: EVERY winner exited take_profit_giveback surrendering 24-42pt of peak, and 1h ran furthest / bled most (bnb 1h +64.3%->+40.5%; xrp 1h +61.9%->+20.2%; sol 1h +38.6%->+12.5%; $19.45 peak surrendered vs a -$13.36 session). Matches the DURABLE prior finding "1h give-back = time-gated TP is the fix" — standing evidence, not a 5-trade hunch. Expected to HELP, not fix: fills still land 3-10c BELOW the trigger (xrp trigger 0.596 -> filled 0.500) and that gap-through is a separate defect, now instrumented via the TPGB_EXIT log line.
   execution_fees:
     enabled: true
     crypto_updown_15m_taker_fee_rate: 0.07
