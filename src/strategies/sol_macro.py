@@ -2011,7 +2011,18 @@ class SolMacroStrategy:
 
         aligned_min = max(0.0, win_min - expansion_min)
         expanded_upper = win_max + expansion_min
-        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+        # 2026-08-12 PER-TF hard cap (was a single strategy-wide scalar, so "15 means 15"
+        # could not be expressed for 15m without also clamping 5m/1h). Resolution order is
+        # by_tf.<tf> -> defaults -> top-level -> 0.0, so an existing top-level value keeps
+        # working byte-identically. PURPOSE: auto-align expands the upper bound by
+        # max(scan_cadence/2, max_expand_min) + jitter (~4.2min today), which pushes 15m
+        # entries out to ~19min and 5m entries out to ~8-9min — i.e. BEFORE the window
+        # opens. Pre-window entries measured n=1752 net -$1371.69 (ROI -6.80%), negative in
+        # BOTH eras, barrier-normalized TP-rate 8.45pt below driftless-fair (z=-6.37): the
+        # single largest structural defect in the book. Direction is no worse on these; the
+        # damage is sitting through a full window of variance with a near stop attached.
+        # Set per-tf to the WINDOW LENGTH (5m->5, 15m->15, 1h->60) so the cap means it.
+        hard_cap = float(self._tf_cfg(tf, "entry_window_hard_cap_mins_left", 0.0) or 0.0)
         aligned_max = min(expanded_upper, hard_cap) if hard_cap > 0 else expanded_upper
         if aligned_max <= aligned_min:
             return win_min, win_max

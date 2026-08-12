@@ -1273,7 +1273,12 @@ class BitcoinStrategy:
         expanded_upper = win_max + expansion_min
         # Do not cap expanded_upper by a fixed 15m/6m candle — configs above 15 were
         # silently ignored (early-listed Polymarket contracts often report mins_left > 15).
-        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+        # 2026-08-12 PER-TF hard cap — mirrors sol_macro._resolve_entry_window_bounds.
+        # by_tf.<tf> -> defaults -> top-level -> 0.0, so an existing top-level value is
+        # unchanged. Closes the pre-window hole: auto-align expands the upper bound ~4.2min,
+        # pushing 15m entries to ~19min and 5m to ~8-9min, i.e. before the window opens.
+        # Pre-window cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair.
+        hard_cap = float(self._tf_cfg(tf, "entry_window_hard_cap_mins_left", 0.0) or 0.0)
         aligned_max = min(expanded_upper, hard_cap) if hard_cap > 0 else expanded_upper
         if aligned_max <= aligned_min:
             return win_min, win_max

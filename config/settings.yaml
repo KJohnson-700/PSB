@@ -677,14 +677,17 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.08
         entry_window_min: 0.5
         entry_window_max: 5.5
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.06
         entry_window_min: 2.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 19): entry_window_max = MAX minutes-to-expiry allowed at entry. 19 let the bot enter a 15m market 19min (~0.3h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 59->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
@@ -937,16 +940,19 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.085
         min_edge_buy_no: 0.05
         entry_window_min: 0.0
         entry_window_max: 4.0
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.06
         min_edge_buy_no: 0.06
         entry_window_min: 1.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 135): entry_window_max = MAX minutes-to-expiry allowed at entry. 135 let the bot enter a 15m market 135min (~2.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
@@ -1167,14 +1173,17 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.1
         entry_window_min: 0.5
         entry_window_max: 4.0
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 120): entry_window_max = MAX minutes-to-expiry allowed at entry. 120 let the bot enter a 15m market 120min (~2.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
@@ -1447,16 +1456,19 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.07
         entry_window_min: 0.0
         entry_window_max: 5.5
         min_est_prob_conviction_buy_yes: 0
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.08
         min_edge_buy_no: 0.07
         entry_window_min: 2.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 36): entry_window_max = MAX minutes-to-expiry allowed at entry. 36 let the bot enter a 15m market 36min (~0.6h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.0
         entry_window_min: 1.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
@@ -1682,16 +1694,19 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.085
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.085
         min_edge_buy_no: 0.5
         min_est_prob_conviction_buy_yes: 0.6
         entry_window_min: 2.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
@@ -1943,14 +1958,17 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.085
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.04
         entry_window_min: 2.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 32): entry_window_max = MAX minutes-to-expiry allowed at entry. 32 let the bot enter a 15m market 32min (~0.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
@@ -2161,18 +2179,21 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
+        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.085
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         min_est_prob_conviction: 0.52
       15m:
+        entry_window_hard_cap_mins_left: 15.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.04
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 15.0  # 2026-08-12 ENTRY-TIMING FIX (was 150): entry_window_max = MAX minutes-to-expiry allowed at entry. 150 let the bot enter a 15m market 150min (~2.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
         min_est_prob_conviction: 0.52
       1h:
+        entry_window_hard_cap_mins_left: 60.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "1h max" leaked into pre-window entries. 1h window = 60min; >60 is PRE-window (inert today, entry_window_max 15 already binds). Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
