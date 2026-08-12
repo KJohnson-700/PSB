@@ -2308,7 +2308,30 @@ class CLOBClient:
                 "asks": asks,
             }
         except Exception as e:
-            logger.warning("[fetch_order_book_snapshot] %s", e)
+            # 2026-08-12 BOOK-FAIL DIAGNOSTIC. This site logged ONLY the exception, so 3,837
+            # failures in one session were unattributable: we could not tell a dead/rotated
+            # token from a broken client. Proven NOT network and NOT concurrency (64 parallel
+            # get_order_book calls from this host: 40/40 OK). Log the token, the classified
+            # cause, and the client host so the failing IDs can be replayed by hand.
+            _tid = str(token_id or "")
+            _msg = str(e)
+            if "No orderbook" in _msg or "404" in _msg:
+                _cause = "NO_BOOK_404"          # token real but has no book (rotated/expired)
+            elif "Request exception" in _msg:
+                _cause = "REQ_EXC"              # connection-level; the 3,837-error signature
+            elif "timeout" in _msg.lower():
+                _cause = "TIMEOUT"
+            else:
+                _cause = type(e).__name__
+            try:
+                _host = getattr(pc, "host", None) or getattr(pc, "_host", None)
+            except Exception:
+                _host = None
+            logger.warning(
+                "[fetch_order_book_snapshot] cause=%s token_id=%s tid_len=%d host=%s err=%s",
+                _cause, (_tid[:24] + "..." if len(_tid) > 24 else _tid or "<EMPTY>"),
+                len(_tid), _host, _msg[:200],
+            )
             return None
 
     async def fetch_taker_fee_rate(self, token_id: str) -> Optional[float]:
@@ -2542,6 +2565,29 @@ class RiskManager:
         self.emergency_stopped = False
         self.active_positions: Dict[str, Position] = {}
 
+    def reload_from_config(self, config: Dict[str, Any]) -> None:
+        """Refresh live-safe risk LIMITS without a restart (Codex 2026-08-08 fix).
+
+        The bot's config hot-reload deep-merges settings.yaml into the shared dict; call
+        this from _rebuild_runtime_config_dependents so editing ANY risk.* limit actually
+        changes enforcement — not just max_concurrent_positions. Without it, whitelisting
+        `risk` for hot-reload was a SAFETY TRAP: a lowered daily_loss_limit/emergency_stop_loss
+        would log as 'applied' while the frozen __init__ value kept enforcing. Only refreshes
+        config-derived LIMITS; runtime state (daily_trades, bankroll, active_positions,
+        emergency_stopped, last_reset) is preserved across the reload.
+        """
+        self.config = config
+        risk_config = config.get("risk", {}) or {}
+        self.max_concurrent_positions = risk_config.get(
+            "max_concurrent_positions", self.max_concurrent_positions
+        )
+        self.max_trades_per_day = risk_config.get("max_trades_per_day", self.max_trades_per_day)
+        self.paper_max_trades_per_day = risk_config.get(
+            "paper_max_trades_per_day", self.max_trades_per_day
+        )
+        self.daily_loss_limit = risk_config.get("daily_loss_limit", self.daily_loss_limit)
+        self.emergency_stop_loss = risk_config.get("emergency_stop_loss", self.emergency_stop_loss)
+
     def effective_max_trades_per_day(self) -> int:
         if self.config.get("trading", {}).get("dry_run", True):
             return int(self.paper_max_trades_per_day)
@@ -2562,7 +2608,20 @@ class RiskManager:
         if self.daily_trades >= self.effective_max_trades_per_day():
             return False, "Daily trade limit reached"
 
-        if len(self.active_positions) >= self.max_concurrent_positions:
+        # 2026-08-08 HOT-RELOADABLE concurrency cap (operator). Read the limit LIVE from
+        # self.config (the shared bot config, deep-merged in place on config reload) instead of
+        # the __init__-frozen self.max_concurrent_positions, so raising/lowering
+        # risk.max_concurrent_positions in settings.yaml takes effect WITHOUT a restart. Falls
+        # back to the frozen value if the key is missing/unparseable. (Requires "risk" in
+        # _HOT_RELOAD_TOP_LEVEL_KEYS so the file-watch passes the section through.)
+        _max_conc = (self.config.get("risk", {}) or {}).get(
+            "max_concurrent_positions", self.max_concurrent_positions
+        )
+        try:
+            _max_conc = int(_max_conc)
+        except (TypeError, ValueError):
+            _max_conc = int(self.max_concurrent_positions)
+        if len(self.active_positions) >= _max_conc:
             return False, "Max concurrent positions reached"
         if strategy:
             strategy_cfg = (
@@ -2654,6 +2713,40 @@ class RiskManager:
                     0.0,
                     f"max_same_side_positions: {_same_side_n} {_want_out} open >= cap {_max_same_side}",
                 )
+
+        # 1.6 SAME-SIDE DOLLAR-NOTIONAL CAP — DOWNSIZE-TO-FIT (2026-08-10, operator GO, Codex-verified).
+        # The COUNT cap above blocks whole trades; this instead caps total same-outcome open NOTIONAL and
+        # SHRINKS the incoming stake to fit (keeps participation, limits correlated $). Rationale: crypto
+        # up/down lanes are ~90% correlated, so N same-side positions ≈ ONE leveraged directional bet;
+        # session-level corr(peak same-side notional, maxDD) ≈ 0.7 (12-session replay). ⚠️ This is DRAWDOWN
+        # INSURANCE, NOT an EV enhancer — Codex replay (linear downsize scaling) showed it ~halves the worst
+        # session (−$141→~−$91 @ $125) but trims the near-breakeven net slightly negative (it shrinks winning
+        # clusters too). Config exposure.max_same_side_notional_usd (0 = off). exposure is hot-reloadable, so
+        # the $ VALUE tunes live; this CODE path is restart-class. See project_same_side_concurrency_is_edge_not_leak_2026_08_10.
+        _max_ss_notional = float(_exp_cfg.get("max_same_side_notional_usd", 0.0) or 0.0)
+        if _max_ss_notional > 0 and action in ("BUY_YES", "BUY_NO") and requested_size > 0:
+            _want_out = "YES" if action == "BUY_YES" else "NO"
+            _ss_open = sum(
+                self.position_entry_notional(p)
+                for p in self.active_positions.values()
+                if str(getattr(p, "outcome", "")).upper() == _want_out
+            )
+            _ss_room = _max_ss_notional - _ss_open
+            # floor: if remaining room is below a tradable minimum, block rather than place dust.
+            # min_live_notional ~11; use a $10 floor (NOT exposure.min_trade_usd which is 1.0 = dust).
+            _ss_min_floor = float(_exp_cfg.get("same_side_notional_min_floor_usd", 10.0) or 10.0)
+            if _ss_room < _ss_min_floor:
+                return (
+                    False,
+                    0.0,
+                    f"max_same_side_notional: {_ss_open:.0f} {_want_out} open >= cap {_max_ss_notional:.0f} (room {_ss_room:.0f} < {_ss_min_floor:.0f})",
+                )
+            if requested_size > _ss_room:
+                logger.info(
+                    "SAME-SIDE $-CAP downsize: %s req %.2f -> %.2f (%s open %.0f, cap %.0f)",
+                    action, requested_size, _ss_room, _want_out, _ss_open, _max_ss_notional,
+                )
+                requested_size = _ss_room  # downsize-to-fit; flows into final_size below
 
         # 2. Check if we have budget left for this category
         current_exposure_dict = {t: 0.0 for t in caps_map.keys()}
