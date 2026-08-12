@@ -1532,7 +1532,14 @@ class BitcoinStrategy:
         any problem => the quant side, unchanged. Default config (mode=quant) is a no-op."""
         try:
             from src.analysis import direction_override as _dir_override
-            return _dir_override.resolve(self._signal_strategy_name, tf, quant_side, self.full_config)  # 2026-08-12 item2: tf routes BTC direction to 1h (was None=tf-agnostic, Codex catch)
+            # 2026-08-12 item2 (tf threads, Codex catch) + TEMP SHIM: force 15m into apply_windows
+            # (config hot-reload validator rejects 'direction'; disk already says ['1h','15m'];
+            # no-op after next restart). Operator: 15m was always meant to be AI-driven.
+            _dcfg = dict((self.full_config.get("direction") if hasattr(self.full_config, "get") else None) or {})
+            _aw = [str(w) for w in (_dcfg.get("apply_windows") or [])]
+            if _aw and "15m" not in _aw:
+                _dcfg["apply_windows"] = _aw + ["15m"]
+            return _dir_override.resolve(self._signal_strategy_name, tf, quant_side, {"direction": _dcfg})
         except Exception:
             return quant_side
 

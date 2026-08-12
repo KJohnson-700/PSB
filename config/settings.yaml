@@ -2346,7 +2346,7 @@ direction:
   override_file: data/runtime/claude_direction_override.json
   max_age_sec: 900       # override staleness belt (each entry may also carry its own ttl)
   override_when_quant_neutral: true    # CLAUDE-DRIVEN: my calls apply even where quant sat out
-  apply_windows: ['1h']    # 2026-08-12 (item 2) ROUTE DIRECTION TO 1h: AI override drives 1h ONLY (qwen_vision 50.6% clears fees at 1h; 5m/15m direction is fee-negative). 5m/15m fall through to native + the RSI-fade structural edge. Empty/absent => all windows (legacy).
+  apply_windows: ['1h', '15m']    # 2026-08-12 OPERATOR FIX: 15m WAS ALWAYS MEANT TO BE AI-DRIVEN TOO (operator directive; I mis-scoped item-2 to 1h-only). Session audit: 15m native = -$94 (35% WR, 80% of bleed) while qwen called the tape right all day. 5m stays native+RSI-fade (structural, +$7.55).
   min_conf: 0.0          # ignore overrides below this confidence
 # ── FAVORITE-LONGSHOT lane (08-07) ──────────────────────────────────────────
 # Structural price bet: buy the FAVORITE (our-side price >= floor) side-agnostic.

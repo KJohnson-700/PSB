@@ -1513,7 +1513,16 @@ class SolMacroStrategy:
         any problem => the quant side, unchanged. Default config (mode=quant) is a no-op."""
         try:
             from src.analysis import direction_override as _dir_override
-            return _dir_override.resolve(self._signal_strategy_name, tf, quant_side, self.full_config)
+            # 2026-08-12 TEMP SHIM (operator: 15m was ALWAYS meant to be AI-driven): the config
+            # hot-reload validator rejects the 'direction' key (config_merge ALLOWED_TOP_KEYS out
+            # of sync — fixed on disk, needs restart), so the running bot is stuck on
+            # apply_windows=['1h'] while disk says ['1h','15m']. Force 15m here (strategies ARE
+            # hot-reloadable). Matches settings.yaml on disk; harmless no-op after next restart.
+            _dcfg = dict((self.full_config.get("direction") if hasattr(self.full_config, "get") else None) or {})
+            _aw = [str(w) for w in (_dcfg.get("apply_windows") or [])]
+            if _aw and "15m" not in _aw:
+                _dcfg["apply_windows"] = _aw + ["15m"]
+            return _dir_override.resolve(self._signal_strategy_name, tf, quant_side, {"direction": _dcfg})
         except Exception:
             return quant_side
 

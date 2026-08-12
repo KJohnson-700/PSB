@@ -15,6 +15,12 @@ ALLOWED_TOP_KEYS = frozenset(
         "notifications",
         "ai",
         "polymarket",
+        # 2026-08-12 VALIDATOR SYNC: these two are in main._HOT_RELOAD_TOP_LEVEL_KEYS but were
+        # missing here, so their hot-reloads always failed ("Unknown config key") — the bug that
+        # made lane_management restart-class and silently kept direction.apply_windows at ['1h']
+        # in the running bot while disk said ['1h','15m'] (operator-directed 15m AI routing).
+        "direction",
+        "lane_management",
     }
 )
 
