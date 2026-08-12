@@ -3760,6 +3760,21 @@ class BitcoinStrategy:
                     action,
                 )
                 continue
+            # 2026-08-12 BLEED-HOUR SIT-OUT (operator GO) — mirrors sol_macro. Data-driven, not a
+            # fixed schedule: all-history realized by entry hour (PT) shows 17:00-19:00 as the
+            # concentrated bleed (-$751; 19:00 PT alone -$357 @36%WR). Config-driven +
+            # hot-reloadable (risk.blocked_pt_hours); empty/absent => OFF, fail-open.
+            if is_updown:
+                try:
+                    _bh = (self.full_config.get("risk", {}) or {}).get("blocked_pt_hours") or []
+                    if _bh:
+                        import datetime as _dtm
+                        _pt = (_dtm.datetime.now(_dtm.timezone.utc).hour - 7) % 24
+                        if _pt in {int(h) for h in _bh}:
+                            _bump_skip("bleed_hour_sit_out")
+                            continue
+                except Exception:
+                    pass
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
                 log_window_reject(

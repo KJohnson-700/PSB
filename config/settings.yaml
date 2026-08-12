@@ -687,7 +687,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 1.0
-        entry_window_max: 59.0
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 59->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     min_edge_15m_neutral: 0.12
     neutral_15m_min_quant_confidence: 0.0
     neutral_15m_requires_shadow_portfolio: true
@@ -774,7 +774,7 @@ strategies:
             entry_price_min: 0.45
             entry_price_max: 0.6
             entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 59->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             min_edge: 0.09
@@ -782,7 +782,7 @@ strategies:
             entry_price_min: 0.45
             entry_price_max: 0.55
             entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 59->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     clear_edge_low: 0.2
     clear_edge_high: 0.8
@@ -949,7 +949,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -1082,14 +1082,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1177,7 +1177,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     min_edge_15m_when_ltf_unconfirmed: 0.06
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -1335,14 +1335,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.0
@@ -1459,7 +1459,7 @@ strategies:
       1h:
         min_edge: 0.0
         entry_window_min: 1.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: false
@@ -1576,14 +1576,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.15
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.15
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1695,7 +1695,7 @@ strategies:
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1847,14 +1847,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 30
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 150): entry_window_max = MAX minutes-to-expiry allowed at entry. 150 let the bot enter a 1h market 150min (~2.5h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             entry_price_min: 0.53
             min_edge: 0.02
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1953,7 +1953,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -2072,14 +2072,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 10.0
-            entry_window_max: 50
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 50->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -2175,7 +2175,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
         min_est_prob_conviction: 0.52
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
@@ -2300,14 +2300,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-08-12 ENTRY-TIMING FIX (was 360): entry_window_max = MAX minutes-to-expiry allowed at entry. 360 let the bot enter a 1h market 360min (~6.0h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 15.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -2516,6 +2516,12 @@ notifications:
   alert_on_status: false
   alert_on_error: true
 risk:
+  # 2026-08-12 BLEED-HOUR SIT-OUT (operator GO). Skip UP/DOWN entries during PT hours measured
+  # as the concentrated bleed across ALL history: 17:00 -$220, 18:00 -$174, 19:00 -$357 (36%WR)
+  # = -$751 combined, vs a flat-to-positive rest of the clock. NOT a fixed trading schedule —
+  # it is a measured per-hour sit-out; re-measure and shrink/drop it as the data moves.
+  # Empty list [] => OFF (fail-open). Hot-reloadable (risk is a hot-reload top-level key).
+  blocked_pt_hours: [17, 18, 19]
   favorite_lane_enabled: false   # 2026-08-10 KILL THE FAVORITE LANE (operator: revert to +869 winning config, which had NO favorite lane). Favorites 0.85+ = win-11%/lose-90% payoff-trap, b=0.13, need 88% WR, −$448 all-time. Under `risk` = HOT-RELOADABLE (no restart). Set true to re-enable. Read by sol_macro + bitcoin _favorite_lane_signals.
   rsi_fade:                # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED >coinflip edge, project_rsi_fade_edge_found_2026_08_10). Under `risk` so it's HOT-RELOADABLE => REVERT TRIGGER = flip enabled:false (no restart) if fade-WR < breakeven. Read by sol_macro._resolve_alt_bias_for_tf (shared by ALL alts + eth): fades the direction-lane side when RSI < rsi_below AND trend NOT fully-aligned (align-gate = regime safety; fading a strong aligned trend gets run over). Favorites bypass the resolver = UNAFFECTED. Measured: RSI<40 native 30%WR => FADE 69.6% (4 sessions, never <56%). rsi_above 101 = overbought-fade OFF (ship strongest zone first). side_source retagged *_rsi_fade for attribution/monitoring.
     enabled: false   # 2026-08-12 EMERGENCY CUT: current config still had RSI fade ON; clean baseline since 20260811_2059 shows rsi_fade families net -$68.85, led by BTC 15m rsi_fade -$54.38 and BNB 15m rsi_fade -$36.59. Hot-reloadable.
