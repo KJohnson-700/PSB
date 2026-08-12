@@ -86,7 +86,8 @@ from src.strategies.strategy_ai_context import (
     format_market_metadata,
 )
 from src.analysis.lane_tape_adapter import get_tape_admission_delta
-from src.analysis.tape_map import snapshot_and_log as _tape_map_snapshot
+from src.analysis.favorite_net_tracker import get_favorite_net
+from src.analysis.tape_map import snapshot_and_log as _tape_map_snapshot, latest_tape_state
 from src.analysis.tape_freshness import compute_freshness_penalty
 from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
@@ -452,6 +453,8 @@ class BitcoinStrategy:
         mom: Any = None,
         current: Optional[BTCDirectionDecision] = None,
         tf: str = "15m",
+        rsi_14: Optional[float] = None,
+        apply_fade: bool = False,
     ) -> BTCDirectionDecision:
         """Resolve BTC side in one compact path with explicit suppression rules."""
         htf_side = "LONG" if htf_bias == "BULLISH" else "SHORT" if htf_bias == "BEARISH" else allowed_side
@@ -632,6 +635,48 @@ class BitcoinStrategy:
                     if bool(self.config.get("btc_strong_4h_veto_fast_short_enabled", False)):
                         _suppressed = True
                         _suppress_reason = "btc_short_against_strong_4h_bull"
+
+        # 2026-08-10 RSI-GATED COINFLIP FADE (port of sol_macro _resolve_alt_bias_for_tf to BTC;
+        # see project_rsi_fade_edge_found_2026_08_10). In the coinflip band the momentum/native
+        # call is ANTI-predictive at RSI extremes: RSI<40 => native ~30% WR => FADE ~70%. Invert
+        # final_side when RSI is oversold (< rsi_below) / overbought (> rsi_above) AND the trend is
+        # NOT strongly aligned (align-gate: htf_side + momentum_side both agree with final_side =
+        # strong trend, fading it gets run over — the documented failure mode) AND the resolver did
+        # NOT already sit it out (_suppressed leaves the tape-aware guards untouched) AND the side
+        # isn't already a fade tag (no double-flip). Retag btc_{tf}_rsi_fade. Reads ta.rsi_14 (the
+        # journal `rsi` the edge was measured on, bitcoin.py:2159). Config risk.rsi_fade shared with
+        # the alts; hot-reloadable => REVERT = enabled:false. Fail-safe: disabled / RSI None =>
+        # byte-identical. UPDOWN-only (threshold markets never call this resolver).
+        # apply_fade is set True ONLY on the FINAL per-window resolution (5m re-resolves at its own
+        # call; 15m/1h re-resolve at theirs). The preliminary all-window resolve passes apply_fade
+        # False so the fade fires EXACTLY ONCE on the last resolution — never on a stale preliminary
+        # side that a later re-resolution would recompute (the 5m double-fade Codex flagged).
+        _rf = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
+        if (
+            apply_fade
+            and bool(_rf.get("enabled", False))
+            and final_side in ("LONG", "SHORT")
+            and not _suppressed
+            and "rsi_fade" not in (side_source or "")
+        ):
+            _rf_wins = _rf.get("windows")
+            _rf_win_ok = (_rf_wins is None) or (str(tf) in {str(w) for w in _rf_wins})
+            _btc_aligned = (final_side == htf_side) and (momentum_side == final_side)
+            _rf_rsi = None
+            if rsi_14 is not None:
+                try:
+                    _rf_rsi = float(rsi_14)
+                except (TypeError, ValueError):
+                    _rf_rsi = None
+            if _rf_win_ok and not _btc_aligned and _rf_rsi is not None:
+                _rf_below = float(_rf.get("rsi_below", 40.0) or 40.0)
+                _rf_above = float(_rf.get("rsi_above", 101.0) or 101.0)
+                if _rf_rsi < _rf_below or _rf_rsi > _rf_above:
+                    final_side = "SHORT" if final_side == "LONG" else "LONG"
+                    side_source = f"btc_{tf}_rsi_fade"
+                    conflict_type = "rsi_fade"
+                    resolver_path = f"{resolver_path}__rsi_fade"
+                    reason_parts.append(f"rsi_fade(rsi={_rf_rsi:.0f})")
 
         action, direction, effective_side = self._btc_action_for_side(final_side)
         return BTCDirectionDecision(
@@ -1464,7 +1509,7 @@ class BitcoinStrategy:
 
         return bias
 
-    def _bias_to_side(self, bias: str) -> Optional[str]:
+    def _bias_to_side(self, bias: str, tf: Optional[str] = None) -> Optional[str]:
         # Regime->side mapping for BTC. COUNTER-REGIME (fade) mode — 2026-06-22,
         # default OFF. When config fade_regime=true, invert so BTC fades the regime
         # (OOS ghost: momentum -EV, counter-regime +EV). Fail-safe: missing/false
@@ -1474,20 +1519,20 @@ class BitcoinStrategy:
         elif bias == "BEARISH":
             base = "SHORT"
         else:
-            return self._apply_direction_override(None)
+            return self._apply_direction_override(None, tf)
         if bool(self.config.get("fade_regime", False)):
             quant_side = "SHORT" if base == "LONG" else "LONG"
         else:
             quant_side = base
         # Direction-override seam (default quant; SHADOW unless direction.enforce=true).
-        return self._apply_direction_override(quant_side)
+        return self._apply_direction_override(quant_side, tf)
 
-    def _apply_direction_override(self, quant_side: Optional[str]) -> Optional[str]:
+    def _apply_direction_override(self, quant_side: Optional[str], tf: Optional[str] = None) -> Optional[str]:
         """Route the quant-resolved BTC side through the direction-override seam. Fail-safe:
         any problem => the quant side, unchanged. Default config (mode=quant) is a no-op."""
         try:
             from src.analysis import direction_override as _dir_override
-            return _dir_override.resolve(self._signal_strategy_name, None, quant_side, self.full_config)
+            return _dir_override.resolve(self._signal_strategy_name, tf, quant_side, self.full_config)  # 2026-08-12 item2: tf routes BTC direction to 1h (was None=tf-agnostic, Codex catch)
         except Exception:
             return quant_side
 
@@ -1650,7 +1695,7 @@ class BitcoinStrategy:
                     penalty += 0.03
                     side_source = f"btc_{tf}_vs_slower"
             return BTCBiasResolution(
-                allowed_side=self._bias_to_side(horizon_bias),
+                allowed_side=self._bias_to_side(horizon_bias, tf),
                 side_source=side_source,
                 horizon_tf=tf,
                 horizon_bias=horizon_bias,
@@ -1663,7 +1708,7 @@ class BitcoinStrategy:
             if slower_bias not in {"BULLISH", "BEARISH"}:
                 continue
             return BTCBiasResolution(
-                allowed_side=self._bias_to_side(slower_bias),
+                allowed_side=self._bias_to_side(slower_bias, tf),
                 side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
                 horizon_tf=tf,
                 horizon_bias=horizon_bias,
@@ -2317,6 +2362,8 @@ class BitcoinStrategy:
                     reason_parts=reason_parts,
                     mom=mom,
                     tf=_updown_tf,
+                    # preliminary resolve (all windows) — do NOT fade here; the per-window
+                    # FINAL resolve below applies the fade exactly once.
                 )
                 if direction_decision.conflict_type == "neutral_resolver":
                     self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
@@ -2355,7 +2402,10 @@ class BitcoinStrategy:
                     if bool(self.config.get("btc_window_delta_flip_1h", False))
                     else ("5m", "15m")
                 )
-                if _updown_tf in _wd_flip_windows:
+                # 2026-08-10: do NOT let window_delta_flip undo a deliberate RSI fade (mirrors the
+                # alt _fade_active guard) — both are intentional side inversions; the later one
+                # must not silently re-flip the earlier. side_source already carries btc_{tf}_rsi_fade.
+                if _updown_tf in _wd_flip_windows and "rsi_fade" not in (side_source or ""):
                     _btc_wd_flip = self._btc_window_delta_flip(
                         ta, _updown_tf, _eval_left, action
                     )
@@ -2623,6 +2673,11 @@ class BitcoinStrategy:
                         mom=mom,
                         current=direction_decision,
                         tf=_updown_tf,
+                        # FINAL per-window resolve — apply the RSI fade here (once). BTC top-level
+                        # ta.rsi_14 is 4H (btc_price_service); the measured coinflip-fade edge is on
+                        # 15m RSI (matches the alt sol.rsi_14 basis) => read ta.tf_15m.rsi_14.
+                        rsi_14=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                        apply_fade=True,
                     )
                     if direction_decision.conflict_type == "neutral_resolver":
                         self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
@@ -3155,6 +3210,11 @@ class BitcoinStrategy:
                         mom=mom,
                         current=direction_decision,
                         tf=_updown_tf,
+                        # FINAL per-window resolve — apply the RSI fade here (once). BTC top-level
+                        # ta.rsi_14 is 4H (btc_price_service); the measured coinflip-fade edge is on
+                        # 15m RSI (matches the alt sol.rsi_14 basis) => read ta.tf_15m.rsi_14.
+                        rsi_14=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                        apply_fade=True,
                     )
                     if direction_decision.conflict_type == "neutral_resolver":
                         self._log_neutral_resolver_shadow(direction_decision, market, yes_price, _updown_tf)
@@ -3799,11 +3859,17 @@ class BitcoinStrategy:
                 float(self._tf_cfg(_updown_tf, "min_est_prob_conviction_buy_yes", 0.0) or 0.0)
                 if is_updown else 0.0
             )
+            # 2026-08-10 RSI-FADE marker (port of sol_macro). Faded candidates bet AGAINST
+            # est_prob => the est_prob conviction floor + lane_min_edge must be exempted or the
+            # fade takes zero trades. Defined here (before the conviction gate) and reused at the
+            # min_edge exemption below. side_source carries the btc_{tf}_rsi_fade tag by now.
+            _is_rsi_fade = bool(side_source and "rsi_fade" in side_source)
             if (
                 is_updown
                 and action == "BUY_YES"
                 and _yes_conv_floor > 0.0
                 and float(estimated_prob) < _yes_conv_floor
+                and not _is_rsi_fade  # fade bets against est_prob => conviction floor N/A
             ):
                 _bump_skip("buy_yes_conviction_floor")
                 logger.info(
@@ -4221,6 +4287,21 @@ class BitcoinStrategy:
                     if edge < _probe_edge:
                         edge = _probe_edge
                     reason_parts.append("btc_5m_long_probe")
+            # 2026-08-10 RSI-FADE min-edge EXEMPTION (port of sol_macro; mirrors
+            # btc_1h_simple_long above). The faded side bets AGAINST est_prob, so the model
+            # edge is ~0/NEGATIVE by construction and lane_min_edge (+ the BUY_YES conviction
+            # floor) would reject ~100% of faded candidates. est_prob is unusable on the fade
+            # side => size on a flat fade edge (risk.rsi_fade.flat_edge, shared with alts).
+            # BTC has NO centered-price gate, so only min_edge + conviction need exempting.
+            # Reverts byte-identical when risk.rsi_fade.enabled:false (=> no *_rsi_fade tag).
+            # (_is_rsi_fade defined at the conviction floor above.)
+            if _is_rsi_fade:
+                _rf_cfg = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
+                _rf_flat_edge = float(_rf_cfg.get("flat_edge", 0.05) or 0.05)
+                effective_min_edge = 0.0
+                if edge < _rf_flat_edge:
+                    edge = _rf_flat_edge
+                reason_parts.append(f"rsi_fade_exempt({_rf_flat_edge:.3f})")
             if edge < effective_min_edge:
                 # (3) Flag bias/quant directional disagreement so we can isolate this cohort
                 # in analysis. True when raw_est is on the opposite side of 0.50 from the
@@ -4869,6 +4950,18 @@ class BitcoinStrategy:
                 win_probability = (
                     estimated_prob if action == "BUY_YES" else (1.0 - estimated_prob)
                 )
+                # 2026-08-10 RSI-FADE Kelly fix (Codex): a faded side bets AGAINST estimated_prob,
+                # so win_probability from estimated_prob is the WRONG-side prob => true-Kelly returns
+                # raw_size<=0 and the trade is skipped even after the min-edge exemption. Reconstruct
+                # win_prob from our contract price + the flat fade edge (mirrors sol_macro:7121
+                # our_price+edge). entry_price is already our-side price (yes for BUY_YES, 1-yes for
+                # BUY_NO, set just above). Sizing policy, not a fabricated model prob.
+                if _is_rsi_fade:
+                    _rf_fe = float(
+                        ((self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}).get("flat_edge", 0.05)
+                        or 0.05
+                    )
+                    win_probability = max(0.02, min(0.98, float(entry_price) + _rf_fe))
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name,
@@ -5255,9 +5348,21 @@ class BitcoinStrategy:
         """
         try:
             cfg = self.full_config.get("favorite_lane", {}) or {}
+            # 2026-08-10 HOT-RELOADABLE KILL (operator: revert to +869 geometry = NO favorite lane;
+            # win-11%/lose-90% payoff-trap, b=0.13). risk.* IS hot-reloadable so this flips the
+            # favorite lane off WITHOUT a restart. Default True = no behavior change when unset.
+            if not bool(self.full_config.get("risk", {}).get("favorite_lane_enabled", True)):
+                return []
             if not bool(cfg.get("enabled", False)):
                 return []
             floor = float(cfg.get("floor", 0.85))
+            # 2026-08-10 PER-WINDOW FLOOR (operator "improve if data offers a filter, else cut").
+            # 1h favorites split by entry band (n=29, 8 sess): 0.85-0.89 = 50% WR net -$65 (a 1h
+            # favorite has a full HOUR to cross back through strike, so 0.86 is really a coin-flip),
+            # but 0.90-0.94 = 72.7% WR net +$3.88 (clears the 68% breakeven). 15m favorites win 87%
+            # at 0.85 (net +$175 — untouched). Fix = raise ONLY 1h's floor. Absent => uses `floor`
+            # (byte-identical). window_floors: {1h: 0.90}.
+            _window_floors = cfg.get("window_floors", {}) or {}
             # price_max: skip DEEP favorites (pennies-per-win vs ~full-stake settlement gap).
             # See sol_macro._favorite_lane_signals. 0 / >=1.0 => no cap.
             price_max = float(cfg.get("price_max", 1.0) or 1.0)
@@ -5281,7 +5386,8 @@ class BitcoinStrategy:
                         continue
                     yes_price = float(yes_price)
                     fav_price = max(yes_price, 1.0 - yes_price)
-                    if fav_price < floor:
+                    _eff_floor = float(_window_floors.get(tf, floor))
+                    if fav_price < _eff_floor:
                         continue
                     if fav_price > price_max:
                         continue  # deep favorite: pennies-per-win vs ~full-stake settlement gap
@@ -5331,12 +5437,59 @@ class BitcoinStrategy:
                                 fav_action, tf, direction, _tape_delta, _sit,
                             )
                             continue
+                    # 2026-08-10 FAVORITE-SCOPED REALIZED-NET SIT-OUT (operator GO; parity with
+                    # sol_macro). tape_sit_out_delta above is fed by lane_tape_adapter, whose key
+                    # mixes favorite + band closes and whose MFE/green signal can't see the favorite
+                    # PAYOFF-TRAP (high-WR, negative-NET). This reads the FAVORITE-ONLY rolling avg
+                    # realized net per (asset,window,side) and sits the side out while its recent
+                    # favorites bleed. Self-flips on recovery. Fail-OPEN: None => admit. Off when unset.
+                    _fn_floor = cfg.get("fav_net_sit_out_avg", None)
+                    if _fn_floor is not None:
+                        _fav_net = get_favorite_net(self._signal_strategy_name, tf, direction)
+                        if _fav_net is not None and _fav_net <= float(_fn_floor):
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s side=%s: favorite avg net "
+                                "%.2f <= %.2f (lane bleeding; self-flips on recovery)",
+                                fav_action, tf, direction, _fav_net, float(_fn_floor),
+                            )
+                            continue
+                    # 2026-08-09 #1 SIT-OUT TREND-ALIGNED FAVORITES (operator GO, shadow-first). Scope+
+                    # timing (both eras): favorites bet WITH a trending tape BLEED (-$365 aligned) while
+                    # FLAT-tape (+$73) and against-trend (+$48) WIN. respect_ai_direction was steering INTO
+                    # the aligned bleed. Gate: tape trending (dir != FLAT) AND favorite agrees (aligned) =>
+                    # sit out (live) / log-only (shadow). Self-flips with the tape. Fail-safe. Mode: off
+                    # (default, byte-identical) | shadow | live.
+                    _sta_mode = str(cfg.get("sit_out_trend_aligned_mode", "off") or "off").lower()
+                    if _sta_mode in ("shadow", "live"):
+                        try:
+                            _tstate = latest_tape_state(self._signal_strategy_name) or {}
+                            _tape_dir = str(_tstate.get("direction") or "FLAT").upper()
+                            if _tape_dir in ("UP", "DOWN") and direction == _tape_dir:
+                                logger.info(
+                                    "  [favorite-lane] TREND-ALIGNED %s tf=%s dir=%s tape=%s (%s)",
+                                    fav_action, tf, direction, _tape_dir,
+                                    "SIT-OUT" if _sta_mode == "live" else "shadow-would-sit-out")
+                                if _sta_mode == "live":
+                                    continue
+                        except Exception:
+                            pass
+                    # 2026-08-09 SIZE-TAPER by entry price (#2, operator GO). Scope (144 favs, 10 sess):
+                    # 0.85-0.88 band +$72 (68% WR) but 0.88-0.91 = -$111 (71% WR) and 0.91-0.93 = -$52
+                    # (80% WR) — high WR yet negative: the ~0.12 payoff can't cover the losers. Taper stake
+                    # toward the thin-payoff high-price favorites (0.85 -> full, 0.93 -> ~0.47x, floored at
+                    # size_taper_min_frac). Recovers ~+$50, ZERO trades cut. Off => byte-identical.
+                    _fav_size = size_usd
+                    if bool(cfg.get("size_taper_enabled", False)):
+                        _min_frac = min(1.0, max(0.0, float(cfg.get("size_taper_min_frac", 0.4) or 0.4)))
+                        _t_start = float(cfg.get("size_taper_start", 0.88) or 0.88)  # full up to here; taper above
+                        _taper = (price_max - fav_price) / max(1e-6, price_max - _t_start)
+                        _fav_size = size_usd * max(_min_frac, min(1.0, _taper))
                     out.append(BitcoinSignal(
                         market_id=market.id,
                         market_question=market.question,
                         action=fav_action,
                         price=order_price,
-                        size=round(size_usd, 2),
+                        size=round(_fav_size, 2),
                         confidence=round(fav_price, 4),
                         edge=round(fav_price - 0.5, 4),
                         token_id_yes=market.token_id_yes,
@@ -5355,7 +5508,7 @@ class BitcoinStrategy:
                     ))
                     logger.info(
                         "  [favorite-lane] %s '%s' tf=%s fav_price=%.3f size=$%.2f (%.1fm left)",
-                        fav_action, market.question[:40], tf, fav_price, size_usd, mins_left,
+                        fav_action, market.question[:40], tf, fav_price, _fav_size, mins_left,
                     )
                 except Exception as _fe:
                     logger.debug("favorite_lane per-market skip: %s", _fe)

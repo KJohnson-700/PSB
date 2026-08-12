@@ -33,7 +33,8 @@ final_window_topup:
   sampler_window_mins: 1.5
 trading:
   persistent_session: false
-  cycle_interval_sec: 60
+  cycle_interval_sec: 30   # 2026-08-11 60->30 (the built-in floor is max(30,...) at main.py:1199): 2x scan frequency so assets don't go quiet / pre-window entries aren't missed. SAFE now because the window-boundary slug cache means the extra cycles REUSE the 5m/15m lists instead of re-fetching gamma, and HYPE-alt has its own ~55s throttle below so its fragile fetch load does NOT increase. Revert to 60 to restore.
+  hype_alt_fetch_min_interval_sec: 55   # 2026-08-11 decouple HYPE-alt's fragile fetch from loop speed: fetch at most every ~55s regardless of cycle_interval, reuse cache between. 0 => fetch every cycle (legacy). Requires scanner_slug_cache_enabled.
   exit_check_interval_sec: 3
   ws_candle_feed:
     enabled: true
@@ -49,9 +50,26 @@ trading:
   - 1h
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
-  crypto_hourly_scan_every_n_cycles: 1
+  crypto_hourly_scan_every_n_cycles: 3
   overrun_recovery_sleep_sec: 5
+  # 2026-08-11 WINDOW-BOUNDARY SLUG CACHE: reuse the 5m/15m updown market LIST within a
+  # window instead of re-fetching from gamma every ~60s cycle (the dominant non-analysis
+  # cost + source of slug-fetch timeouts). Re-fetch only when the window bucket advances or
+  # the max-age backstop trips; prices stay live on the separate WS/midpoint path. Set
+  # enabled:false for byte-identical legacy behavior. Max-age = window + 60s buffer by default.
+  scanner_slug_cache_enabled: true
+  scanner_slug_cache_max_age_15m_sec: 960   # 15m window + 60s; boundary is the primary trigger
+  scanner_slug_cache_max_age_5m_sec: 360    # 5m window + 60s
   dry_run: true
+  # 2026-08-08 PAPER SLIPPAGE EQUIVALENT (operator: "paper equivalent to the slippage shit"). ON.
+  # On a paper BUY the entry is FRESH-FILLED against the REAL ask book (clob_client.py:1445):
+  # fetch book -> sweep asks -> fill at the depth-weighted price (what live pays), and NO-FILL the
+  # trade if the book is too thin (return None, exactly like live can't fill). Closes the paper->live
+  # ENTRY slippage gap with zero real money. Exits are hold-to-resolution (settle $1/$0, no book sale)
+  # so entry is the only slippage exposure. Expect: worse entry prices + some no-fills => lower freq,
+  # tighter per-trade edge = the honest live picture. RESTART-CLASS (clob_client __init__). false => off (fill at quote).
+  paper_entry_fresh_fill: false
+  paper_entry_fresh_fill_slippage_tol: 0.02   # how far past the signal price it will sweep before NO-FILL (2c)
   slippage_guard:
     enabled: true
     mode: enforce
@@ -73,7 +91,7 @@ trading:
     universe_subscribe_cap: 250
     rest_book_price_fallback: true
   default_position_size: 6
-  max_position_size: 80   # 08-07 raised 25->80 so FAVORITES (which bypass the adaptive sizer) can reach $60-80; direction lanes stay capped at $12-40 by the adaptive sizer's lane_max_usd
+  max_position_size: 40   # 2026-08-10 KEEP 40 as the CEILING (operator caught: 25 would clamp the proven winning lanes). $40 is the HARD CAP; base bets stay Kelly-small; the SELECT WINNING lanes reach $35-40 via adaptive_sizer.proven_lane_max_usd (40) + lane_max_usd (bitcoin15mYES 35, bnb15mNO/xrp15mNO 40, ...). +869 geometry = achieved via KILLING the favorite lane (risk.favorite_lane_enabled:false), NOT by capping the winners. Do NOT drop to 25 — it strangles the winning-lane sizing.
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
@@ -438,12 +456,24 @@ trading:
     hold_all: true
     hold_5m_all: true
     hold_catastrophic_stop_pct: 0.55   # EXIT-ASYMMETRY 08-07: cap losers at -55% (now FIRES independently under hold_all, was inert). Below observed winner worst-MAE -51% so it cuts genuine failures, not recoverable dips. Enables safe size-up.
+    # 2026-08-09 MFE-CONDITIONAL STOP (operator GO; ghost-confirmed; SUPERSEDES the window axis for NON-favorite lanes).
+    # Ghost-settled the 130 hold_catastrophic_stop trades held-to-resolution: 88% (105/120) still resolve to $0 —
+    # wrong-side entries that NEVER went green (100% had MFE<5%). Only 12% recovered, and those dipped below -55%
+    # first so the -55% stop already cut them. June (+$450 era) cut losers at ~-34% (payoff b=1.2-1.7); Aug rides
+    # them to -47%+ (b=0.49) => needs 67% WR just to break even. Fix: a NON-favorite hold position that never went
+    # green (peak MFE < arm) is cut SHALLOW at hold_never_green_stop_pct instead of riding to the -55% catastrophic;
+    # a position that went green THEN dipped rides (recoverable winner), deep -cat backstop only. Favorites are
+    # EXCLUDED (they win by settling to $1 without going green). Set enabled:false to fall back to the window axis.
+    hold_mfe_conditional_stop_enabled: true   # 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
+    hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
+    hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
-    tp_giveback_enabled: false
+    tp_giveback_enabled: false  # 2026-08-11 RIPPED (operator: "rip out the bullshit bandaids I don't need"). Feed-blind: proven this session it MISSES the give-backs it was built for (every big BNB give-back had mae==exit = no intervening tick observed, so a reactive trail can't bank a retrace it never sees). Confirmed-peak/green-floor sub-patches are now dead code (fire-condition first clause is self._tp_giveback_enabled). The ever-green MFE stop is the real exit fix and stays ON.  # 2026-08-10 RE-ENABLED (operator: "+108 to nothing is not okay"). The 08-09 off-decision was made on 4 fires, 2 of which were the RARE settlement-gap failure. Re-measured on the FULL log: of 200 give-backs (peak>=30% then lost), 96% are WALK-DOWNS the trail banks; only 4% are gaps. Both live BNB give-backs (1h YES peak +108% and +72%) are walk-downs -> trail converts -$15.21 to +$15.68 (+$31 swing). Only the 2 bitcoin-15m fade give-backs gap (trail misses those; separate fix). STAGED (frozen at init) -> rides the MFE-cond restart. WATCH first live fires bank real green.  # 2026-08-09 ENABLED (operator GO). ROOT of the deep-loss bleed: 74% of Aug catastrophic-stops were EVER-GREEN round-trips (median peaked +50% -> died -65%); 77 Aug losses peaked >=+30% then round-tripped (-$611). This banks a reversing winner on a >=retrace(0.20) from peak(>=arm 0.30) => exits >=+10% green instead of riding to -55%/-68% catastrophic. Fires UNDER hold (reason take_profit_giveback NOT in the hold-enforce suppression tuple). Only fires on a REAL retrace so a still-climbing runner is never cut (the 07-13/07-16 fixed-trail failure mode is avoided). Projected +~$977 swing on the 77 round-trip losses. WATCH first fires = banking real green not phantom-mark noise.
   execution_fees:
     enabled: true
     crypto_updown_15m_taker_fee_rate: 0.07
+    hybrid_maker_fill_rate: 0.0    # 2026-08-08 OFF (was 0.50) — EXCLUDED from the window-conditional-stops restart: not operator-approved for this ship + not Codex-GO'd on the current (paper-guarded, entry-leg-only) version. rate 0.0 => the maker-factor code is INERT (guard requires _mfr>0.0), full-taker both legs = old behavior. Re-enable only after a fresh Codex GO. The #1 rationale still stands: paper over-charges 15m/1h entry fees vs maker-first live; measured ~0.56 from order_lifecycle.jsonl n=27.
   fee_aware_edge:
     enabled: true
     taker_fee_rate: 0.07
@@ -456,12 +486,12 @@ trading:
     min_n_down: 4
     min_n_up: 12
     mult_floor: 0.4
-    mult_ceil: 1.0
+    mult_ceil: 1.6          # 2026-08-10 (operator): was 1.0 = DOWNSIZE-ONLY (couldn't grow winners). 1.6 lets a proven lane grow above base toward its per-lane cap; re-clamped to max_position_size (40). "Kelly had different amounts per lane, flat isn't working."
     roi_scale: 0.22
     sensitivity: 0.8
     ema_alpha: 0.5
     unproven_lane_mult: 0.6
-    proven_lane_max_usd: 0
+    proven_lane_max_usd: 40   # 2026-08-10 (operator): was 0 (off). Proven lanes (WR>=proven_wr_min 0.55 AND ROI>=proven_roi_min 0.05) cap at $40 = the "max bet 35-40 on select WINNING lanes". Unproven/losing lanes stay small (unproven_lane_mult 0.6) + regime_fade sits out <48% WR.
     proven_wr_min: 0.55
     proven_roi_min: 0.05
     lane_max_usd:
@@ -469,15 +499,15 @@ trading:
       xrp_macro|1h|BUY_NO: 15
       bitcoin|5m|BUY_NO: 15
       sol_macro|5m|BUY_NO: 15
-      bnb_macro|15m|BUY_NO: 15
-      bitcoin|15m|BUY_NO: 15
-      xrp_macro|15m|BUY_NO: 15
+      bnb_macro|15m|BUY_NO: 40     # 2026-08-10 UPSIZE proven winner (+$27, 75%WR, f*0.40)
+      bitcoin|15m|BUY_NO: 30       # UPSIZE proven winner (+$14, 68%WR)
+      xrp_macro|15m|BUY_NO: 40     # UPSIZE proven winner (+$35, 66%WR)
       doge_macro|1h|BUY_NO: 15
       doge_macro|5m|BUY_NO: 15
       bitcoin|5m|BUY_YES: 12
-      bnb_macro|15m|BUY_YES: 12
-      bitcoin|15m|BUY_YES: 12
-      xrp_macro|15m|BUY_YES: 12
+      bnb_macro|15m|BUY_YES: 30    # UPSIZE proven winner (+$9.5, 83%WR)
+      bitcoin|15m|BUY_YES: 35      # UPSIZE proven winner (+$33, 85%WR, f*0.33)
+      xrp_macro|15m|BUY_YES: 12    # KEEP LOW: loser (-$10.6, f*-0.18)
       bnb_macro|5m|BUY_YES: 12
       sol_macro|1h|BUY_YES: 12
       bitcoin|1h|BUY_YES: 12
@@ -546,9 +576,12 @@ olympus:
     true_max_usd: 25
 lane_management:
   enabled: true
-  execution_enforcement_enabled: false
+  execution_enforcement_enabled: true   # 2026-08-11 ALLOWLIST LIVE: pause the triple-confirmed structural bleeders (Codex list + 8-sess lane_review + 12-sess audit). Blocks BOTH paper+live (can_execute paused-check ignores dry_run). Hot-reloadable (lane_management in _HOT_RELOAD_TOP_LEVEL_KEYS; apply_config_updates rebuilds LaneManager). Set false to disable. Refine states from scripts/lane_review.py on CLEAN baseline data.
   default_state: paper
-  states: {}
+  states:
+    "bitcoin|5m|up": paused        # -$40 / 11% WR n=9 — never-green longs, structural (tape-independent)
+    "xrp_macro|1h|up": paused      # -$34 / 0% WR n=5 — Codex-flagged + data-confirmed
+    "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
   state_meta: {}
   recommendations:
     min_live_trades: 15
@@ -561,7 +594,7 @@ lane_management:
     min_pause_gap: 0.08
     auto_pause_confirmation_trades: 3
 regime_fade:
-  enabled: false
+  enabled: false    # 2026-08-10 ENABLED (operator GO). Per-lane PER-SIDE auto-sitout when a lane's rolling WR collapses below fade_below_wr (0.48) in the mid-confidence band [0.45,0.65) — the eth NATIVE-LONG bleed (37% WR, -$136) is exactly this: momentum longs run over in a chop/down tape while the ≥0.65 favorites are protected. Adaptive/self-flipping (resumes when WR recovers >0.53), fail-open. Was left OFF; fade_regime_windows also empty (fade never fired) → bot ran native momentum, the known loser. RESTART-CLASS (regime_fade not in _HOT_RELOAD_TOP_LEVEL_KEYS).
   band_low: 0.45
   band_high: 0.65
   window_trades: 60
@@ -680,7 +713,7 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
     bitcoin_1h_simple_long:
-      enabled: true
+      enabled: false   # 2026-08-11 OFF: forced allowed_side=LONG on 1h in [0.50,0.85] "even under bearish bias" (bitcoin.py:2255), pinning bitcoin LONG 119/0. In the current BEARISH btc tape that = a negative-edge forced long (est_prob 0.43, edge -0.43) that then self-blocks on lane_min_edge => bitcoin can neither short nor long = 0 trades. Disabled so 1h follows _resolve_bias_for_tf (short a bearish tape / sit out neutral). Revert enabled:true to restore the up-lean band.
       entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
@@ -847,9 +880,10 @@ strategies:
       min_edge: 0.12
     use_true_kelly_sizing: true
   sol_macro:
+    buy_no_min_no_price_5m: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap 5m shorts (NO<0.40 = shorting into an up-priced market). sol 5m BUY_NO at NO<0.40 was 17% WR / -$118 in Aug. Side-isolated (BUY_NO), 5m-only, per-lane. Hot-reloadable (self.config.get). Fires as lane_price_band skip when yes_price>0.60.
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
-    require_tape_direction: true   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
-    buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
+    require_tape_direction: false   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
+    buy_no_tape_map_veto_up: false   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
     lane_max_notional_15m_down: 5
     fresh_cross_override: false
     tape_veto_60s_enabled: true
@@ -1078,6 +1112,7 @@ strategies:
     fresh_cross_override: true
     eth_pocket_allow_15m_buy_yes_fade: true
     buy_no_min_no_price_5m: 0.49
+    buy_no_min_no_price_15m: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap eth 15m shorts (NO<0.40). eth 15m BUY_NO at NO<0.40 was 0% WR / -$27 in Aug. Side-isolated (BUY_NO), 15m-only, per-lane. Hot-reloadable. Fires as lane_price_band when yes_price>0.60.
     eth_pocket_allow_buy_yes_1h: true
     eth_pocket_allow_5m_buy_no: true
     alt_neutral_htf_aligned_carry: false
@@ -1109,11 +1144,11 @@ strategies:
     low_atr_only_lanes: []
     disable_buy_no_5m_native: true
     eth_5m_buy_no_flip_to_yes: false
-    enabled: false
+    enabled: true
     use_ai: true
     eth_momentum_confirm:
-      buy_yes: []
-      buy_no: []
+      buy_yes: []   # 2026-08-09 LIVE (was [], shadow-only): require MACD momentum confirm for eth LONGS. ROOT of the -$40 re-enable bleed: 3 BUY_YES (est_prob 0.55-0.64 = NOISE) bet UP into DOWN momentum, held, resolved DOWN. Momentum-confirm blocks up-bets when MACD momentum isn't up. Hot-reloadable (self.config.get). Skip reason: buy_yes_no_eth_momentum_confirm.
+      buy_no: []   # 2026-08-09 LIVE (was [], now SYMMETRIC to buy_yes): require MACD-DOWN momentum confirm for eth SHORTS. ROOT of this session's eth bleed: 3 BUY_NO shorts (entry 0.50/0.31/0.48) all bet DOWN into an UP market, ALL resolved YES/expired = -$38. Ungated shorts fire without momentum backing and short into rising tape. Symmetric momentum-confirm blocks down-bets when MACD momentum isn't down. Side-isolated. Hot-reloadable (self.config.get). Skip reason: buy_no_no_eth_momentum_confirm.
       shadow:
         buy_yes:
         - 5m
@@ -1345,8 +1380,8 @@ strategies:
       min_edge: 0.12
   hype_macro:
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
-    require_tape_direction: true   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
-    buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
+    require_tape_direction: false   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
+    buy_no_tape_map_veto_up: false   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
     fresh_cross_override: true
     tape_veto_60s_enabled: true
     tape_veto_60s_bps: 20
@@ -1590,9 +1625,10 @@ strategies:
       band: 0.01
       min_edge: 0.12
   xrp_macro:
+    buy_no_min_no_price: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap xrp shorts (NO<0.40) across windows. xrp 15m/5m/1h BUY_NO at NO<0.40 lost -$145 (~25% WR); the WINNING xrp 15m NO (+$61) is all at NO>=0.40, so this cuts only the cheap losers and keeps the good shorts. Side-isolated (BUY_NO), per-lane. Hot-reloadable. Fires as lane_price_band when yes_price>0.60.
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
-    require_tape_direction: true   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
-    buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
+    require_tape_direction: false   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
+    buy_no_tape_map_veto_up: false   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
     lane_max_notional_15m_down: 8
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -1838,8 +1874,8 @@ strategies:
     disable_buy_yes_5m: true
   doge_macro:
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
-    require_tape_direction: true   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
-    buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
+    require_tape_direction: false   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
+    buy_no_tape_map_veto_up: false   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
     buy_no_min_no_price_5m: 0.49
     buy_yes_lane_repair:
       enabled: true
@@ -2066,8 +2102,8 @@ strategies:
     disable_buy_yes_1h: true
   bnb_macro:
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
-    require_tape_direction: true   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
-    buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
+    require_tape_direction: false   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
+    buy_no_tape_map_veto_up: false   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP; self-flips, fail-open
     lane_max_notional_15m_down: 10
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -2306,10 +2342,11 @@ updown_composite:
 # Toggle live with scripts/claude_direction.py. Fail-safe: any problem => quant side.
 direction:
   mode: claude           # CLAUDE-DRIVEN 08-07: Claude writes tape-aligned direction overrides (fixes coinflip native bias)
-  enforce: true          # DRIVING (operator GO — override native side)
+  enforce: true           # 2026-08-12 UN-BENCHED (operator: never authorized benching). Was set false in the 08-12 resolver strip-down (wrongly treated as blunt accretion). AI engine DRIVES again, now off qwen_vision (measured best 50.6%, not minimax's long-bias). Applies on next bot restart (direction block = restart-class).
   override_file: data/runtime/claude_direction_override.json
   max_age_sec: 900       # override staleness belt (each entry may also carry its own ttl)
   override_when_quant_neutral: true    # CLAUDE-DRIVEN: my calls apply even where quant sat out
+  apply_windows: ['1h']    # 2026-08-12 (item 2) ROUTE DIRECTION TO 1h: AI override drives 1h ONLY (qwen_vision 50.6% clears fees at 1h; 5m/15m direction is fee-negative). 5m/15m fall through to native + the RSI-fade structural edge. Empty/absent => all windows (legacy).
   min_conf: 0.0          # ignore overrides below this confidence
 # ── FAVORITE-LONGSHOT lane (08-07) ──────────────────────────────────────────
 # Structural price bet: buy the FAVORITE (our-side price >= floor) side-agnostic.
@@ -2324,7 +2361,7 @@ direction:
   # favorites with working exits and judge on CLEAN data. Freshness was ruled out (losers had
   # fresher prices). If it still loses with working caps -> then cut for real.
 lane_tape_adapter:
-  mode: "off"                 # size multiplier stays OFF (sizing is LAST, separate lever)
+  mode: "live"                # 2026-08-11 REALIZED SIZING LIVE (operator: results, not shadow). min_mult 0.25/max_mult 1.0 => DE-SIZE realized losers to as low as 25% bet, NEVER upsizes; winner-protected (avg_pnl>=0 never cut) + green-gated (only cuts lanes that STOPPED going green). Shrinks the band-long bleed the adapter already flags (hype15m/bitcoin5m up) and self-lifts when a lane recovers. Revert mode:"off" to disable.
   admission_mode: "live"      # 2026-08-08 PLUG IN THE REALIZED SELF-FLIPPING BRAIN. Was default-off, so every gate calling get_tape_admission_delta() (eth/btc/sol min_edge + favorite sit-out) read a hardcoded 0.0 = tape-blind. Per-(asset|window|side) delta from the last k realized closes: >0 tightens a net-losing/never-green side, <0 loosens a winning+green side; flips sign automatically as the tape turns.
   window_closes: 6            # rolling realized closes per lane (fast reaction)
   min_samples: 3              # need >=3 closes before adapting; else neutral 0.0
@@ -2338,15 +2375,25 @@ lane_tape_adapter:
 favorite_lane:
   enabled: true
   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
+  window_floors:         # 2026-08-10 PER-WINDOW FLOOR (operator "improve if data offers a filter, else cut"). 1h favorites split (n=29, 8 sess): 0.85-0.89 = 50% WR net -$65 (a 1h fav has a full HOUR to cross back through strike => 0.86 is a coin-flip); 0.90-0.94 = 72.7% WR net +$3.88 (clears 68% breakeven). 15m favs win 87% at 0.85 (net +$175 — UNTOUCHED). Raise ONLY 1h's floor. Turns 1h favs -$61 -> ~breakeven+. Absent/per-tf-absent => uses `floor` (byte-identical). Hot-reloads (read in _favorite_lane_signals via full_config.get each scan).
+    "1h": 0.90
   price_max: 0.93        # 08-07 HUGE-LOSS FIX: skip DEEP favorites (>=0.93). A 0.96 fav pays ~4% per win but loses ~96% of stake when it gaps to $0 at settlement (the xrp -$70.37 was entry 0.96) — worst risk/reward. The 0.85-0.93 band pays enough per win (~9-18%) to survive its own loss ratio.
-  size_usd: 70.0         # 08-07 raised 8->70: bigger wins (~$10/win) now that loss is capped at -55% + bankroll $1k gives exposure headroom; bypasses adaptive sizer
+  size_usd: 25.0         # 2026-08-10 ROLLED BACK 70->25 (operator, longevity/Kelly): favorites are Kelly-NEGATIVE (p0.77 b0.29 => f*=-0.02) so $70=7% of bankroll on a -EV lane = ruin risk. +869 baseline had NO fav lane + $25 max. $25 base; per-lane winners upsized via adaptive_sizer (proven_lane_max_usd 40).
+  size_taper_enabled: true   # 2026-08-09 #2 SIZE-TAPER (operator GO): scale stake by payoff (1-fav_price)/(1-floor); 0.85 fav=full, 0.93 fav=~0.47x. Scope: 0.88-0.91 band 71%WR but -$111 (thin payoff); recovers ~+$50, zero trades cut. RESTART-CLASS (code).
+  size_taper_min_frac: 0.4   # floor on the taper (never below 40% of size_usd)
+  size_taper_start: 0.88     # full size up to 0.88 (the +$72 sweet spot); taper only 0.88->0.93 (the bleed bands)
+  sit_out_trend_aligned_mode: shadow   # 2026-08-09 #1 (operator GO, SHADOW-first): favorites bet WITH a trending tape BLEED (-$365); FLAT/against-trend WIN. shadow=log would-sit-out only (still trades); live=sit out aligned; off=byte-identical. Flip to live after shadow confirms.
   windows: [15m, 1h]     # 08-08 15m RESTORED: the earlier "cut 15m, it bled -$185" was the SAME confound — those -$70 15m losses were the exit-BLINDNESS bug (settlement gap-through skipped the cap), not a 15m-lane defect. With _mark_delta_blind_skip() live those cap at ~-$35. Re-test both windows on clean data before cutting anything.
   min_mins_left: 3.0     # avoid last-candle settlement manipulation
   presettle_derisk_secs: 180     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled. 08-08 NUDGE 120->180: give slower 1h favorites more runway to be caught.
   presettle_derisk_price: 0.55   # 08-08 NUDGE 0.5->0.55: the bnb 1h loser expired at mark ~0.53 (entry 0.88, -40%), JUST above the 0.5 threshold, so the de-risk missed it (updown_expired -$32.39). 0.55 catches a favorite that has slipped to a coinflip-ish underdog. Still well below a winning favorite (>0.6), so it won't cut winners.
   hard_stop_price: 0.70    # 2026-08-08 06:1x DISABLED (was 0.70) — AUTOWAKE REVERT, it cut WINNERS 3-for-3 in its first 4 minutes live. Session test_20260808_060714, the 9:00-9:15AM ET window: sol entry 0.86 cut 0.695 -$15.41 | btc entry 0.90 cut 0.415 -$39.75 (the paged bust) | xrp entry 0.86 cut 0.675 -$17.09 = -$72.25 realized. CLOB prices-history says ALL THREE Up tokens settled 0.995 (WON): sol 0.875->0.685 dip->0.995, btc 0.705->0.755->0.995, xrp whipsaw->0.995. doge (control, same window, never dipped below 0.90) was never cut and won. A 15m favorite bought at 0.85-0.93 routinely dips to 0.60-0.70 mid-window and still settles 1.0 — a 0.70 mark stop is structurally guaranteed to cut the lane's winners, which IS the lane's 94%-WR edge (hold to resolution). The btc one is worse still: it fired on mark 0.415 (best_bid 0.41/ask 0.42, ws age 6.9ms) at 13:09:44 when the real tape was ~0.62-0.755 — a mark that never existed, after 106s where the position was invisible to check_exits (mfe=0.0, mae==exit pnl => not one intervening tick was evaluated). 0 => off; loss control reverts to hold_catastrophic_stop_pct -55% + the presettle de-risk above (the config the proven favorite lane ran in). Do NOT re-enable without evidence from settled favorites that a mid-window dip below 0.70 actually predicts a LOSS.
+  early_stop_windows: [1h]  # 2026-08-09 RESTORED to [1h] (was reverted to [all] by the baseline restore, which re-armed the fast-window winner-cutter; it fired once this session on xrp 15m entry 0.91 -> cut 0.665 -$20.60, the session's biggest single loss = the exact documented failure mode). [1h] = 5m/15m ride to resolution, only doge-1h keeps the stop. STAGED not restarted. 2026-08-08 WINDOW-CONDITIONAL EARLY STOPS (operator GO; held-projection this session). The early hold-lane cuts — favorite_hard_stop (above) AND the independent hold_catastrophic_stop backstop — fire ONLY on these windows; other windows ride to resolution. Default 1h. WHY: the stop-hold sweep (this session) showed 5m/15m winners routinely dip to -20..-46% MAE mid-window and STILL settle GREEN (sol 15m held +114.73 vs stopped +105.65; xrp 15m +131.86 vs +124.02; hype 15m +83.84 vs +78.72) — so a mark stop on fast windows is structurally guaranteed to cut winners (this is the SAME finding as the autowake 15m bust note on hard_stop_price above). doge 1h is the LONE lane where HOLDING LOSES (-26.62 vs +8.49 stopped, delta -35.11) => 1h KEEPS the stop. The final-seconds presettle de-risk is a SEPARATE block and stays active on every window. Tokens: "all" => keep stop on every window (pre-change behavior); [] => keep it nowhere. RESTART-CLASS (execution code, not hot-reloadable).
   tape_sit_out_delta: 0.02  # 2026-08-08 REALIZED TAPE DEFERENCE: sit out a favorite side while get_tape_admission_delta(asset,window,side) >= this (side net-losing/never-green in CURRENT tape). Self-flips with the tape; both sides losing (chop) => both sit out. Needs lane_tape_adapter.admission_mode: live. 0 => off.
   respect_ai_direction: true  # 2026-08-08 favorite lane HONORS the AI direction driver (was side-agnostic, ignored it): AI FLAT/sit-out => skip asset; AI LONG => only UP favorites; AI SHORT => only DOWN. Kills the sol whipsaw (AI said sol=FLAT, favorite bought both sides+lost). false => legacy side-agnostic.
+  fav_net_sit_out_avg: -1.0   # 2026-08-10 FAVORITE-SCOPED REALIZED-NET SIT-OUT (operator GO). Sit out a favorite (asset,window,side) while its rolling AVG realized net per favorite close <= this ($/trade). Reads favorite_net_tracker (FAVORITE-only closes, entry>=floor, keyed asset|window|side) — NOT lane_tape_adapter (which mixes favorite+band + is MFE/green not NET, so it read sol|15m|up as loosen while it bled -$99). Payoff-trap aware (favorites are high-WR/neg-NET). Validated on journal: -1.0 sits out doge15mDOWN(-6.3) xrp15mUP(-4.4) bnb1hUP(-3.5) sol1hDOWN(-2.2) etc; KEEPS xrp1h(+6.6) sol15mUP(+3.5). Self-flips: rolling window rolls losers off / recovery re-admits. null/absent => OFF (fail-open). RESTART-CLASS (favorite_lane not hot-reloadable).
+  fav_net_window: 12          # rolling window: last N favorite closes per lane
+  fav_net_min_samples: 5      # need >= N favorite closes before the gate emits a signal (else fail-open/admit)
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
@@ -2372,7 +2419,7 @@ ai:
     base_url: http://localhost:11434/v1
     local: true
     models:
-    - qwen3:8b
+    - qwen3-vl:4b-instruct-q4_K_M
     json_mode: true
     cooldown_on_429_seconds: 0
   timeout: 90
@@ -2466,7 +2513,14 @@ notifications:
   alert_on_status: false
   alert_on_error: true
 risk:
-  max_concurrent_positions: 50
+  favorite_lane_enabled: false   # 2026-08-10 KILL THE FAVORITE LANE (operator: revert to +869 winning config, which had NO favorite lane). Favorites 0.85+ = win-11%/lose-90% payoff-trap, b=0.13, need 88% WR, −$448 all-time. Under `risk` = HOT-RELOADABLE (no restart). Set true to re-enable. Read by sol_macro + bitcoin _favorite_lane_signals.
+  rsi_fade:                # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED >coinflip edge, project_rsi_fade_edge_found_2026_08_10). Under `risk` so it's HOT-RELOADABLE => REVERT TRIGGER = flip enabled:false (no restart) if fade-WR < breakeven. Read by sol_macro._resolve_alt_bias_for_tf (shared by ALL alts + eth): fades the direction-lane side when RSI < rsi_below AND trend NOT fully-aligned (align-gate = regime safety; fading a strong aligned trend gets run over). Favorites bypass the resolver = UNAFFECTED. Measured: RSI<40 native 30%WR => FADE 69.6% (4 sessions, never <56%). rsi_above 101 = overbought-fade OFF (ship strongest zone first). side_source retagged *_rsi_fade for attribution/monitoring.
+    enabled: true    # 2026-08-12 RE-ENABLED (item 2) WITH the fresh-tape regime gate that fixes the 08-11 bleed. The -$90 loss was the oversold-long fade buying the falling knife in a DOWN tape; the lagging align-gate missed it. sol_macro now vetoes the fade when a CONFIDENT tape_map (conf>=0.6) runs against the faded side. 5m/15m only (1h uses the AI direction). Hot-reloadable REVERT = flip false if fade-WR < breakeven.
+    rsi_below: 40.0
+    rsi_above: 101.0
+    windows: [5m, 15m]   # 2026-08-12 dropped 1h — 1h side comes from the AI direction override (route direction to 1h); 5m/15m trade the structural fade edge
+    flat_edge: 0.05          # 2026-08-10 fade sizes on THIS flat edge, NOT est_prob (which is anti-predictive in the band). The fade is exempted from lane_min_edge + est_prob conviction floors (sol_macro scan loop) because est_prob-edge is ~0/NEGATIVE by construction on the faded side => without this the fade takes ZERO trades (measured: 74 resolutions -> 0 fills). Conservative 0.05 (below alt_1h_simple_long 0.06). Hot-reloadable. Set higher to size faded bets up once WR confirms.
+  max_concurrent_positions: 50   # 2026-08-08 NOW HOT-RELOADABLE (operator): raise/lower the max simultaneous OPEN trades in settings.yaml and it applies live WITHOUT restart (can_trade reads it from self.config each check; "risk" is in _HOT_RELOAD_TOP_LEVEL_KEYS). NOTE: 50 is high vs a $1k bankroll at $70/favorite — lower it here anytime to cap concurrent exposure. Per-strategy override: strategies.<name>.max_concurrent_positions.
   max_trades_per_day: 500
   paper_max_trades_per_day: 2000
   check_interval: 60
@@ -2485,6 +2539,8 @@ term_risk:
     MID_TERM: 0.02
     LONG_TERM: 0.02
 exposure:
+  max_same_side_notional_usd: 0.0   # 2026-08-10 SAME-SIDE $-CAP (operator GO, Codex-verified). Downsize-to-fit: cap total same-outcome (YES/NO) OPEN notional at $125/side (~12% of $1k same-direction) — crypto lanes ~90% correlated so N same-side = 1 leveraged bet (corr peak-ss-notional vs maxDD ~0.7). ⚠️ DRAWDOWN INSURANCE not EV: Codex 12-sess replay ~halves worst session (−$141→~−$91) but trims near-breakeven net slightly neg (shrinks winning clusters too). 0=off. VALUE hot-reloads (exposure); the code path in clob_client.evaluate_entry is restart-class. See project_same_side_concurrency_is_edge_not_leak_2026_08_10.
+  same_side_notional_min_floor_usd: 10.0   # if remaining same-side room < this, BLOCK (don't place dust) instead of downsize
   full_size: 25.0
   moderate_size: 15.0
   minimal_size: 8.0

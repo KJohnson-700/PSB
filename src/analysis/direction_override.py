@@ -146,6 +146,13 @@ def resolve(strategy: str, tf: Optional[str], quant_side: Optional[str], config:
         mode = str(dcfg.get("mode", "quant") or "quant").lower()
         if mode == "quant":
             return quant_side
+        # 2026-08-12 WINDOW ROUTING (item 2): the AI direction signal is only >coinflip at 1h
+        # (qwen_vision 50.6%; 5m/15m direction is fee-negative). Route the override to
+        # apply_windows ONLY — other windows fall through to quant/native + structural edges
+        # (RSI-fade etc). Absent/empty => all windows (legacy behavior).
+        _apply_wins = dcfg.get("apply_windows")
+        if _apply_wins and tf is not None and str(tf) not in {str(w) for w in _apply_wins}:
+            return quant_side
 
         path = str(dcfg.get("override_file", _DEFAULT_OVERRIDE_FILE) or _DEFAULT_OVERRIDE_FILE)
         max_age = float(dcfg.get("max_age_sec", _DEFAULT_MAX_AGE_SEC) or _DEFAULT_MAX_AGE_SEC)

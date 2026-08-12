@@ -87,6 +87,7 @@ from src.execution.performance_feedback import (
     get_loosen_min_edge_mult,
 )
 from src.analysis.lane_tape_adapter import get_tape_admission_delta
+from src.analysis.favorite_net_tracker import get_favorite_net
 from src.analysis.tape_map import (
     snapshot_and_log as _tape_map_snapshot,
     latest_tape_state as _latest_tape_state,
@@ -1787,6 +1788,63 @@ class SolMacroStrategy:
                 # — _bias_to_side already inverted (single source); only retag here for
                 # attribution. Late flips are gated in fade_mode below (no double-flip).
                 side_source = f"{asset}_{tf}_fade_native"
+            # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED edge, see
+            # project_rsi_fade_edge_found_2026_08_10). In the coinflip band the momentum call is
+            # ANTI-predictive at RSI extremes: RSI<40 => native 30% WR => FADE 69.6% (robust across
+            # 4 sessions, never <56%). Invert the resolved side when RSI is oversold (< rsi_below)
+            # or overbought (> rsi_above) AND the trend is NOT fully aligned (align-gate = the
+            # regime safety: fading a strong aligned trend gets run over — the documented failure
+            # mode). Config strategies.<name>.rsi_fade (hot-reloadable => REVERT by flipping enabled
+            # if fade-WR < breakeven). Never double-flips a lane fade_regime already faded. Retag
+            # _rsi_fade for attribution. Fail-safe: absent/false or missing RSI => byte-identical.
+            _rf = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
+            if (
+                bool(_rf.get("enabled", False))
+                and allowed_side in ("LONG", "SHORT")
+                and not _fully_aligned
+                and "fade_native" not in side_source  # do NOT undo an existing fade_regime flip
+            ):
+                _rf_wins = _rf.get("windows")
+                _rf_win_ok = (_rf_wins is None) or (str(tf) in {str(w) for w in _rf_wins})
+                try:
+                    # 2026-08-10 Codex-fix: ta has NO top-level rsi_14/rsi. The journal `rsi`
+                    # (what the fade EDGE was measured on) = sol.rsi_14 = the 15m RSI. Use ta.sol.rsi_14
+                    # to faithfully replicate the measured signal (same 15m RSI for every window).
+                    _rf_rsi = getattr(getattr(ta, "sol", None), "rsi_14", None)
+                    _rf_rsi = float(_rf_rsi) if _rf_rsi is not None else None
+                except (TypeError, ValueError):
+                    _rf_rsi = None
+                if _rf_win_ok and _rf_rsi is not None:
+                    _rf_below = float(_rf.get("rsi_below", 40.0) or 40.0)
+                    _rf_above = float(_rf.get("rsi_above", 101.0) or 101.0)
+                    if _rf_rsi < _rf_below or _rf_rsi > _rf_above:
+                        _faded_to = "SHORT" if allowed_side == "LONG" else "LONG"
+                        # 2026-08-12 FRESH-TAPE REGIME GATE (item 2): the fade bled -$90 buying the
+                        # falling knife (oversold flips SHORT->LONG into a DOWN tape). The lagging
+                        # align-gate missed it; use the FRESH tape_map instead — only fade when a
+                        # CONFIDENT tape (conf>=0.6) is NOT running AGAINST the faded side. Fail-open
+                        # (missing/low-conf tape => fade as before, preserving the measured edge).
+                        _tape_ok = True
+                        try:
+                            import time as _t
+                            from src.analysis.tape_map import latest_tape_state
+                            _tp = latest_tape_state(self._signal_strategy_name or asset) or {}
+                            # STALE-TAPE FAIL-OPEN (Codex fix): only a FRESH (<=90s) confident tape
+                            # may veto the fade — a stale high-conf read must NOT silently kill the
+                            # measured 69.6% edge (latest_tape_state is in-memory, age-blind on its own).
+                            _tp_fresh = (_t.time() - float(_tp.get("ts") or 0.0)) <= 90.0
+                            if _tp_fresh and float(_tp.get("confidence") or 0.0) >= 0.6:
+                                _tp_dir = _tp.get("direction")
+                                if _faded_to == "LONG" and _tp_dir == "DOWN":
+                                    _tape_ok = False
+                                elif _faded_to == "SHORT" and _tp_dir == "UP":
+                                    _tape_ok = False
+                        except Exception:
+                            _tape_ok = True
+                        if _tape_ok:
+                            allowed_side = _faded_to
+                            side_source = f"{asset}_{tf}_rsi_fade"
+                            penalty_reasons.append(f"rsi_fade(rsi={_rf_rsi:.0f})")
             return BiasResolution(
                 allowed_side=allowed_side,
                 side_source=side_source,
@@ -3599,7 +3657,10 @@ class SolMacroStrategy:
             # fully-aligned trend). Gate the late flips on THIS, not the master
             # fade_regime flag — otherwise non-faded / aligned / excluded-window lanes
             # would run native momentum with their flips wrongly disabled (≠ baseline).
-            _fade_active = "fade_native" in (side_source or "")
+            # 2026-08-10 Codex-fix: treat rsi_fade as fade-active too, else late flip paths
+            # (window_delta_flip / fresh_cross_override / posterior / 5m NO->YES) silently UNDO
+            # the deliberate RSI fade. Both are intentional side inversions that must stick.
+            _fade_active = any(t in (side_source or "") for t in ("fade_native", "rsi_fade"))
             primary_htf_bias = resolution.primary_htf_bias
             # [1h] simple band: price-band admission for native LONG signals only.
             # Do not choose side here; alt direction comes from the bias resolver.
@@ -6522,6 +6583,7 @@ class SolMacroStrategy:
                 edge, allowed_side, _timing_window_open,
                 window=(_updown_tf if is_updown else "15m"),
             )
+            _is_rsi_fade = bool(side_source and "rsi_fade" in side_source)
             if _simple_band_long and action == "BUY_YES":
                 # Band-admitted consensus lane: est_prob is unusable, so don't gate on
                 # it — size on the configured flat edge instead (sizing policy, not a
@@ -6530,6 +6592,25 @@ class SolMacroStrategy:
                 if edge < self._a1hsl_sizing_edge:
                     edge = self._a1hsl_sizing_edge
                 reason_parts.append("alt_1h_simple_long")
+            # 2026-08-10 RSI-FADE min-edge/conviction EXEMPTION (mirrors _simple_band_long +
+            # flip_exempt_min_edge). The rsi_fade lane DELIBERATELY takes the anti-est_prob
+            # side in the coinflip band (project_rsi_fade_edge_found_2026_08_10): est_prob is
+            # anti-predictive there, so the model edge (est-yes) is ~0/NEGATIVE by
+            # construction and lane_min_edge + the est_prob conviction floors reject ~100% of
+            # faded candidates (measured: 0 faded entries ever cleared the gate; 74 fade
+            # resolutions -> 0 trades). est_prob is unusable on the fade side, so don't gate
+            # on it — size on a flat fade edge (sizing policy, not a fabricated probability).
+            # Direction-agnostic (works if overbought-fade is later enabled). Fully reverts
+            # with risk.rsi_fade.enabled:false (=> _is_rsi_fade always False => byte-identical).
+            # The conviction-floor skips below also key off _is_rsi_fade. NOTE: sol_macro scan
+            # loop only (sol/xrp/hype/doge/bnb) — eth duplicates this loop => separate port.
+            if _is_rsi_fade:
+                _rf_cfg = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
+                _rf_flat_edge = float(_rf_cfg.get("flat_edge", 0.05) or 0.05)
+                effective_min_edge = 0.0
+                if edge < _rf_flat_edge:
+                    edge = _rf_flat_edge
+                reason_parts.append(f"rsi_fade_exempt({_rf_flat_edge:.3f})")
             # 2026-06-18: INVERTED-EDGE / tape-flip admit (DEFAULT OFF, per-lane
             # flip_exempt_min_edge_<tf> or global flip_exempt_min_edge). window_delta_flip
             # candidates are tape-driven: est_prob = the window-delta P(up), so the model
@@ -6571,6 +6652,7 @@ class SolMacroStrategy:
                 and action == "BUY_YES"
                 and _yes_conv_floor > 0.0
                 and float(estimated_prob) < _yes_conv_floor
+                and not _is_rsi_fade  # fade bets against est_prob => conviction floor N/A
             ):
                 _bump_skip("buy_yes_conviction_floor")
                 logger.info(
@@ -6579,7 +6661,7 @@ class SolMacroStrategy:
                 )
                 continue
             _conv_floor = float(self._tf_cfg(_updown_tf, "min_est_prob_conviction", 0.0) or 0.0)
-            if is_updown and _conv_floor > 0.0:
+            if is_updown and _conv_floor > 0.0 and not _is_rsi_fade:  # fade bets against est_prob => floor N/A
                 _conv = float(estimated_prob) if action == "BUY_YES" else (1.0 - float(estimated_prob))
                 if _conv < _conv_floor:
                     _bump_skip("est_prob_conviction_floor")
@@ -6964,7 +7046,11 @@ class SolMacroStrategy:
                             f"without catalyst (spike={corr.btc_spike_detected}, lag={corr.lag_opportunity})"
                         )
                         continue
-                    _center_min_edge = max(effective_min_edge, self.min_edge_when_centered)
+                    # 2026-08-10 RSI-fade exemption: the fade lives in the CENTERED coinflip
+                    # band by construction (est_prob unusable), already admitted on flat_edge
+                    # above with effective_min_edge=0; min_edge_when_centered (e.g. xrp 0.12)
+                    # would re-reject the exact candidates the fade targets. Skip for faded.
+                    _center_min_edge = 0.0 if _is_rsi_fade else max(effective_min_edge, self.min_edge_when_centered)
                     if edge < _center_min_edge:
                         _bump_skip("centered_price_edge_below_min")
                         logger.info(
@@ -7191,7 +7277,10 @@ class SolMacroStrategy:
                 _qs = side_from_est_prob_up(raw_est_prob)
                 _chosen = "LONG" if action == "BUY_YES" else "SHORT"
                 _ss = str(signal_side_source or "")
-                _exempt = ("window_delta_flip" in _ss) or ("simple_band" in _ss)
+                # 2026-08-10 Codex-fix: exempt rsi_fade — it DELIBERATELY takes the anti-predictive
+                # side (measured 70% WR at RSI<40), which by definition disagrees with quant est_prob;
+                # without this exemption require_quant_side_agreement would veto the exact edge.
+                _exempt = ("window_delta_flip" in _ss) or ("simple_band" in _ss) or ("rsi_fade" in _ss)
                 if _qs is not None and _chosen != _qs and not _exempt:
                     _bump_skip("quant_side_disagree")
                     _log_skip_reject(
@@ -7457,6 +7546,11 @@ class SolMacroStrategy:
         """
         try:
             cfg = self.full_config.get("favorite_lane", {}) or {}
+            # 2026-08-10 HOT-RELOADABLE KILL (operator: revert to +869 geometry = NO favorite lane;
+            # win-11%/lose-90% payoff-trap, b=0.13). risk.* IS hot-reloadable so this flips the
+            # favorite lane off WITHOUT a restart. Default True = no behavior change when unset.
+            if not bool(self.full_config.get("risk", {}).get("favorite_lane_enabled", True)):
+                return []
             if not bool(cfg.get("enabled", False)):
                 return []
             floor = float(cfg.get("floor", 0.85))
@@ -7465,6 +7559,11 @@ class SolMacroStrategy:
             # xrp -$70.37 (entry 0.96) loss. The 0.85-0.92 band pays enough per win (~9-18%)
             # to survive its own loss ratio. 0 / >=1.0 => no cap (disabled).
             price_max = float(cfg.get("price_max", 1.0) or 1.0)
+            # 2026-08-10 PER-WINDOW FLOOR (operator "improve if data offers a filter, else cut").
+            # 1h favorites 0.85-0.89 = 50% WR net -$65 (an hour to reverse => coin-flip); 0.90-0.94 =
+            # 72.7% WR net +$3.88 (clears 68% breakeven). 15m favorites 87% WR at 0.85 (untouched).
+            # Raise ONLY 1h's floor via window_floors: {1h: 0.90}. Absent => uses `floor` (identical).
+            _window_floors = cfg.get("window_floors", {}) or {}
             size_usd = float(cfg.get("size_usd", 8.0))
             windows = set(str(w) for w in (cfg.get("windows", ["15m", "1h"]) or []))
             min_mins_left = float(cfg.get("min_mins_left", 3.0))
@@ -7486,7 +7585,10 @@ class SolMacroStrategy:
                         continue
                     yes_price = float(yes_price)
                     fav_price = max(yes_price, 1.0 - yes_price)
-                    if fav_price < floor:
+                    # 2026-08-10 apply the PER-WINDOW floor (was checking base `floor`, ignoring
+                    # window_floors — the 1h 0.90 floor never fired; parity with bitcoin.py:5384).
+                    _eff_floor = float(_window_floors.get(tf, floor))
+                    if fav_price < _eff_floor:
                         continue
                     if fav_price > price_max:
                         continue  # deep favorite: pennies-per-win vs ~full-stake settlement gap
@@ -7542,12 +7644,60 @@ class SolMacroStrategy:
                                 fav_action, tf, direction, _tape_delta, _sit,
                             )
                             continue
+                    # 2026-08-10 FAVORITE-SCOPED REALIZED-NET SIT-OUT (operator GO). The
+                    # tape_sit_out_delta above is fed by lane_tape_adapter, whose key MIXES
+                    # favorite + band closes and whose MFE/green signal cannot see the favorite
+                    # PAYOFF-TRAP (high-WR, negative-NET): it read sol|15m|up as "loosen" while
+                    # that lane bled -$99. This reads the FAVORITE-ONLY rolling avg realized net
+                    # per (asset,window,side) (favorite_net_tracker, built from the settled
+                    # journal) and sits the side out while its recent favorites bleed. Self-flips:
+                    # the rolling window rolls losers off / a recovered lane climbs back above the
+                    # floor and re-admits — no per-window/side hardcode, not tape-blind. Fail-OPEN:
+                    # None (too few samples / no state file) => admit. Disabled when key unset.
+                    _fn_floor = cfg.get("fav_net_sit_out_avg", None)
+                    if _fn_floor is not None:
+                        _fav_net = get_favorite_net(self._signal_strategy_name, tf, direction)
+                        if _fav_net is not None and _fav_net <= float(_fn_floor):
+                            logger.info(
+                                "  [favorite-lane] SIT-OUT %s tf=%s side=%s: favorite avg net "
+                                "%.2f <= %.2f (lane bleeding; self-flips on recovery)",
+                                fav_action, tf, direction, _fav_net, float(_fn_floor),
+                            )
+                            continue
+                    # 2026-08-09 #1 SIT-OUT TREND-ALIGNED FAVORITES (operator GO, shadow-first) — sol-family
+                    # parity with bitcoin._favorite_lane_signals. Trend-aligned favorites BLEED (-$365);
+                    # FLAT-tape + against-trend WIN. Gate: tape trending AND favorite agrees => sit out
+                    # (live) / log-only (shadow). Fail-safe. Mode: off (default) | shadow | live.
+                    _sta_mode = str(cfg.get("sit_out_trend_aligned_mode", "off") or "off").lower()
+                    if _sta_mode in ("shadow", "live"):
+                        try:
+                            _tstate = _latest_tape_state(self._signal_strategy_name) or {}
+                            _tape_dir = str(_tstate.get("direction") or "FLAT").upper()
+                            if _tape_dir in ("UP", "DOWN") and direction == _tape_dir:
+                                logger.info(
+                                    "  [favorite-lane] TREND-ALIGNED %s tf=%s dir=%s tape=%s (%s)",
+                                    fav_action, tf, direction, _tape_dir,
+                                    "SIT-OUT" if _sta_mode == "live" else "shadow-would-sit-out")
+                                if _sta_mode == "live":
+                                    continue
+                        except Exception:
+                            pass
+                    # 2026-08-09 SIZE-TAPER by entry price (#2, operator GO) — sol-family parity with
+                    # bitcoin._favorite_lane_signals. Thin-payoff high-price favorites (0.88-0.93 band:
+                    # high WR but net-negative, payoff can't cover losers) get downsized; 0.85-0.88 stays
+                    # full. taper=clamp((1-fav_price)/(1-floor), min_frac, 1.0). Off => byte-identical.
+                    _fav_size = size_usd
+                    if bool(cfg.get("size_taper_enabled", False)):
+                        _min_frac = min(1.0, max(0.0, float(cfg.get("size_taper_min_frac", 0.4) or 0.4)))
+                        _t_start = float(cfg.get("size_taper_start", 0.88) or 0.88)  # full up to here; taper above
+                        _taper = (price_max - fav_price) / max(1e-6, price_max - _t_start)
+                        _fav_size = size_usd * max(_min_frac, min(1.0, _taper))
                     out.append(SolMacroSignal(
                         market_id=market.id,
                         market_question=market.question,
                         action=fav_action,
                         price=order_price,
-                        size=round(size_usd, 2),
+                        size=round(_fav_size, 2),
                         confidence=round(fav_price, 4),
                         edge=round(fav_price - 0.5, 4),
                         token_id_yes=market.token_id_yes,
@@ -7568,7 +7718,7 @@ class SolMacroStrategy:
                     ))
                     logger.info(
                         "  [favorite-lane] %s '%s' tf=%s fav_price=%.3f size=$%.2f (%.1fm left)",
-                        fav_action, market.question[:40], tf, fav_price, size_usd, mins_left,
+                        fav_action, market.question[:40], tf, fav_price, _fav_size, mins_left,
                     )
                 except Exception as _fe:
                     logger.debug("favorite_lane per-market skip: %s", _fe)

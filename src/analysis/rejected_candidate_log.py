@@ -486,6 +486,26 @@ def log_rejected_candidate(
         up_or_down = "up" if str(action).upper() == "BUY_YES" else "down"
         synthetic_lane = f"{strategy}|{window}|{up_or_down}|{bias_token}|rejected"
         record_context = dict(context or {})
+        # 2026-08-12 side_resolver_v2 LIVE-EMIT (phase 2, item 3): attach tape_dir + per-side
+        # adapter edges so the v2 shadow scorer's top-2 owners (lane_tape_adapter, tape_map) can
+        # fire on REAL features (the shadow previously reduced to quant/native only). Fully
+        # fail-safe + OBSERVE-ONLY — adds log fields, never touches the traded side. Skips if a
+        # caller already supplied tape_dir. See docs/SHADOW_REGISTRY.md + side_resolver_v2.py.
+        if "tape_dir" not in record_context:
+            try:
+                from src.analysis.tape_map import latest_tape_state
+                _ts = latest_tape_state(str(strategy or "")) or {}
+                record_context["tape_dir"] = _ts.get("direction")
+                record_context["tape_conf"] = _ts.get("confidence")
+            except Exception:
+                pass
+            try:
+                from src.analysis.lane_tape_adapter import get_tape_admission_delta
+                # admission delta: negative = loosen (winning lane) => realized edge is -delta.
+                record_context["tape_adapter_up"] = -float(get_tape_admission_delta(strategy, window, "up"))
+                record_context["tape_adapter_down"] = -float(get_tape_admission_delta(strategy, window, "down"))
+            except Exception:
+                pass
         live_lane_id = _valid_lane_id(record_context.get("calibration_lane_id"))
         lane_biases = _biases_from_live_lane(live_lane_id)
         effective_min_edge_val = (

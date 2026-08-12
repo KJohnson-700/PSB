@@ -118,8 +118,12 @@ def _fresh(ts, now, window):
 
 
 # Codex fix #2: provider names drift across engine versions (minimax_tape/minimax,
-# qwen_vision/qwen). Match either. minimax is the AI primary, qwen the AI fallback.
-_TIERS = (("minimax", ("minimax_tape", "minimax")), ("qwen", ("qwen_vision", "qwen")))
+# qwen_vision/qwen). Match either.
+# 2026-08-12 SCORED REORDER (ai_direction_score.py, n=18118): qwen_vision 50.6% (n12460,
+# beats tape_map champion 47% + coinflip) >> minimax_tape 49.3% >> minimax 43.8% (WORST).
+# minimax as primary degenerated the override to all-LONG (it emits UP~0.55 for every asset).
+# qwen (vision/chart-reader) is the measured-best signal => PRIMARY. minimax demoted to fallback.
+_TIERS = (("qwen", ("qwen_vision", "qwen")), ("minimax", ("minimax_tape", "minimax")))
 
 
 def resolve_asset(asset, ai_rec, manual, now):
