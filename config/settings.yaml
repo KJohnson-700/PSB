@@ -464,7 +464,26 @@ trading:
     # green (peak MFE < arm) is cut SHALLOW at hold_never_green_stop_pct instead of riding to the -55% catastrophic;
     # a position that went green THEN dipped rides (recoverable winner), deep -cat backstop only. Favorites are
     # EXCLUDED (they win by settling to $1 without going green). Set enabled:false to fall back to the window axis.
-    hold_mfe_conditional_stop_enabled: true   # 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
+    # 2026-08-13 DISABLED (operator: "find the fix"). THE NEVER-GREEN CUT IS 83% OF THE ENTIRE
+    # SESSION LOSS. Audit of test_20260813_052734 — all 20 trades market-favorite — split by how
+    # the trade ended:
+    #     STOPPED (never-green cut)  n= 9  WR  0.0%  -$58.17  -0.4697/$1
+    #     HELD to settlement         n=11  WR 45.5%  -$12.17  -0.0884/$1
+    # Held trades land at 45.5%: the coin flip the favorite policy predicts, losing only a little
+    # to price+cost. The stop is 0-for-9, cutting at -34% within 0.3-2.7 minutes.
+    # WHY IT IS STRUCTURALLY WRONG HERE (not just unlucky): a stop pays only when you have
+    # directional edge — you cut because you know you are wrong. With direction measured at a coin
+    # flip (48-51%), a stop triggering on noise is guaranteed-negative EV: it converts paths with
+    # ~50% odds of recovering into certain losses. 0/9 at a true 50% is p=0.002, so this is not
+    # variance — the cut SELECTS currently-losing trades and realises them, and the held cohort
+    # proves ~45% of them come back. Re-confirms the 08-08 finding that stops are the leak and
+    # 5m/15m dips settle GREEN.
+    # Disabling falls back to the window axis, where early_stop_windows:[1h] already gives
+    # 5m/15m RIDE to resolution and keeps 1h's stop — exactly what the data asks for.
+    # HOT-RELOADABLE: read in live_testing.reload_from_config (~line 314) and exit_rules is in
+    # _HOT_RELOAD_TRADING_KEYS. The "RESTART-CLASS / frozen at __init__" note below is STALE.
+    # REVERT: set true (no restart needed).
+    hold_mfe_conditional_stop_enabled: false   # 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
     hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
     hold_5m_loser_floor_pct: 0.4
