@@ -16,6 +16,22 @@ Every recent major change and what CONFIRMS it worked. Decisions on LIVE REALIZE
 (filter by session_id). Read-out scripts noted. Update Status each session; when an item
 is confirmed +/-, move it to §1 findings and drop the row.
 
+### 🧪 SHADOW REGISTRY — every shadow, its graduation bar, and its kill date
+Operator 2026-08-12: shadows get built and then FORGOTTEN. Nothing enters this table without a
+GRADUATION BAR (what promotes it) and a KILL DATE (when it dies unpromoted). A shadow with no bar
+is not a shadow, it is clutter — delete it. Review this table EVERY session.
+
+| # | Shadow | Question it answers | GRADUATION BAR | KILL DATE | Status |
+|---|---|---|---|---|---|
+| S1 | **enriched-payload direction variant** (NEXT SESSION — build first) | Can a provider beat the QUOTE when it can actually see it? Today every provider gets 6 Binance scalars and NEVER sees `yes_price`, window-open price, elapsed %, or seconds-remaining — all computed in-repo, dropped at 3 call sites (`bitcoin.py:2138`, `sol_macro.py:3322`, `eth_macro.py:725`). | Beat the quote in the 0.45-0.55 toss-up band at all. Current providers: 48-52% there, and 22-27% right when they DISAGREE with the quote. Score with `scripts/ai_direction_exact_join.py` (exact market_id, CIs). | 2026-08-26 | NOT BUILT |
+| S2 | CEX→PM repricing lag (`scripts/cex_pm_lag_shadow.py`) | Its own docstring: "the ONE signal our HF analysis said could actually beat the ~coinflip" — yet it is shadow-only and NOT wired into the direction payload. | Beat coinflip after 2c spread + 0.07 taker fee on exact-join scoring. | 2026-08-26 | UNSCORED — never graduated |
+| S3 | `neutral_bias` dual-counterfactual (sol/eth shipped `946cb0c`; **BTC still TODO**) | 41.6% of ALL evals (13,901/33,388) — biggest gate in the bot, never logged until tonight. | Codex bar: n>=300 settled TRUE-neutral rows per lane/side, positive after 2c cost, 5m excluded unless 5m alone clears costs. | 2026-08-27 | LOGGING LIVE (sol/eth) |
+| S4 | realized-Kelly sizer (`scripts/realized_kelly_shadow.py`) | Size by realized (p,b) not est_prob. Walk-fwd -$295 → +$777. | Needs a GO decision; re-score post-`flat_sizing` fix (`50705e0`) since the old numbers were measured through the hidden shrink. | 2026-08-26 | AWAITING GO |
+| S5 | side_resolver_v2 (`scripts/side_resolver_v2_shadow.py`) | Single-side-owner resolver vs champion. | Beat champion on exact-join scoring. | 2026-08-26 | UNSCORED |
+| S6 | direction all-stale window (`data/calibration/direction_stale_windows.jsonl`, `ed7ecd0`) | How often is the bot directionally blind on QUANT long-bias? Measured 32 windows / 99h, 2-4 min each, 0.7% of runtime. | Join stale windows to entries opened inside them; if <1 entry/session, CLOSE IT as answered — do not carry it. | 2026-08-19 | MEASURING |
+
+**REFUTED / CLOSED (do not re-litigate):** provider DOWN-vs-UP 60/40 asymmetry — my own scoring-polarity bug; exact join (31,142 calls, 7,147 markets) shows NO asymmetry, CIs overlap, and fade EV is −0.105/$1 vs −0.075 straight. Providers carry no information beyond the quote. `scripts/ai_direction_exact_join.py` is the re-runnable proof.
+
 ### A. Live behavior changes awaiting realized confirmation
 | # | Change (shipped) | Live? | Confirms it → threshold | Read-out | Status 08-05 |
 |---|---|---|---|---|---|
@@ -37,6 +53,7 @@ is confirmed +/-, move it to §1 findings and drop the row.
 | 12 | Dynamic-admission: rotation/breaker/attribution | rotation_detector_shadow / directional_breaker_shadow / attribution_shadow | produce actionable per-lane signal | ⏳ accumulating |
 | 13 | tape_admission / tape_confirmed_exit / hold_benefit / entry_tape | respective *_shadow.py | which exit/admission policy beats champion | ⏳ |
 | 14 | xrp/eth 15m tape-adaptive side-veto SHADOW (#111) | tape_map_validator | veto agrees with realized wrong-side | ⏳ verify live vs shadow |
+| 15 | **realized-Kelly sizer SHADOW** (08-08) `realized_kelly_shadow.jsonl` — daemon `--loop 600` (was pid 94477) | `python -m src.analysis.realized_kelly_shadow --replay` | fwd reweight beats live baseline; then operator GO + Codex on the live flip | ✅ walk-forward −$295→+$777 (+$1072, 5133 trades, no-lookahead); ⏳ accumulate FORWARD vs live before mode→live. ROOT-CAUSE of wins<losses = lost the Kelly size-RANGE. Size by realized (p,b) NOT est_prob. ⛔reads trades.jsonl not trades_settled(omits stops). See project_realized_kelly_shadow_sizer_2026_08_08 |
 | — | exit-AI shadow daemon | — | — | ❌ KILLED 08-05 (operator) — no longer pending |
 
 ### C. ~~Built-not-live~~ → RESOLVED 08-05: ALL 5 ALREADY EXIST LIVE — do NOT rebuild
