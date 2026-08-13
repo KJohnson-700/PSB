@@ -1672,7 +1672,7 @@ strategies:
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
     disable_buy_yes_15m: false
-    disable_buy_no_5m: true     # 2026-08-12 CUT: clean baseline XRP 5m BUY_NO net -$18.24, PF 0.68, 30% WR. Preserve XRP 15m lanes, which were the strongest positive cohort.
+    disable_buy_no_5m: false # 2026-08-13 RE-OPENED (operator GO, all 3). xrp_macro 5m BUY_NO: +$55.64 all-time n=196, JunJul +$107.99 (n=169, WR 47.3% vs 42.8% BE, PF 1.20), cut on 27 Aug trades. Exits VERIFIED CURRENT before reopening: lane uses the GLOBAL exit stack (no stale window_lane_overrides) = TP +30% / stop -15% / max_hold 18m / giveback arm .30 retrace .20 / never-green -34% / catastrophic -55%, hold_winners false. That is the same stack producing this session b=2.22. Starvation context: doge+bnb were ~98% of their rejects from disable_* flags and sol 81% — these assets were switched OFF, not filtered by tape.
     flip_exempt_min_edge_1h: false
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
@@ -1918,7 +1918,7 @@ strategies:
     - 5m
     - 15m
     disable_buy_no_5m: false
-    disable_buy_yes_5m: true
+    disable_buy_yes_5m: false # 2026-08-13 RE-OPENED (operator GO, all 3). doge_macro 5m BUY_YES: +$5.13 all-time n=95, JunJul +$41.39, killed on 29 Aug trades (-$36.25). Exits VERIFIED CURRENT before reopening: lane uses the GLOBAL exit stack (no stale window_lane_overrides) = TP +30% / stop -15% / max_hold 18m / giveback arm .30 retrace .20 / never-green -34% / catastrophic -55%, hold_winners false. That is the same stack producing this session b=2.22. Starvation context: doge+bnb were ~98% of their rejects from disable_* flags and sol 81% — these assets were switched OFF, not filtered by tape.
     buy_yes_15m_pocket_rsi_max: 35
     est_prob:
       atr_low_pct: 0.0035
@@ -2138,7 +2138,7 @@ strategies:
     fade_regime_windows: []
     disable_buy_no_1h: false
     disable_buy_no_15m: false
-    disable_buy_no_5m: true
+    disable_buy_no_5m: false # 2026-08-13 RE-OPENED (operator GO, all 3). bnb_macro 5m BUY_NO: +$32.54 all-time n=92, POSITIVE IN BOTH ERAS (JunJul +$30.90 / Aug +$1.64 n=3), undocumented cut. Exits VERIFIED CURRENT before reopening: lane uses the GLOBAL exit stack (no stale window_lane_overrides) = TP +30% / stop -15% / max_hold 18m / giveback arm .30 retrace .20 / never-green -34% / catastrophic -55%, hold_winners false. That is the same stack producing this session b=2.22. Starvation context: doge+bnb were ~98% of their rejects from disable_* flags and sol 81% — these assets were switched OFF, not filtered by tape.
     buy_yes_15m_pocket_rsi_max: 65.0
     buy_yes_15m_pocket_include_bearish: false
     buy_no_1h_pocket_rsi_min: 35.0
