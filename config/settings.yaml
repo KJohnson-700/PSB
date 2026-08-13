@@ -2375,6 +2375,42 @@ direction:
   override_when_quant_neutral: true    # CLAUDE-DRIVEN: my calls apply even where quant sat out
   apply_windows: ['1h', '15m']    # operator directive: 15m was ALWAYS meant to be AI-driven.
   min_conf: 0.0          # ignore overrides below this confidence
+  # ── SIDE POLICY (2026-08-13, operator GO after Codex design review) ────────────
+  # WHO PICKS THE SIDE. `resolver` = legacy (the native bias stack + its flip/fade
+  # modifiers). `favorite` = take whichever side the MARKET already prices above 0.50.
+  #
+  # WHY: scripts/resolver_vs_quote.py scored every policy on the SAME 171,380 settled
+  # ghost candidates (real Polymarket resolutions, Aug 10-13), restricted to the
+  # 0.45-0.55 toss-up band where the quote carries no direction, as EV per $1 staked
+  # at the price actually payable, 1c cost:
+  #     always_up  50.59%  -0.0133   |  favorite  50.63%  -0.0215
+  #     resolver   48.24%  -0.0525   |  ai_hist   47.79%  -0.0584
+  # The resolver is beaten by a coinflip (50.09%, +0.0020) at 95% CI +/-0.24pt, and the
+  # AI override (correctly time-joined from the shadow log) is worse still. Per lane the
+  # resolver beats the favorite in 6/20 and ONLY bnb_macro|1h has positive EV@1c with it
+  # (54.6% vs favorite 40.4%, +0.0750, n=1224) -> that lane is exempted below.
+  #
+  # always_up measured BEST but was rejected deliberately: it is a static long bet that
+  # only wins in an up-tape. `favorite` follows whatever the market prices, so it
+  # self-flips with the tape and cannot be caught facing the wrong way.
+  #
+  # HONEST SCOPE (Codex): this is LOSS REDUCTION, not alpha. Favorite's aggregate EV is
+  # still NEGATIVE. The sample is REJECTED candidates, so favorite's advantage is not
+  # proven on the admitted population. Paper-only experiment with the kill rule below.
+  side_policy: favorite
+  side_policy_resolver_lanes: ["bnb_macro|1h"]   # lanes that KEEP the resolver
+  side_policy_deadband: 0.01     # sit out 0.49-0.51: "favorite" there is quote jitter, not signal
+  side_policy_price_band: [0.45, 0.55]   # the band the edge was MEASURED in; own band, not the
+                                          # lane bands (those are tuned for the opposite regime and
+                                          # would choke frequency — Codex q3)
+  side_policy_flat_edge: 0.02    # a favorite-side trade has ~0 model edge BY CONSTRUCTION (est_prob
+                                 # came from the resolver machinery we just removed). Size on a flat
+                                 # edge like risk.rsi_fade.flat_edge instead of pretending the model
+                                 # estimated it; without this every favorite trade dies on its own
+                                 # min_edge/conviction floors. Codex q2 option (c).
+  # KILL RULE (hot-reload, no restart): set side_policy: resolver if after 50 closed
+  # favorite-policy trades (or 24h) net is worse than -0.03/$1 staked, OR any lane hits
+  # n>=20 worse than -0.05/$1, OR entry count collapses >70% on price-band/centered skips.
 # ── FAVORITE-LONGSHOT lane (08-07) ──────────────────────────────────────────
 # Structural price bet: buy the FAVORITE (our-side price >= floor) side-agnostic.
 # Bypasses est_prob/edge/price-band machinery entirely — favorites are structurally

@@ -78,6 +78,7 @@ from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
     resolve_enabled_flag,
+    resolve_side_policy,
     resolve_tf_config_value,
     tf_config_override_snapshot,
 )
@@ -2277,8 +2278,29 @@ class BitcoinStrategy:
                 and self._b1hsl_enabled
                 and self._b1hsl_entry_min <= yes_price <= self._b1hsl_entry_max
             )
-            if _simple_1h_long:
+            # 2026-08-13 SIDE POLICY (BTC port). The resolver picks direction worse than a
+            # coin flip (48.24% on 171,380 settled ghosts in the 0.45-0.55 band, EV
+            # -0.0525/$1 vs the market favorite's -0.0215); bitcoin|15m is the WORST lane
+            # in the bot at 41.6% vs the favorite's 64.0%. On non-exempt lanes the MARKET
+            # picks the side. Decided here (before _simple_1h_long, which force-longs) and
+            # applied below; see strategy_config.resolve_side_policy.
+            _sp = resolve_side_policy(
+                self.full_config,
+                lane_key=f"bitcoin|{_updown_tf}",
+                yes_price=yes_price,
+                resolver_side=allowed_side,
+            )
+            _side_policy_active = bool(_sp.get("active"))
+            _side_policy_flat_edge = float(_sp.get("flat_edge") or 0.0)
+            # _simple_1h_long force-longs regardless of bias — it must not override the
+            # policy's side (Codex). Currently disabled in config; guarded anyway.
+            if _simple_1h_long and not _side_policy_active:
                 allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
+            if _side_policy_active and allowed_side is not None:
+                if _sp.get("side") is None:
+                    _bump_skip(_sp.get("skip") or "favorite_policy_skip")
+                    continue
+                allowed_side = _sp["side"]
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
@@ -2312,6 +2334,8 @@ class BitcoinStrategy:
             threshold = None
             direction = "UP"  # default; overridden below
             side_source = resolution.side_source
+            if _side_policy_active:
+                side_source = (side_source or "") + "+" + str(_sp.get("tag") or "")
             direction_decision: Optional[BTCDirectionDecision] = None
             reason_parts = [
                 f"HTF4={htf_bias}",
@@ -2431,7 +2455,11 @@ class BitcoinStrategy:
                 # 2026-08-10: do NOT let window_delta_flip undo a deliberate RSI fade (mirrors the
                 # alt _fade_active guard) — both are intentional side inversions; the later one
                 # must not silently re-flip the earlier. side_source already carries btc_{tf}_rsi_fade.
-                if _updown_tf in _wd_flip_windows and "rsi_fade" not in (side_source or ""):
+                # 2026-08-13: also suppressed once the MARKET owns the side — a late
+                # window-delta flip would silently undo the side policy. (_side_policy_active
+                # is bound above at the resolver; _sticky_side_active is defined later.)
+                if (_updown_tf in _wd_flip_windows and "rsi_fade" not in (side_source or "")
+                        and not _side_policy_active):
                     _btc_wd_flip = self._btc_window_delta_flip(
                         ta, _updown_tf, _eval_left, action
                     )
@@ -3905,12 +3933,15 @@ class BitcoinStrategy:
             # fade takes zero trades. Defined here (before the conviction gate) and reused at the
             # min_edge exemption below. side_source carries the btc_{tf}_rsi_fade tag by now.
             _is_rsi_fade = bool(side_source and "rsi_fade" in side_source)
+            # STICKY: once the market owns the side, later flips must not undo it.
+            _sticky_side_active = _is_rsi_fade or _side_policy_active
             if (
                 is_updown
                 and action == "BUY_YES"
                 and _yes_conv_floor > 0.0
                 and float(estimated_prob) < _yes_conv_floor
                 and not _is_rsi_fade  # fade bets against est_prob => conviction floor N/A
+                and not _side_policy_active  # market picks the side => est_prob describes the OTHER side
             ):
                 _bump_skip("buy_yes_conviction_floor")
                 logger.info(
@@ -4336,6 +4367,14 @@ class BitcoinStrategy:
             # BTC has NO centered-price gate, so only min_edge + conviction need exempting.
             # Reverts byte-identical when risk.rsi_fade.enabled:false (=> no *_rsi_fade tag).
             # (_is_rsi_fade defined at the conviction floor above.)
+            if _side_policy_active and _side_policy_flat_edge > 0.0:
+                # 2026-08-13 SIDE-POLICY exemption (BTC port; Codex q2 option (c)). est_prob
+                # describes the resolver's side, not the market-favorite side we are taking,
+                # so gate on a flat edge instead of a fabricated probability.
+                effective_min_edge = 0.0
+                if edge < _side_policy_flat_edge:
+                    edge = _side_policy_flat_edge
+                reason_parts.append(f"market_favorite_exempt({_side_policy_flat_edge:.3f})")
             if _is_rsi_fade:
                 _rf_cfg = (self.full_config.get("risk", {}) or {}).get("rsi_fade", {}) or {}
                 _rf_flat_edge = float(_rf_cfg.get("flat_edge", 0.05) or 0.05)

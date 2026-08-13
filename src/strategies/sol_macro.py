@@ -79,6 +79,7 @@ from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
     resolve_enabled_flag,
+    resolve_side_policy,
     resolve_tf_config_value,
     tf_config_override_snapshot,
 )
@@ -3699,6 +3700,41 @@ class SolMacroStrategy:
             # (window_delta_flip / fresh_cross_override / posterior / 5m NO->YES) silently UNDO
             # the deliberate RSI fade. Both are intentional side inversions that must stick.
             _fade_active = any(t in (side_source or "") for t in ("fade_native", "rsi_fade"))
+            # 2026-08-13 SIDE POLICY (operator GO, Codex-designed). The resolver is
+            # measurably worse than a coin flip at picking direction (48.24% on 171,380
+            # settled ghosts in the 0.45-0.55 band, EV -0.0525/$1 vs the market favorite's
+            # -0.0215), so on non-exempt lanes the MARKET picks the side and the resolver's
+            # output becomes diagnostic only. Applied EARLY and made STICKY: applying it
+            # late would admit on one side's edge and execute the other. Exempt lanes
+            # (direction.side_policy_resolver_lanes, currently bnb_macro|1h — the one lane
+            # where the resolver is +EV) and side_policy:resolver are byte-identical.
+            _sp = resolve_side_policy(
+                self.full_config,
+                lane_key=f"{self._signal_strategy_name or asset}|{_updown_tf}",
+                yes_price=market.yes_price,
+                resolver_side=allowed_side,
+            )
+            _side_policy_active = bool(_sp.get("active"))
+            _side_policy_flat_edge = float(_sp.get("flat_edge") or 0.0)
+            if _side_policy_active:
+                if _sp.get("side") is None:
+                    _bump_skip(_sp.get("skip") or "favorite_policy_skip")
+                    _log_skip_reject(
+                        market=market, window=_updown_tf, side=allowed_side,
+                        action=("BUY_YES" if allowed_side == "LONG" else "BUY_NO"),
+                        reason=_sp.get("skip") or "favorite_policy_skip",
+                        yes_price=market.yes_price,
+                        htf_bias=resolution.primary_htf_bias,
+                        context=dict(_sp.get("meta") or {}),
+                    )
+                    continue
+                allowed_side = _sp["side"]
+                side_source = (side_source or "") + "+" + str(_sp.get("tag") or "")
+            # STICKY: every downstream flip path (window_delta_flip, fresh_cross_override,
+            # posterior flip, 5m NO->YES, overbought_fade_short) must key off THIS, not
+            # _fade_active alone — otherwise they silently undo the policy's side, exactly
+            # as they used to undo the RSI fade before the 08-10 Codex fix.
+            _sticky_side_active = _fade_active or _side_policy_active
             primary_htf_bias = resolution.primary_htf_bias
             # [1h] simple band: price-band admission for native LONG signals only.
             # Do not choose side here; alt direction comes from the bias resolver.
@@ -4066,6 +4102,9 @@ class SolMacroStrategy:
                     )
                     if (
                         _ofs_on
+                        # 2026-08-13 side policy: this flip rewrites allowed_side to SHORT,
+                        # so it must not fire once the side is sticky (favorite policy or fade).
+                        and not _sticky_side_active
                         and _ofs_window_ok
                         and not _ofs_block_unan
                         and _alt_rsi is not None
@@ -5181,15 +5220,15 @@ class SolMacroStrategy:
                         direction=direction, side_source=side_source, reason_parts=reason_parts,
                         crossover=macd_5m.crossover, tf_label="5m",
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger, enabled=(not _fade_active) and self.config.get("fresh_cross_override", True),
+                        logger=logger, enabled=(not _sticky_side_active) and self.config.get("fresh_cross_override", True),
                         # 2026-06-08: 5m market -> 5m RSI (own-window/faster-lead), not
                         # the 15m canonical. No-op today (flip is 1h-gated) but correct
                         # for when the flip is extended to the 5m window.
                         rsi_14=getattr(getattr(ta.sol, "tf_5m", None), "rsi_14", None), window="5m",
-                        momentum_flip_enabled=(not _fade_active) and self.config.get("rsi_momentum_flip_1h", False),
+                        momentum_flip_enabled=(not _sticky_side_active) and self.config.get("rsi_momentum_flip_1h", False),
                         macd_hist_5m=getattr(macd_5m, "histogram", None),
-                        macd_flip_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_5m15m", False),
-                        macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
+                        macd_flip_enabled=(not _sticky_side_active) and self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=(not _sticky_side_active) and self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     # 2026-07-03 FROZEN-EST FIX (sol-family 5m): blend continuous window-delta
@@ -5210,7 +5249,7 @@ class SolMacroStrategy:
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = None if _fade_active else self._window_delta_flip(
+                    _wd_flip = None if _sticky_side_active else self._window_delta_flip(
                         sol, _updown_tf, _eval_left, action,
                         primary_htf_bias=primary_htf_bias, alt_htf_bias=mtt.h1_trend,
                     )
@@ -5267,7 +5306,7 @@ class SolMacroStrategy:
                     # recompute; the flipped action's edge is evaluated below with
                     # the same β-corrected est_prob and must clear the normal edge
                     # gate. Uses the exact lane_id the calibrator just keyed on.
-                    if (not _fade_active) and self._directional_flip_enabled():
+                    if (not _sticky_side_active) and self._directional_flip_enabled():
                         _cal = getattr(self, "lane_calibrator", None)
                         _flip_lid = getattr(self, "_last_calibration_lane_id", "")
                         if _cal is not None and _flip_lid and _cal.flip_recommended(_flip_lid):
@@ -5290,7 +5329,7 @@ class SolMacroStrategy:
                     # below then admits only the cheap longs. Opt-in per strategy via
                     # buy_no_5m_flip_to_yes (enabled for hype only).
                     if (
-                        (not _fade_active)
+                        (not _sticky_side_active)
                         and bool(self.config.get("buy_no_5m_flip_to_yes", False))
                         and action == "BUY_NO"
                     ):
@@ -5572,19 +5611,19 @@ class SolMacroStrategy:
                         faster_crossover=(ta.sol.macd_15m if is_hourly else ta.sol.macd_5m).crossover,
                         faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger, enabled=(not _fade_active) and self.config.get("fresh_cross_override", True),
+                        logger=logger, enabled=(not _sticky_side_active) and self.config.get("fresh_cross_override", True),
                         # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m->5m).
                         rsi_14=getattr(getattr(ta.sol, "tf_15m" if window_label == "1h" else "tf_5m", None), "rsi_14", None), window=window_label,
-                        momentum_flip_enabled=(not _fade_active) and self.config.get("rsi_momentum_flip_1h", False),
+                        momentum_flip_enabled=(not _sticky_side_active) and self.config.get("rsi_momentum_flip_1h", False),
                         macd_hist_5m=getattr(getattr(ta.sol, "macd_5m", None), "histogram", None),
-                        macd_flip_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_5m15m", False),
-                        macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
+                        macd_flip_enabled=(not _sticky_side_active) and self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=(not _sticky_side_active) and self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = None if _fade_active else self._window_delta_flip(
+                    _wd_flip = None if _sticky_side_active else self._window_delta_flip(
                         sol, _updown_tf, _eval_left, action,
                         primary_htf_bias=primary_htf_bias, alt_htf_bias=mtt.h1_trend,
                     )
@@ -6699,6 +6738,19 @@ class SolMacroStrategy:
                 if edge < _rf_flat_edge:
                     edge = _rf_flat_edge
                 reason_parts.append(f"rsi_fade_exempt({_rf_flat_edge:.3f})")
+            # 2026-08-13 SIDE-POLICY min-edge/conviction EXEMPTION (same shape as rsi_fade
+            # and _simple_band_long above; Codex q2 option (c)). When the MARKET picks the
+            # side, est_prob no longer describes the side we are taking — it came from the
+            # resolver machinery the policy just removed — so the model edge is ~0/negative
+            # by construction and lane_min_edge + the conviction floors would reject nearly
+            # every favorite candidate. Do not fabricate a probability; size on the flat
+            # edge instead. Reverts byte-identically with direction.side_policy: resolver
+            # (=> _side_policy_active False everywhere).
+            if _side_policy_active and _side_policy_flat_edge > 0.0:
+                effective_min_edge = 0.0
+                if edge < _side_policy_flat_edge:
+                    edge = _side_policy_flat_edge
+                reason_parts.append(f"market_favorite_exempt({_side_policy_flat_edge:.3f})")
             # 2026-06-18: INVERTED-EDGE / tape-flip admit (DEFAULT OFF, per-lane
             # flip_exempt_min_edge_<tf> or global flip_exempt_min_edge). window_delta_flip
             # candidates are tape-driven: est_prob = the window-delta P(up), so the model
@@ -6741,6 +6793,7 @@ class SolMacroStrategy:
                 and _yes_conv_floor > 0.0
                 and float(estimated_prob) < _yes_conv_floor
                 and not _is_rsi_fade  # fade bets against est_prob => conviction floor N/A
+                and not _side_policy_active  # market picks the side => est_prob describes the OTHER side
             ):
                 _bump_skip("buy_yes_conviction_floor")
                 logger.info(
@@ -6749,7 +6802,7 @@ class SolMacroStrategy:
                 )
                 continue
             _conv_floor = float(self._tf_cfg(_updown_tf, "min_est_prob_conviction", 0.0) or 0.0)
-            if is_updown and _conv_floor > 0.0 and not _is_rsi_fade:  # fade bets against est_prob => floor N/A
+            if is_updown and _conv_floor > 0.0 and not _is_rsi_fade and not _side_policy_active:  # fade/side-policy bet against est_prob => floor N/A
                 _conv = float(estimated_prob) if action == "BUY_YES" else (1.0 - float(estimated_prob))
                 if _conv < _conv_floor:
                     _bump_skip("est_prob_conviction_floor")
@@ -7138,7 +7191,9 @@ class SolMacroStrategy:
                     # band by construction (est_prob unusable), already admitted on flat_edge
                     # above with effective_min_edge=0; min_edge_when_centered (e.g. xrp 0.12)
                     # would re-reject the exact candidates the fade targets. Skip for faded.
-                    _center_min_edge = 0.0 if _is_rsi_fade else max(effective_min_edge, self.min_edge_when_centered)
+                    # side policy trades the centred band BY DESIGN (0.45-0.55) — the centred
+                    # min-edge bar is tuned for the regime it replaces (Codex q3).
+                    _center_min_edge = 0.0 if (_is_rsi_fade or _side_policy_active) else max(effective_min_edge, self.min_edge_when_centered)
                     if edge < _center_min_edge:
                         _bump_skip("centered_price_edge_below_min")
                         logger.info(
