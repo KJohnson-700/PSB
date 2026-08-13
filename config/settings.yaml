@@ -721,7 +721,7 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
+        entry_window_hard_cap_mins_left: 5.5   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.  # 2026-08-13 raised to this lane's own 5m max — at 5.0 my pre-window cap was silently clamping the restored window (bitcoin 5.5 too, which the WINNING config had).
         min_edge: 0.08
         entry_window_min: 0.5
         entry_window_max: 5.5
@@ -1217,7 +1217,7 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
+        entry_window_hard_cap_mins_left: 6.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.  # 2026-08-13 raised to this lane's own 5m max — at 5.0 my pre-window cap was silently clamping the restored window (bitcoin 5.5 too, which the WINNING config had).
         min_edge: 0.1
         entry_window_min: 0.5
         entry_window_max: 4.0
@@ -1366,7 +1366,7 @@ strategies:
             entry_price_min: 0.47
             entry_price_max: 0.55
             entry_window_min: 0.5
-            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 6): entry_window_max = MAX minutes-to-expiry allowed at entry. 6 let the bot enter a 5m market 6min (~0.1h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 6.0  # 2026-08-12 ENTRY-TIMING FIX (was 6): entry_window_max = MAX minutes-to-expiry allowed at entry. 6 let the bot enter a 5m market 6min (~0.1h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 RESTORED to the +$159.90/69%%WR/n=100 winning value (operator: put the 5m lanes back).
             size_multiplier: 0.25
         15m:
           up:
@@ -1500,7 +1500,7 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
+        entry_window_hard_cap_mins_left: 11.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.  # 2026-08-13 raised to this lane's own 5m max — at 5.0 my pre-window cap was silently clamping the restored window (bitcoin 5.5 too, which the WINNING config had).
         min_edge: 0.07
         entry_window_min: 0.0
         entry_window_max: 5.5
@@ -1609,7 +1609,7 @@ strategies:
             entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 11): entry_window_max = MAX minutes-to-expiry allowed at entry. 11 let the bot enter a 5m market 11min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 11.0  # 2026-08-12 ENTRY-TIMING FIX (was 11): entry_window_max = MAX minutes-to-expiry allowed at entry. 11 let the bot enter a 5m market 11min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 RESTORED to the +$159.90/69%%WR/n=100 winning value (operator: put the 5m lanes back).
         15m:
           up:
             min_edge: 0.03
@@ -2223,11 +2223,11 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        entry_window_hard_cap_mins_left: 5.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.
+        entry_window_hard_cap_mins_left: 10.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "5m max" leaked into pre-window entries. 5m window = 5min; >5 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.  # 2026-08-13 raised to this lane's own 5m max — at 5.0 my pre-window cap was silently clamping the restored window (bitcoin 5.5 too, which the WINNING config had).
         min_edge: 0.085
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+        entry_window_max: 10.0  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 RESTORED to the +$159.90/69%%WR/n=100 winning value (operator: put the 5m lanes back).
         min_est_prob_conviction: 0.52
       15m:
         entry_window_hard_cap_mins_left: 90.0   # 2026-08-12 PRE-WINDOW HOLE: auto-align expands the upper bound ~4.2min, so "15m max" leaked into pre-window entries. 15m window = 15min; >15 is PRE-window. Cohort measured n=1752 net -$1371.69, z=-6.37 vs driftless-fair, negative in BOTH eras.  # 2026-08-13 OPERATOR ORDER: max 90min. The 15.0 came from 0d66874 while still marked "awaiting call" — never authorised. The winning +$159.90/69%WR/n=100 config ran 1h at 360 and 15m at 120-150; 90 is the operator ceiling. Hard cap raised in lockstep or it silently clamps 90 back to 15/60.
@@ -2335,7 +2335,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 5.5  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.
+            entry_window_max: 10.0  # 2026-08-12 ENTRY-TIMING FIX (was 10): entry_window_max = MAX minutes-to-expiry allowed at entry. 10 let the bot enter a 5m market 10min (~0.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 RESTORED to the +$159.90/69%%WR/n=100 winning value (operator: put the 5m lanes back).
             size_multiplier: 0.3
           down:
             min_edge: 0.06
