@@ -469,7 +469,28 @@ trading:
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
-    tp_giveback_enabled: true   # 2026-08-12 EMERGENCY RE-ENABLE after clean baseline failure: since 20260811_2059, losers with MFE>=30% totaled -$131.71; BTC 15m/1h alone repeatedly went +50% to +350% MFE then closed red/zero. The win-rate problem is partly an exit-conversion problem, not just entry selection. Restart-class: restart paper bot for this to take effect.
+    tp_giveback_enabled: false   # 2026-08-13 DISABLED (operator GO). MEASURED against its own
+    # alternative on the live journal: after a trade reaches the +30% arm you can either take
+    # the fixed TP or ride a 20%-retrace trail. Riding is 3x worse.
+    #     take_profit        n=1441  avg +$5.27
+    #     held_to_settle     n= 887  avg +$4.53
+    #     tp_giveback        n=  46  avg +$1.61   <- this
+    # Mechanism, straight from the journal: giveback trades peak at MFE 50.2% and exit at
+    # 19.7% — it surrenders 30.6 percentage points per trade on average. Arming at +30% and
+    # trailing 20% off the peak systematically converts a +50% peak into a +20% exit, which
+    # is worse than simply taking the +30% it already had.
+    # WHY IT IS OFF RATHER THAN TUNED: with direction measured at a coin flip (48-51%), exit
+    # policy cannot CREATE edge — it only redistributes the same expectation. What it does do
+    # is add a round trip, and every extra exit pays spread. So this was pure cost with no
+    # compensating benefit. Tuning the retrace would just pick a different point on a flat
+    # curve. Revisit only if a real entry edge is ever established.
+    # CAVEATS KEPT HONEST: n=46 is small, and the take_profit sample predates the giveback
+    # being switched on (08-10), so this is a temporal rather than simultaneous comparison. I
+    # could NOT build the proper hold-to-resolution counterfactual because market_id is None
+    # on every row of data/calibration/trades.jsonl — live trades cannot be joined to real
+    # Polymarket resolutions at all. That telemetry gap is logged separately.
+    # GLOBAL, not per-lane: n=46 does not split per lane. exit_rules is hot-reloadable.
+    # The 08-12 re-enable rationale it replaces: after clean baseline failure: since 20260811_2059, losers with MFE>=30% totaled -$131.71; BTC 15m/1h alone repeatedly went +50% to +350% MFE then closed red/zero. The win-rate problem is partly an exit-conversion problem, not just entry selection. Restart-class: restart paper bot for this to take effect.
     tp_giveback_arm_pct: 0.30       # 2026-08-12 made EXPLICIT — was running on the code default, invisible in config.
     tp_giveback_retrace_pct: 0.20   # GLOBAL default (5m/15m). Codex NO-GO on tightening this globally: at 0.42-0.47 entries a 10pt retrace is only 4-5c of token price, plausibly inside normal intra-window noise, and there is no tick path proving 5m/15m winners didn't wobble that much while climbing. Do NOT tighten a window without its OWN evidence.
     tp_giveback_retrace_pct_by_window:
