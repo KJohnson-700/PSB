@@ -222,6 +222,11 @@ def build_record_from_closed_trade(
         "mfe_pct": _coerce_float(closed.get("mfe_pct")),
         "pnl_pct_at_exit": _coerce_float(closed.get("pnl_pct_at_exit")),
         "effective_stop_loss_pct": _coerce_float(closed.get("effective_stop_loss_pct")),
+        # 2026-08-10 MFE-conditional-stop smoke-test: which hold policy fired at exit
+        # (never_green_stop | catastrophic_stop | hold_to_resolution | loser_floor |
+        # favorite_hard_stop | None). Threaded via exit_telemetry -> closed row. Makes
+        # trades.jsonl self-sufficient to isolate never-green cuts and measure the fix live.
+        "hold_policy_applied": str(closed.get("hold_policy_applied") or ""),
         # 2026-07-13 (operator GO, Codex GO): exit feed-provenance passthrough — journal
         # carries these via exit_telemetry; whitelist them so trades.jsonl is
         # self-sufficient for per-exit feed-health / trail re-measure analysis.

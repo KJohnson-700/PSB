@@ -93,7 +93,7 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
 TRADING_PROCESS_LOCK_FILE = RUNTIME_DIR / "trading_bot.lock"
-_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management", "direction"})
+_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management", "direction", "risk"})
 
 # Strategy modules for CODE hot-reload (option 1, 2026-07-11), in dependency order:
 # shared leaves -> sol_macro/bitcoin base -> alt subclasses. Reload in THIS order so each
@@ -852,6 +852,15 @@ class PolyBot:
         # AND fills stop going green), back UP as it recovers. De-size only
         # (max_mult<=1.0) so it can never enlarge a position. mode off|shadow|live.
         self.lane_tape_adapter = LaneTapeAdapter(self.config.get("lane_tape_adapter", {}))
+        # 2026-08-10 FAVORITE-NET startup build: warm the per-lane favorite rolling-net
+        # state so the favorite sit-out gate has a signal from the FIRST scan (it fails
+        # OPEN on a missing file otherwise). Only when the gate is armed; fully defensive.
+        try:
+            if (self.config.get("favorite_lane", {}) or {}).get("fav_net_sit_out_avg", None) is not None:
+                from src.analysis import favorite_net_tracker as _fnt
+                _fnt.write(_fnt.build(self.config))
+        except Exception as _fe:  # noqa: BLE001 — never break init
+            logging.warning("favorite-net startup build skipped: %s", _fe)
         self.notifier = NotificationManager(self.config)
         # is_paper drives loss_kill_active (the per-lane loss-streak pause is inert in
         # paper). config.trading.dry_run is NOT applied from --live until AFTER __init__
@@ -1562,6 +1571,17 @@ class PolyBot:
             self._maybe_recompute_adaptive_sizer(exit_settle_summary)
         except Exception as _se:  # noqa: BLE001 — sizer shadow must never break settle
             logging.warning("adaptive-sizer shadow recompute skipped: %s", _se)
+        # 2026-08-10 FAVORITE-NET recompute: rebuild the per-lane favorite rolling-net
+        # state (favorite_net_tracker) from the settled journal so the favorite sit-out
+        # gate (_favorite_lane_signals) reads a fresh signal. Cheap (last-N per lane) +
+        # fully defensive; only rebuilds when a favorite gate is actually armed. Same
+        # worker thread; must never break settle.
+        try:
+            if (self.config.get("favorite_lane", {}) or {}).get("fav_net_sit_out_avg", None) is not None:
+                from src.analysis import favorite_net_tracker as _fnt
+                _fnt.write(_fnt.build(self.config))
+        except Exception as _fe:  # noqa: BLE001 — favorite-net recompute must never break settle
+            logging.warning("favorite-net recompute skipped: %s", _fe)
         # allow_jsonl_scan=False: in the live bot NEVER fall back to the 500MB+
         # JSONL scan (the memory balloon we eliminated). DuckDB fast-path or the
         # cached/unavailable status only — even on cold start with a locked db.
@@ -2018,6 +2038,11 @@ class PolyBot:
             self.market_scanner.reload_from_config(self.config)
         if hasattr(self, "exit_manager") and self.exit_manager is not None:
             self.exit_manager.reload_from_config(self.config)
+        # 2026-08-08 (Codex fix): refresh ALL live-safe risk LIMITS so whitelisting `risk`
+        # for hot-reload isn't a trap — a lowered daily_loss_limit/max_trades_per_day now
+        # actually enforces, not just max_concurrent_positions.
+        if hasattr(self, "risk_manager") and self.risk_manager is not None:
+            self.risk_manager.reload_from_config(self.config)
         # never-green-cut: refresh mode on config reload (Codex #4) so flipping it back to
         # shadow/off DISABLES the live cut without a restart. On disable, clear the pending
         # set + the exit_manager cut ids so no stale cut fires. (off->live still needs a
@@ -5091,6 +5116,13 @@ class PolyBot:
                             "mae_pct": exit_decision.mae_pct,
                             "mfe_pct": exit_decision.mfe_pct,
                             "pnl_pct_at_exit": exit_decision.pnl_pct_at_exit,
+                            # 2026-08-10 MFE-conditional-stop smoke-test telemetry: which hold
+                            # policy actually fired (never_green_stop | catastrophic_stop |
+                            # hold_to_resolution | loser_floor | favorite_hard_stop | ...). Set on
+                            # the shared active_positions object by live_testing._hold_stop_pct_for.
+                            # Lets the smoke test isolate never-green cuts and score each against
+                            # the real resolution (ghost outcome join) — was the -34% cut RIGHT?
+                            "hold_policy_applied": getattr(pos, "_hold_policy_applied", None) if pos else None,
                             "effective_stop_loss_pct": exit_decision.effective_stop_loss_pct,
                             "ws_price_age_ms": self._ws_price_age_ms(getattr(pos, "token_id_yes", None)),
                             # Per-lane fill quality (realistic_paper_fills): the mark

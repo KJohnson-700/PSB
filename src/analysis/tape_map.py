@@ -43,6 +43,15 @@ _LAST_LOG: dict[str, float] = {}
 _LAST_STATE: dict[str, dict] = {}
 _LOCK = Lock()
 
+# 2026-08-11 HIGH-VOLATILITY LEAN PROMOTION — fixes the "map the tape" mislabel where a
+# high-volatility REVERSAL was tagged FLAT (a lagging MACD cancels the fresh EMA/trend votes,
+# so dscore lands at +/-1 and the static +/-2 threshold calls it FLAT while the tape is ripping).
+# When the tape is genuinely moving (vol_pctile >= _VOL_PROMOTE_PCTILE) AND there is a directional
+# lean (dscore = +/-1), follow the lean instead of blanket-FLAT. Low-vol +/-1 stays FLAT (real
+# chop). Revert: set _VOL_PROMOTE_ENABLED = False.
+_VOL_PROMOTE_ENABLED = True
+_VOL_PROMOTE_PCTILE = 0.70   # matches the existing vol_bucket "high" cutoff
+
 
 def _f(x: Any) -> Optional[float]:
     try:
@@ -111,19 +120,12 @@ def compute_tape_state(
     td = str(trend_direction or "").upper()
     td_dir = 1 if td in ("UP", "BULLISH") else (-1 if td in ("DOWN", "BEARISH") else 0)
 
-    # Direction vote: MACD consensus + EMA stack + trend label, each in {-1,0,1}.
-    dscore = _sign(macd_net) + ema_dir + td_dir  # -3..3
-    if dscore >= 2:
-        direction = "UP"
-    elif dscore <= -2:
-        direction = "DOWN"
-    else:
-        direction = "FLAT"
-
     strength = _f(trend_strength)
     strength = max(0.0, min(1.0, strength)) if strength is not None else None
 
     # Volatility: atr% + rolling percentile vs this asset's own recent history.
+    # Computed BEFORE the direction decision so a genuinely MOVING (high-vol) tape can override
+    # the stale-MACD "FLAT" tie via the lean-promotion below.
     atr_pct = None
     vol_pctile = None
     vol_bucket = None
@@ -136,6 +138,35 @@ def compute_tape_state(
             vol_pctile = round(sum(1 for h in hist if h <= atr_pct) / len(hist), 3)
             vol_bucket = "high" if vol_pctile >= 0.70 else ("low" if vol_pctile <= 0.30 else "mid")
 
+    # Direction vote: MACD consensus + EMA stack + trend label, each in {-1,0,1}.
+    dscore = _sign(macd_net) + ema_dir + td_dir  # -3..3
+    vol_promoted = False
+    _votes = (_sign(macd_net), ema_dir, td_dir)
+    _lean = 1 if dscore > 0 else -1
+    _aligned = sum(1 for v in _votes if v == _lean)   # votes agreeing with the lean
+    _opposed = sum(1 for v in _votes if v == -_lean)  # votes against it
+    if dscore >= 2:
+        direction = "UP"
+    elif dscore <= -2:
+        direction = "DOWN"
+    elif (
+        _VOL_PROMOTE_ENABLED
+        and dscore in (-1, 1)
+        and vol_pctile is not None
+        and vol_pctile >= _VOL_PROMOTE_PCTILE
+        and _aligned >= 2          # a genuine 2-of-3 MAJORITY...
+        and _opposed >= 1          # ...dragged to +/-1 by ONE opposing (usually lagging) vote
+    ):
+        # HIGH-VOLATILITY MAJORITY-LEAN PROMOTION (Codex-guarded): only promote a 2-of-3
+        # majority that a single opposing vote (typically the lagging MACD) pulled down to
+        # dscore +/-1 — NOT a lone single-source lean (noise). Bitcoin's reversal
+        # [macd=+1, ema=-1, trend=-1] => lean=-1, aligned=2 (ema+trend), opposed=1 (stale
+        # macd) => DOWN. A weak [trend=-1, 0, 0] => aligned=1 => stays FLAT. Low-vol stays FLAT.
+        direction = "UP" if dscore > 0 else "DOWN"
+        vol_promoted = True
+    else:
+        direction = "FLAT"
+
     # Confidence: how much the (nonzero) direction signals agree, blended with strength.
     sigs = [s for s in (_sign(macd_net), ema_dir, td_dir) if s]
     agree = (abs(sum(sigs)) / len(sigs)) if sigs else 0.0  # 1.0 = unanimous
@@ -146,6 +177,7 @@ def compute_tape_state(
         "asset": asset,
         "direction": direction,
         "dscore": dscore,
+        "vol_promoted": vol_promoted,
         "strength": strength,
         "vol_pct": (round(atr_pct, 6) if atr_pct is not None else None),
         "vol_pctile": vol_pctile,
