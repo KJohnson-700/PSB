@@ -3716,7 +3716,16 @@ class SolMacroStrategy:
             )
             _side_policy_active = bool(_sp.get("active"))
             _side_policy_flat_edge = float(_sp.get("flat_edge") or 0.0)
-            if _side_policy_active:
+            # 2026-08-13 NULL GUARD (bug fix, same shape as eth_macro/bitcoin). Without the
+            # `allowed_side is not None` test this overwrote a NEUTRAL resolver result with the
+            # market favorite, so sol/xrp/hype/doge/bnb silently began TRADING markets where
+            # their own bias engine had no opinion — while eth and bitcoin, which carry the
+            # guard, sat those out. Same policy, three files, two behaviours. It also killed
+            # neutral_bias ghost logging for the whole sol family (the gate is unreachable if
+            # allowed_side can never be None), which is how it surfaced. Whether to trade the
+            # neutral-bias pool on the favorite side is a real question -- 41.6% of all evals --
+            # but it is a deliberate, measured decision, not a side effect of a null check.
+            if _side_policy_active and allowed_side is not None:
                 if _sp.get("side") is None:
                     _bump_skip(_sp.get("skip") or "favorite_policy_skip")
                     _log_skip_reject(
@@ -6265,7 +6274,27 @@ class SolMacroStrategy:
                         # ADAPTIVE: hour sits out only while its ROLLING REALIZED $/trade is
                         # bleeding (recent-era only, hysteresis on recovery), UNION any manual
                         # risk.blocked_pt_hours. Self-flips back on when the hour recovers.
+                        # 2026-08-13 GHOST-LOG IT (operator GO). This is the 3rd-largest
+                        # blocker in the bot (1,084 skips in one session) and it wrote NOTHING,
+                        # so the sit-out could never be scored: it decides to stand down and
+                        # leaves no record of what the trade would have done. An ADAPTIVE gate
+                        # with no counterfactual cannot be validated OR falsified -- it just
+                        # accumulates trust. Logging the side the lane WOULD have taken makes
+                        # the hour-block testable against real resolutions.
                         _bump_skip("bleed_hour_sit_out")
+                        try:
+                            _log_skip_reject(
+                                market=market, window=_updown_tf,
+                                side=allowed_side, action=action,
+                                reason="bleed_hour_sit_out",
+                                yes_price=yes_price,
+                                htf_bias=primary_htf_bias,
+                                context={"gate": "bleed_hour_sit_out",
+                                         "side_source": side_source,
+                                         "graduation": "n>=200 settled then keep-or-drop the hour"},
+                            )
+                        except Exception:
+                            pass
                         continue
                 except Exception:
                     pass

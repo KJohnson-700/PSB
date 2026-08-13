@@ -2312,6 +2312,32 @@ class BitcoinStrategy:
                     bias_15m,
                     bias_5m,
                 )
+                # 2026-08-13 GHOST-LOG neutral_bias FOR BTC (the eth/sol port that was still
+                # outstanding). neutral_bias is the single biggest gate in the bot -- 41.6% of
+                # ALL strategy evaluations -- and BTC had never written a row for it, so there
+                # was no evidence for OR against loosening BTC's 4h/1h/15m/5m vote.
+                # BOTH SIDES are logged deliberately: this gate fires precisely when NO side
+                # resolved, so a one-sided row could not answer the only question worth asking
+                # -- when the vote deadlocks, would either direction have won?
+                # GRADUATION IS BINDING (docs/PSB_RESEARCH_ROADMAP.md OPEN CONFIRMATIONS):
+                # at n>=200 settled per side, loosen the side that beats its entry-price
+                # breakeven by >=3pt, or CLOSE the ghost out as answered if neither does.
+                try:
+                    for _nb_act, _nb_side in (("BUY_YES", "LONG"), ("BUY_NO", "SHORT")):
+                        log_rejected_candidate(
+                            strategy="bitcoin", window=_updown_tf, side=_nb_side,
+                            action=_nb_act, reason="neutral_bias", market=market,
+                            yes_price=yes_price, est_prob_up=None, htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source="btc_neutral_both_sides_probe",
+                            resolver_path="btc_neutral_both_sides_probe",
+                            context={"gate": "neutral_bias_both_sides_probe",
+                                     "htf_4h": htf_bias, "bias_1h": bias_1h,
+                                     "bias_15m": bias_15m, "bias_5m": bias_5m,
+                                     "graduation": "n>=200/side then loosen-or-close"},
+                        )
+                except Exception:
+                    pass
                 continue
             # Lower-TF late-entry filter only applies to 15m/1h — 5m has nothing
             # faster in the ladder, so the call (and its result) was dead for 5m.
@@ -2423,6 +2449,27 @@ class BitcoinStrategy:
                         "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
                         market.question[:40], direction_decision.suppress_reason,
                     )
+                    # 2026-08-13 GHOST-LOG the momentum-contradiction suppressions. The reason
+                    # string is BUILT BY F-STRING at bitcoin.py:612
+                    # (f"btc_{side}_against_{mom}_momentum"), so a literal grep finds nothing
+                    # and it never appeared in any gate audit -- the same f-string blind spot
+                    # that hid 5m_buy_yes_bullish_floor_bump. 316 skips/session, zero rows.
+                    # Logs the side the resolver WANTED so the suppression is scoreable.
+                    try:
+                        log_rejected_candidate(
+                            strategy="bitcoin", window=_updown_tf,
+                            side=direction_decision.effective_side,
+                            action=direction_decision.action,
+                            reason=str(direction_decision.suppress_reason),
+                            market=market, yes_price=yes_price, est_prob_up=None,
+                            htf_bias=htf_bias,
+                            side_source=getattr(direction_decision, "side_source", None),
+                            resolver_path=getattr(direction_decision, "resolver_path", None),
+                            context={"gate": "direction_suppressed",
+                                     "graduation": "n>=200 settled then keep-or-drop the guard"},
+                        )
+                    except Exception:
+                        pass
                     continue
                 action = direction_decision.action
                 direction = direction_decision.direction
@@ -2741,6 +2788,27 @@ class BitcoinStrategy:
                             "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
                             market.question[:40], direction_decision.suppress_reason,
                         )
+                        # 2026-08-13 GHOST-LOG the momentum-contradiction suppressions. The reason
+                        # string is BUILT BY F-STRING at bitcoin.py:612
+                        # (f"btc_{side}_against_{mom}_momentum"), so a literal grep finds nothing
+                        # and it never appeared in any gate audit -- the same f-string blind spot
+                        # that hid 5m_buy_yes_bullish_floor_bump. 316 skips/session, zero rows.
+                        # Logs the side the resolver WANTED so the suppression is scoreable.
+                        try:
+                            log_rejected_candidate(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=direction_decision.effective_side,
+                                action=direction_decision.action,
+                                reason=str(direction_decision.suppress_reason),
+                                market=market, yes_price=yes_price, est_prob_up=None,
+                                htf_bias=htf_bias,
+                                side_source=getattr(direction_decision, "side_source", None),
+                                resolver_path=getattr(direction_decision, "resolver_path", None),
+                                context={"gate": "direction_suppressed",
+                                         "graduation": "n>=200 settled then keep-or-drop the guard"},
+                            )
+                        except Exception:
+                            pass
                         continue
                     action = direction_decision.action
                     direction = direction_decision.direction
@@ -3278,6 +3346,27 @@ class BitcoinStrategy:
                             "  BTC skip '%s' — %s (neutral-resolver short into bullish tape + up momentum)",
                             market.question[:40], direction_decision.suppress_reason,
                         )
+                        # 2026-08-13 GHOST-LOG the momentum-contradiction suppressions. The reason
+                        # string is BUILT BY F-STRING at bitcoin.py:612
+                        # (f"btc_{side}_against_{mom}_momentum"), so a literal grep finds nothing
+                        # and it never appeared in any gate audit -- the same f-string blind spot
+                        # that hid 5m_buy_yes_bullish_floor_bump. 316 skips/session, zero rows.
+                        # Logs the side the resolver WANTED so the suppression is scoreable.
+                        try:
+                            log_rejected_candidate(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=direction_decision.effective_side,
+                                action=direction_decision.action,
+                                reason=str(direction_decision.suppress_reason),
+                                market=market, yes_price=yes_price, est_prob_up=None,
+                                htf_bias=htf_bias,
+                                side_source=getattr(direction_decision, "side_source", None),
+                                resolver_path=getattr(direction_decision, "resolver_path", None),
+                                context={"gate": "direction_suppressed",
+                                         "graduation": "n>=200 settled then keep-or-drop the guard"},
+                            )
+                        except Exception:
+                            pass
                         continue
                     action = direction_decision.action
                     direction = direction_decision.direction
@@ -3818,7 +3907,29 @@ class BitcoinStrategy:
                         # ADAPTIVE: hour sits out only while its ROLLING REALIZED $/trade is
                         # bleeding (recent-era only, hysteresis on recovery), UNION any manual
                         # risk.blocked_pt_hours. Self-flips back on when the hour recovers.
+                        # 2026-08-13 GHOST-LOG IT (operator GO). This is the 3rd-largest
+                        # blocker in the bot (1,084 skips in one session) and it wrote NOTHING,
+                        # so the sit-out could never be scored: it decides to stand down and
+                        # leaves no record of what the trade would have done. An ADAPTIVE gate
+                        # with no counterfactual cannot be validated OR falsified -- it just
+                        # accumulates trust. Logging the side the lane WOULD have taken makes
+                        # the hour-block testable against real resolutions.
                         _bump_skip("bleed_hour_sit_out")
+                        try:
+                            log_rejected_candidate(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=allowed_side, action=action,
+                                reason="bleed_hour_sit_out", market=market,
+                                yes_price=yes_price, est_prob_up=locals().get("est_prob_up"),
+                                htf_bias=htf_bias,
+                                btc_1h_regime=btc_1h_regime if ta else None,
+                                side_source=locals().get("side_source"),
+                                resolver_path=locals().get("resolver_path"),
+                                context={"gate": "bleed_hour_sit_out",
+                                         "graduation": "n>=200 settled then keep-or-drop the hour"},
+                            )
+                        except Exception:
+                            pass
                         continue
                 except Exception:
                     pass
