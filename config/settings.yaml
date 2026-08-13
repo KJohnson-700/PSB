@@ -600,7 +600,53 @@ trading:
         cooldown_min: 45
   exit_maker_wait_sec: 6
   flat_sizing_enabled: true
-  flat_base_usd: 15.0
+  flat_base_usd: 20.0   # 2026-08-13 15.0 -> 20.0 (operator: apply the CLEAN-ERA sizing direction).
+  # This is the "size UP the winners" half. Flat sizing gives every admitted trade the same base,
+  # so raising the base lifts sol/xrp/hype (and eth/bnb, which are mid-pack and left alone) while
+  # the lane_max_usd ceilings below clamp bitcoin and doge DOWN. Net effect = the clean-era ranking.
+  #
+  # WHY CLEAN-ERA AND NOT AUGUST (operator caught this, and he was right): August is contaminated
+  # by the Olympus geo-blocking. Ranked on enabled lanes only:
+  #     Jun+Jul (CLEAN)                       August (contaminated)
+  #     sol   +$163  +0.0500/$1               bitcoin  -$259  -0.0412
+  #     xrp   +$446  +0.0482                  xrp      -$325  -0.0420
+  #     hype  +$262  +0.0355                  hype     -$89   -0.0539
+  #     eth   +$127  +0.0281                  bnb      -$270  -0.0752
+  #     bnb   +$104  +0.0205                  sol      -$230  -0.0945
+  #     doge  +$26   +0.0135                  eth      -$262  -0.1118
+  #     bitcoin +$8  +0.0007                  doge     -$42   -0.2019
+  # EVERY strategy was profitable in the clean era (n=3,509). The August order is close to
+  # INVERTED: bitcoin goes last -> first, eth 4th -> 6th. My first sizing recommendation was built
+  # on August and would have moved size INTO bitcoin (the flattest clean-era lane, +$8 on n=861)
+  # and OUT of eth (profitable, +0.0281). That was wrong and the operator caught it.
+  #
+  # RESTART-CLASS: flat_base_usd is not in _HOT_RELOAD_TRADING_KEYS and adaptive_sizer is not in
+  # _HOT_RELOAD_TOP_LEVEL_KEYS. STAGED DELIBERATELY -- not restarting, because the favorite-lane
+  # test (xrp|1h + hype|15m) started 20 min ago and a restart would destroy it.
+  adaptive_sizer:
+    enabled: true
+    mode: live     # DEFAULTS have mode:"shadow", and resolve_lane_cap returns 0.0 (=no cap) unless
+                   # enabled AND mode=="live". Without these two the whole lane_max_usd block below
+                   # is INERT -- verified: every cap resolved 0.0 before this was added. The state
+                   # file already said mode=live, which is a DIFFERENT thing (that is the sizer's own
+                   # persisted state, not the config the resolver reads).
+    # PER-LANE $ CEILINGS -- the "size DOWN" half. Keys are exact "strategy|window|action"
+    # (resolve_lane_cap has no strategy-level fallback), so every combo is enumerated.
+    # bitcoin: +0.0007/$1 on n=861 in the clean era -- the flattest lane in the book.
+    # doge:    +0.0135/$1 on n=215, and 23.5% WR / -0.2019 recently. Weakest two, capped to 12.
+    lane_max_usd:
+      "bitcoin|5m|BUY_YES": 12.0
+      "bitcoin|5m|BUY_NO": 12.0
+      "bitcoin|15m|BUY_YES": 12.0
+      "bitcoin|15m|BUY_NO": 12.0
+      "bitcoin|1h|BUY_YES": 12.0
+      "bitcoin|1h|BUY_NO": 12.0
+      "doge_macro|5m|BUY_YES": 12.0
+      "doge_macro|5m|BUY_NO": 12.0
+      "doge_macro|15m|BUY_YES": 12.0
+      "doge_macro|15m|BUY_NO": 12.0
+      "doge_macro|1h|BUY_YES": 12.0
+      "doge_macro|1h|BUY_NO": 12.0
   min_live_notional: 11.0
 olympus:
   base_url: https://api.olympusx.app
