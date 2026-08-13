@@ -72,6 +72,31 @@ def alert(key, msg):
         log(f"ALERT {key}: {msg}")
 
 
+# --- ALL-STALE WINDOW INSTRUMENTATION (2026-08-12) ---------------------------------
+# The bot falls back to QUANT (LONG-BIASED) on ALL assets when every provider goes stale.
+# Record each window so its frequency/duration can be measured and joined to the trades
+# opened inside it — previously invisible, so its cost was never known.
+_allstale_since = None
+STALE_LOG = f"{CWD}/data/calibration/direction_stale_windows.jsonl"
+
+
+def _stale_event(kind, ts, dur_sec, tiers):
+    """Append one enter/exit row. Never raises — this sits in the driver loop."""
+    try:
+        os.makedirs(os.path.dirname(STALE_LOG), exist_ok=True)
+        with open(STALE_LOG, "a") as fh:
+            fh.write(json.dumps({
+                "event": kind,
+                "ts": int(ts),
+                "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + "Z",
+                "duration_sec": round(float(dur_sec), 1),
+                "duration_min": round(float(dur_sec) / 60.0, 2),
+                "tiers": dict(tiers),
+            }, separators=(",", ":")) + "\n")
+    except Exception as e:
+        log(f"stale-log-fail {e}")
+
+
 def latest_ai():
     """Freshest AI decision per asset at PREFER_HORIZON. Reads the tail of the shadow log."""
     out = {}
@@ -264,6 +289,7 @@ def main():
                     else:
                         out[_key] = {"side": _s, "conf": _c if _c is not None else 0.6,
                                      "ts": int(now), "ttl": TTL, "why": f"{_t}@{_tf}:{_w}"}
+            _degrades, _flips = [], []
             for a in ASSETS:
                 side, conf, tier, why = resolve_asset(a, ai.get(a), manual, now)
                 tiers[a] = tier
@@ -280,18 +306,57 @@ def main():
                 else:
                     out[a] = {"side": side, "conf": conf if conf is not None else 0.6,
                               "ts": int(now), "ttl": TTL, "why": f"{tier}:{why}"}
-                # degrade / flip alerts
+                # 2026-08-12 DIGEST: collect, do NOT page per-asset. These used to fire one
+                # Hermes message per asset per change — ~20 messages for what is really 2
+                # facts, which buried the ONE line that matters (all-stale => long-biased
+                # everything). A provider swap like quant->qwen is the cascade WORKING as
+                # designed; that belongs in the log, not on the operator's phone.
                 if _last_tier.get(a) and _last_tier[a] != tier and tier in ("qwen", "quant"):
-                    alert(f"degrade:{a}", f"PSB direction {a}: {_last_tier[a]}->{tier} "
-                                          f"({'minimax failed' if tier=='qwen' else 'ALL AI stale -> quant long-bias'})")
+                    _degrades.append(f"{a}:{_last_tier[a]}->{tier}")
                 if side and _last_side.get(a) and _last_side[a] != side:
-                    alert(f"flip:{a}", f"PSB direction {a}: {_last_side[a]}->{side} ({tier} conf={conf})")
+                    _flips.append(f"{a} {_last_side[a]}->{side}")
                 _last_tier[a] = tier
                 if side:
                     _last_side[a] = side
-            # if EVERY asset fell to quant, that's a cascade-wide failure -> alert
-            if all(t == "quant" for t in tiers.values()):
-                alert("all_quant", "PSB DIRECTION: entire AI cascade stale — bot on QUANT (long-biased) for ALL assets. Check ai_direction_engine (pid).")
+            # ---- ALL-STALE INSTRUMENTATION + DIGEST (2026-08-12) -------------------------
+            # WHY: when every provider goes stale the bot falls back to QUANT, which is
+            # LONG-BIASED, on ALL 7 assets at once. That is not a lane choosing its dominant
+            # side — it is the bot going directionally blind and long everything, while the
+            # book has been trading almost entirely BUY_NO. We had no idea how often or how
+            # long that window lasts, so it was never costed. Now every window is recorded
+            # (enter/exit + duration) and can be joined to trades opened inside it.
+            global _allstale_since
+            _all_quant = all(t == "quant" for t in tiers.values())
+            _mix = {}
+            for _t in tiers.values():
+                _mix[_t] = _mix.get(_t, 0) + 1
+            _mix_s = " / ".join(f"{v} {k}" for k, v in sorted(_mix.items(), key=lambda z: -z[1]))
+
+            if _all_quant and _allstale_since is None:
+                _allstale_since = now
+                _stale_event("enter", now, 0.0, tiers)
+            elif not _all_quant and _allstale_since is not None:
+                _dur = now - _allstale_since
+                _stale_event("exit", now, _dur, tiers)
+                alert("all_quant_clear",
+                      f"PSB DIRECTION RECOVERED after {_dur/60:.1f}m — now {_mix_s}")
+                _allstale_since = None
+
+            if _all_quant:
+                # STATEFUL page: keep firing while unresolved (alert() backoff paces it), and
+                # carry the DURATION so a 2-minute blip reads differently from a 40-minute one.
+                _dur = (now - _allstale_since) / 60.0
+                alert("all_quant",
+                      f"PSB DIRECTION BLIND {_dur:.0f}m — entire AI cascade stale, bot on QUANT "
+                      f"(LONG-BIASED) for ALL {len(tiers)} assets. Check ai_direction_engine.")
+            elif _degrades or _flips:
+                # ONE digest line per cycle instead of ~20 per-asset messages.
+                _parts = [f"PSB DIRECTION {len(tiers)} assets: {_mix_s}"]
+                if _flips:
+                    _parts.append("flips: " + ", ".join(_flips))
+                if _degrades:
+                    _parts.append("tier: " + ", ".join(_degrades))
+                alert("digest", " · ".join(_parts))
             # write the live override the seam reads (atomic)
             tmp = OVERRIDE + ".tmp"
             with open(tmp, "w") as f:
