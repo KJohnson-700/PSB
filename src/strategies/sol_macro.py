@@ -3743,6 +3743,40 @@ class SolMacroStrategy:
                     bias_15m,
                     bias_5m,
                 )
+                # 2026-08-12 GHOST-LOG THE BIGGEST GATE IN THE BOT. neutral_bias is 41.6% of ALL
+                # strategy evaluations (13,901 of 33,388 in one 3.5h session; doge 62.8%, sol 54.0%,
+                # xrp 53.3%, bnb 49.5%, eth 46.4%, hype 31.0%) and had NEVER written a single ghost
+                # row — so there was no evidence for OR against loosening it, and every frequency
+                # audit missed it. The code's own note at ~1914 already measured the damage: the
+                # lane "sat out ~9850x today (7240 under a DECIDED BULLISH 1h)".
+                # BOTH SIDES are logged because the gate fires precisely when NO side was resolved;
+                # settling both is what answers the only question that matters — when the 2-of-3
+                # vote deadlocks, would either direction have won? A one-sided log could not.
+                # GRADUATION CRITERIA ARE BINDING AND WRITTEN DOWN (docs/PSB_RESEARCH_ROADMAP.md
+                # OPEN CONFIRMATIONS + memory project_neutral_bias_ghost_graduation_2026_08_12):
+                # at n>=200 settled per side, if either side's WR beats its entry-price breakeven
+                # by >=3pt, loosen via alt_neutral_fallback_sit_out/tape_backup for THAT side only;
+                # if both sit below breakeven, the gate is VINDICATED and gets closed out as
+                # answered. Either way this ghost is GRADUATED OR DELETED — it does not sit forever.
+                try:
+                    for _nb_act, _nb_side in (("BUY_YES", "LONG"), ("BUY_NO", "SHORT")):
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=_nb_side,
+                            action=_nb_act,
+                            reason="neutral_bias",
+                            yes_price=market.yes_price,
+                            htf_bias=macro_trend,
+                            context={"gate": "neutral_bias_both_sides_probe",
+                                     "macro_1h": macro_trend, "bias_15m": bias_15m,
+                                     "bias_5m": bias_5m,
+                                     "alt_neutral_fallback_sit_out": bool(
+                                         self.config.get("alt_neutral_fallback_sit_out", True)),
+                                     "graduation": "n>=200/side then loosen-or-close"},
+                        )
+                except Exception:
+                    pass
                 continue
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"

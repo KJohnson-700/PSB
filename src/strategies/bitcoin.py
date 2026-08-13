@@ -592,7 +592,21 @@ class BitcoinStrategy:
                 _c_escape = float(
                     self.config.get("btc_momentum_contradiction_tape_escape", 0.02) or 0.02
                 )
-                if _adm_c < _c_escape:
+                # 2026-08-12 SIGN INVERSION FIX. The comment above says "if the contradicting
+                # side is actually realized-profitable (adapter delta >= escape) we STOP
+                # suppressing" — but lane_tape_adapter's convention (lane_tape_adapter.py:266-290)
+                # is NEGATIVE = winning/loosen, POSITIVE = losing/tighten (loosen_max 0.02 /
+                # tighten_max 0.05). So `_adm_c < +0.02` opened the escape ONLY when the lane was
+                # LOSING, and a genuinely winning lane (delta floors at -0.02) could NEVER escape —
+                # the exact opposite of intent. sol_macro.py:3800 uses the SAME adapter with the
+                # CORRECT sign, which is what confirms this is a bug and not a deliberate asymmetry.
+                # Escape now requires a genuinely PROFITABLE contradicting lane (delta <= -escape).
+                # HONEST NOTE: this is a CORRECTNESS fix, not a frequency unlock. Every BTC lane in
+                # lane_tape_state.json is currently admission_delta 0.0, so 0.0 > -0.02 still
+                # suppresses and behavior is UNCHANGED today. The fail-closed deadlock (blocked =>
+                # no closes => delta stays 0.0 => blocked) is a SEPARATE problem and is NOT fixed
+                # here; breaking it needs an explicit seeding/probe decision from the operator.
+                if _adm_c > -_c_escape:
                     _suppressed = True
                     _suppress_reason = f"btc_{final_side.lower()}_against_{momentum_side.lower()}_momentum"
                     reason_parts.append(

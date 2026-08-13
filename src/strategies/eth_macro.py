@@ -1079,6 +1079,33 @@ class ETHMacroStrategy(SolMacroStrategy):
                     alt_15m_trend,
                     alt_5m_trend,
                 )
+                # 2026-08-12 OVERRIDES the "don't spend shadow budget on this" note above. That
+                # decision is exactly WHY this gate has no evidence: neutral_bias is 41.6% of ALL
+                # strategy evaluations bot-wide (eth 46.4% of its own) and had never written one
+                # ghost row, so it was invisible to every frequency audit run this session. The
+                # budget argument assumed "no concrete side was rejected" makes it unscoreable —
+                # but logging BOTH sides makes it perfectly scoreable, and answers the only
+                # question worth asking: when the 2-of-3 bias vote deadlocks, would either
+                # direction have won? GRADUATION IS BINDING (docs/PSB_RESEARCH_ROADMAP.md OPEN
+                # CONFIRMATIONS): n>=200 settled per side, then loosen the beating side or CLOSE
+                # the ghost out as answered. It does not sit forever.
+                try:
+                    for _nb_act, _nb_side in (("BUY_YES", "LONG"), ("BUY_NO", "SHORT")):
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=_nb_side,
+                            action=_nb_act,
+                            reason="neutral_bias",
+                            yes_price=market.yes_price,
+                            htf_bias=alt_1h_trend,
+                            context={"gate": "neutral_bias_both_sides_probe",
+                                     "macro_1h": alt_1h_trend, "bias_15m": alt_15m_trend,
+                                     "bias_5m": alt_5m_trend,
+                                     "graduation": "n>=200/side then loosen-or-close"},
+                        )
+                except Exception:
+                    pass
                 continue
             direction_decision = self._resolve_eth_direction(
                 market_allowed_side=market_allowed_side,
