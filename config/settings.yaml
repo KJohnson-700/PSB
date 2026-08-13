@@ -2398,7 +2398,25 @@ direction:
   # still NEGATIVE. The sample is REJECTED candidates, so favorite's advantage is not
   # proven on the admitted population. Paper-only experiment with the kill rule below.
   side_policy: favorite
-  side_policy_resolver_lanes: ["bnb_macro|1h"]   # lanes that KEEP the resolver
+  # 2026-08-13 EXEMPTION REMOVED (operator challenge: "are we sure bnb 1h is really
+  # benefiting?"). It was not. bnb_macro|1h was exempted off the GHOST band measure
+  # (54.6% direction accuracy, EV +0.0750, n=1224) — LIVE REALIZED says the opposite and
+  # live is the decision standard: n=171, WR 43.3%, net -$181.32; the bare bnb_1h_native
+  # path in-band is n=17 WR 17.6% -$64.68. Per $/trade it is the 4th-WORST lane in the
+  # bot (-$1.76/t). I exempted the one lane I should have cut hardest.
+  #
+  # The wider check that settled it: split LIVE resolver P&L per lane BY ERA, in-band.
+  # ZERO of 21 lanes are positive in every era with n>=15 — every lane that looked good
+  # pooled (xrp5m +$246, hype5m +$256, btc5m +$71) was carried by June and has gone
+  # negative since; EVERY August cell is negative. Pooled lane-P&L was poisoned by a dead
+  # era, the exact trap feedback_time_filter_reject_logs_before_concluding warns about.
+  # CAVEAT kept honest: August is also when the sizing/geometry blowup and the flat_sizing
+  # scope bug were live, so "everything negative in August" is partly bot-wide, not proof
+  # about direction alone. It is the INDEPENDENT agreement that decides it — the ghost
+  # band measure carries no exits and no sizing at all, and it says 48.24% vs a coinflip.
+  # Empty list => the resolver picks the side on NO lane. Re-add a lane here the moment it
+  # earns it on CURRENT-ERA live realized.
+  side_policy_resolver_lanes: []
   side_policy_deadband: 0.01     # sit out 0.49-0.51: "favorite" there is quote jitter, not signal
   side_policy_price_band: [0.45, 0.55]   # the band the edge was MEASURED in; own band, not the
                                           # lane bands (those are tuned for the opposite regime and
