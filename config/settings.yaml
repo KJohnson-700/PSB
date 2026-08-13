@@ -113,7 +113,7 @@ trading:
     updown_stop_cents: 0.03
     updown_exit_window_mins: 2.25
     updown_max_hold_mins: 18.0
-    updown_stop_loss_pct: 0.15
+    updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
     updown_hold_winners_to_resolution: false
     stop_use_executable_price: true
     stop_dual_confirm_midpoint: true
@@ -195,7 +195,7 @@ trading:
               updown_stop_cents: 0.015
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               dynamic_stop_enabled: false
               updown_hold_winners_to_resolution: false
               updown_in_profit_stop_trigger_pct: 0.04
@@ -206,22 +206,22 @@ trading:
               dynamic_stop_enabled: false
           15m:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
           1h:
             up:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       eth_macro:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
@@ -230,15 +230,15 @@ trading:
             up:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
           5m:
             down:
-              updown_stop_loss_pct: 0.14
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -254,10 +254,10 @@ trading:
               updown_stop_cents: 0.02
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.5
               updown_exit_window_max_fraction: 0.45
@@ -292,9 +292,9 @@ trading:
               updown_stop_cents: 0.02
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
@@ -307,23 +307,23 @@ trading:
             up:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       hype_macro:
         window_lane_overrides:
           5m:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_in_profit_stop_trigger_pct: 0.03
               updown_in_profit_stop_tighten_to_pct: 0.06
               updown_hold_winners_to_resolution: true
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -339,13 +339,13 @@ trading:
               updown_stop_cents: 0.02
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.1
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
@@ -358,25 +358,25 @@ trading:
             up:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       xrp_macro:
         updown_stop_cents: 0.03
         updown_exit_window_mins: 2.25
         window_lane_overrides:
           1h:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
               take_profit_pct: 0.4
             down:
               take_profit_pct: 0.4
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
           5m:
             up:
@@ -403,10 +403,10 @@ trading:
               take_profit_pct: 1.0
           15m:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
@@ -433,13 +433,13 @@ trading:
               updown_in_profit_stop_tighten_to_pct: 0.08
             up:
               updown_hold_winners_to_resolution: false
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
           15m:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
             down:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
           1h:
             up:
               updown_stop_loss_pct: 0.3
@@ -448,7 +448,7 @@ trading:
             down:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
     updown_flatten_before_resolution_sec: 60
     updown_time_stop_respect_hold_lanes: []
     updown_time_stop_hold_severe_pct: 0.5
