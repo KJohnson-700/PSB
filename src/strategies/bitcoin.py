@@ -5024,7 +5024,7 @@ class BitcoinStrategy:
             # static per-lane size multiplier is NEUTRALIZED so the flat base flows FULL to the adaptive sizer
             # (per-lane ceiling + realized climb is the single size authority). The old 0.3x lane shrink made
             # the new $40 btc-short ceiling unreachable ($15*0.3*2.5=$11). Reverts with flat_sizing:false.
-            _flat_sizing = bool((self.config.get("trading", {}) or {}).get("flat_sizing_enabled", False))
+            _flat_sizing = bool((self.full_config.get("trading", {}) or {}).get("flat_sizing_enabled", False))  # 2026-08-12 SCOPE FIX: self.config is STRATEGY-scoped so .get("trading") was ALWAYS None -> flat sizing NEVER applied since 08-05
             if lane_policy.size_multiplier > 0 and not _flat_sizing:
                 raw_size *= lane_policy.size_multiplier
             if _bias_quant_size_multiplier > 0 and _bias_quant_size_multiplier < 0.999:

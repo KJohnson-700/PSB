@@ -2078,7 +2078,7 @@ class SolMacroStrategy:
         # the old 0.3x 5m shrink AND the 0.3x lane_mult here shrank the base to ~$1.35, making the new $40
         # short ceiling physically unreachable ($15*0.09*2.5=$3.4). thesis_side/lane_mult are still COMPUTED
         # (used downstream/logging), only their APPLICATION to size is skipped. Reverts with flat_sizing:false.
-        _flat_sizing = bool((self.config.get("trading", {}) or {}).get("flat_sizing_enabled", False))
+        _flat_sizing = bool((self.full_config.get("trading", {}) or {}).get("flat_sizing_enabled", False))  # 2026-08-12 SCOPE FIX: self.config is STRATEGY-scoped so .get("trading") was ALWAYS None -> flat sizing NEVER applied since 08-05
         if window_size == "5m" and self.calibration_size_multiplier_5m > 0 and not _flat_sizing:
             size_multiplier *= float(self.calibration_size_multiplier_5m)
         thesis_side = resolve_entry_policy_side(direction=direction, action=action)
@@ -7246,7 +7246,7 @@ class SolMacroStrategy:
             # FULL to the adaptive sizer (its per-lane ceiling + realized climb is the single size authority).
             # The old 0.3x shrink here made the new $40/$28 alt-short ceilings unreachable ($15*0.3*2.5=$11.25).
             # Mirror of the guard in the sol helper (~1972) and bitcoin (~4895). Reverts with flat_sizing:false.
-            _flat_sizing = bool((self.config.get("trading", {}) or {}).get("flat_sizing_enabled", False))
+            _flat_sizing = bool((self.full_config.get("trading", {}) or {}).get("flat_sizing_enabled", False))  # 2026-08-12 SCOPE FIX: self.config is STRATEGY-scoped so .get("trading") was ALWAYS None -> flat sizing NEVER applied since 08-05
             if lane_policy.size_multiplier > 0 and not _flat_sizing:
                 raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)

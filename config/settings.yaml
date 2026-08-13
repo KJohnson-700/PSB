@@ -1891,7 +1891,7 @@ strategies:
       enabled: false
       band: 0.01
       min_edge: 0.12
-    disable_buy_yes_5m: true
+    disable_buy_yes_5m: false   # 2026-08-12 RE-OPENED (operator GO). Was set true on 08-07 in fde11cc ("hype-parity+dashboard+favorite-lane") as a BARE APPENDED LINE — no comment, no data, no rationale, in a commit about an unrelated subsystem; the operator never approved it and only learned of it from the dash lane-gate card. EVIDENCE TO REOPEN: xrp 5m BUY_YES is net POSITIVE all-time (n=318, +$171.23, WR 51.3% vs 46.9% breakeven, PF 1.19, ROI +4.2%) and clears its bar with room in Jun/Jul (n=297, +$198.83, WR 52.9% vs need 47.6% = +5.3pt cushion, PF 1.23). It was killed on 21 AUGUST trades (-$27.60). MISATTRIBUTION: bot-wide August in-window ran -$1.283/trade; this lane ran -$1.314/trade — statistically identical. It was not a broken lane, it did what EVERY lane did in August, when the damage was the favorite-lane/sizing geometry blowup (avgL -$4.55 -> -$10.13, notional $11.47 -> $28.70) since fixed by favorite_lane_enabled:false. ALSO VERIFIED: xrp 5m has ZERO pre-window trades (all 514 closes are mte<=5), so the new entry_window caps neither explain nor affect this lane — my "the cut was really pre-window trades" hypothesis was REFUTED before shipping this. BUY_NO 5m stays cut (thinner: +$55.64 all-time, PF 1.08, and today's cut cited real if narrow numbers); revisit after the giveback fix has a session.
   doge_macro:
     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
     require_tape_direction: false   # STOP-BLEED 08-07: sit out both sides on FRESH-but-FLAT tape; fail-open on stale
@@ -2400,7 +2400,7 @@ lane_tape_adapter:
   admission_loosen_max: 0.02  # max -delta on a winning side (gentle)
 
 favorite_lane:
-  enabled: true
+  enabled: false   # 2026-08-12 STAGED (dormant on disk, NO restart performed — takes effect on the operator's next restart). DUPLICATE-SWITCH CLASH found by Codex: this key and risk.favorite_lane_enabled BOTH gate the favorite lane and DISAGREED — this said true while risk.favorite_lane_enabled said false. Code reads both (sol_macro.py:7602 reads favorite_lane.*, :7606 reads risk.favorite_lane_enabled), and the risk. one currently wins, so trading behavior is UNCHANGED today (verified: no 0.85+ fills in recent sessions). The danger was latent: a stale `true` contradicting the operator's 08-10 kill is exactly how the favorite payoff-trap (win-11%/lose-90%, b=0.13, needs 88% WR, -$448 all-time) gets silently reintroduced on a future baseline revert. Both switches now agree = false.
   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
   window_floors:         # 2026-08-10 PER-WINDOW FLOOR (operator "improve if data offers a filter, else cut"). 1h favorites split (n=29, 8 sess): 0.85-0.89 = 50% WR net -$65 (a 1h fav has a full HOUR to cross back through strike => 0.86 is a coin-flip); 0.90-0.94 = 72.7% WR net +$3.88 (clears 68% breakeven). 15m favs win 87% at 0.85 (net +$175 — UNTOUCHED). Raise ONLY 1h's floor. Turns 1h favs -$61 -> ~breakeven+. Absent/per-tf-absent => uses `floor` (byte-identical). Hot-reloads (read in _favorite_lane_signals via full_config.get each scan).
     "1h": 0.90
