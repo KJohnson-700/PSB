@@ -150,8 +150,8 @@ trading:
     updown_stop_cents_high_entry: 0.02
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
-    updown_trail_arm_pct: 0.1
-    updown_trail_gap_pct: 0.15
+    updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+    updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
     regime_conditioned_exits:
       enabled: false
       trend_side_hold_winners: false
@@ -177,11 +177,11 @@ trading:
             up:
               updown_stop_loss_pct: 0.3
               updown_hold_winners_to_resolution: true
-              updown_trail_gap_pct: 0.1
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_trail_arm_pct: 0.0
             down:
-              updown_trail_arm_pct: 0.25
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
           5m:
             up:
               updown_in_profit_stop_trigger_pct: 0.04
@@ -212,15 +212,15 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       eth_macro:
         updown_stop_cents: 0.02
@@ -228,13 +228,13 @@ trading:
         window_lane_overrides:
           1h:
             up:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
             down:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
           5m:
             down:
@@ -276,8 +276,8 @@ trading:
             down:
               updown_stop_loss_pct: 0.0
               updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -305,12 +305,12 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       hype_macro:
         window_lane_overrides:
@@ -320,8 +320,8 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.03
               updown_in_profit_stop_tighten_to_pct: 0.06
               updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
             down:
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.015
@@ -342,8 +342,8 @@ trading:
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
             down:
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_stop_cents: 0.02
@@ -356,12 +356,12 @@ trading:
               updown_hold_winners_to_resolution: true
           1h:
             up:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
             down:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
       xrp_macro:
         updown_stop_cents: 0.03
@@ -374,24 +374,24 @@ trading:
               take_profit_pct: 0.4
             down:
               take_profit_pct: 0.4
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
               updown_hold_winners_to_resolution: false
           5m:
             up:
               updown_stop_loss_pct: 0.7
               dynamic_stop_enabled: false
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_hold_winners_to_resolution: true
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
             down:
               updown_stop_loss_pct: 0.7
               dynamic_stop_enabled: false
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_cents: 0.015
               updown_exit_window_mins: 1.5
               updown_exit_window_max_fraction: 0.45
@@ -426,8 +426,8 @@ trading:
               updown_hold_winners_to_resolution: true
               updown_stop_loss_pct: 0.7
               dynamic_stop_enabled: false
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.1
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_cents: 0.015
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
@@ -446,8 +446,8 @@ trading:
               updown_trail_arm_pct: 0.0
               updown_hold_winners_to_resolution: true
             down:
-              updown_trail_gap_pct: 0.1
-              updown_trail_arm_pct: 0.25
+              updown_trail_gap_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
+              updown_trail_arm_pct: 0.0  # 2026-08-13 KILLED (operator). trail_arm_pct>0 is the guard at updown_exit_shared.py:667, so 0 = OFF. This is the SAME mechanism as the give-back TP killed earlier: it arms on a gain then sells on a DROP from the peak — a downside exit in an upside costume. Rule: bank on the upside at a fixed level (take_profit 0.30 stays ON), never exit on the downside early. Provenance: added 1ea32a52 (May, 'positive trailing-floor exit'), no operator sign-off on record.
               updown_stop_loss_pct: 0.0  # 2026-08-13 KILLED (operator). 0 = OFF: live_testing.py:1386 guards the trigger with `effective_stop_loss_pct != 0`, verified before flipping. xrp 5m Aug: this stop took n=17 for -$50.72 at 5.9% WR; with the never-green cut that is 31 stops for -$155 at ~2% WR vs 15 held trades at +$116.83 / 80% WR. REVERT: 0.15 (hot-reloadable).
     updown_flatten_before_resolution_sec: 60
     updown_time_stop_respect_hold_lanes: []
