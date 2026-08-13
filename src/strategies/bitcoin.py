@@ -5572,6 +5572,14 @@ class BitcoinStrategy:
                     tf = updown_timeframe_label(resolved_updown_window_minutes(market))
                     if tf not in windows:
                         continue
+                    # 2026-08-13 PER-LANE ALLOWLIST (port of sol_macro; operator GO). Window-level
+                    # config cannot express "xrp 1h + hype 15m only". BTC's own favorites are
+                    # net-positive but small (bitcoin|1h +$19.14 n=21, bitcoin|15m +$11.01 n=56)
+                    # and the operator scoped this restart to the two best lanes, so BTC is OFF
+                    # while the allowlist is set. Empty/absent => legacy behaviour, byte-identical.
+                    _allow = [str(x) for x in (cfg.get("allow_lanes") or [])]
+                    if _allow and f"bitcoin|{tf}" not in _allow:
+                        continue
                     yes_price = market.yes_price
                     if yes_price is None:
                         continue

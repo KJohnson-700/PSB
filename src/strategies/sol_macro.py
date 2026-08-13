@@ -7752,6 +7752,18 @@ class SolMacroStrategy:
                     tf = updown_timeframe_label(resolved_updown_window_minutes(market))
                     if tf not in windows:
                         continue
+                    # 2026-08-13 PER-LANE ALLOWLIST (operator GO). `windows` is window-level only,
+                    # which cannot express "xrp 1h and hype 15m, nothing else" -- the two keepers
+                    # span BOTH windows. Measured on 446 live favorite trades (net -$444.65):
+                    # the 15m book is the ENTIRE loss (n=324, -$464.50, -$1.43/t) while the 1h book
+                    # is net positive (n=122, +$19.85). Best per-trade lanes: xrp|1h 95.2% WR
+                    # +$117.49 (+$5.59/t, n=21) and hype|15m 100% WR +$50.94 (+$6.37/t, n=8).
+                    # NOTE what this kills: the bleeders run 77-79% WR. High win rate is NOT the
+                    # discriminator -- sol|15m loses $2.39/t at 78.9% because payoff is b=0.13.
+                    # Empty/absent list => no allowlist (legacy behaviour, byte-identical).
+                    _allow = [str(x) for x in (cfg.get("allow_lanes") or [])]
+                    if _allow and f"{self._signal_strategy_name}|{tf}" not in _allow:
+                        continue
                     yes_price = market.yes_price
                     if yes_price is None:
                         continue
