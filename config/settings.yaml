@@ -2300,6 +2300,20 @@ strategies:
       entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
+      # 2026-08-14 OPERATOR GO — BNB ONLY. bnb_macro|1h|BUY_YES all-history live realized:
+      # n=82, WR 29.3% vs 50.5% breakeven (z=-3.75, p<0.0002 — a defect, not variance),
+      # -$196.42, per-$1 -0.1211 = worst lane in the book. est_prob_up median 0.573 while
+      # the actual up-rate is 29.3%, i.e. ANTI-correlated. It loses at ~19-21% WR whether
+      # alt_htf_bias AGREES or DISAGREES, so bias carries no signal here — because this
+      # cohort is admitted on PRICE BAND ALONE and is exempt from the quant-agreement gate
+      # (sol_macro.py:3760). Median entry 0.550 sits inside [0.50, 0.85]. The IDENTICAL
+      # defect was already measured on sol (n=63, 30% WR, -$79.64).
+      # quality_veto_enabled is read per-scan via self.config.get (sol_macro.py:3765) so it
+      # HOT-RELOADS; `enabled` would NOT (frozen into self._a1hsl_enabled at init). The veto
+      # also ghost-logs vetoed candidates so the counterfactual keeps settling.
+      # TRIPWIRE: scripts/bnb_a1hsl_tripwire.py cuts the lane if it does not recover.
+      # doge_macro carries the SAME bypass and is deliberately LEFT ON as the control.
+      quality_veto_enabled: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 450

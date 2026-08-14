@@ -3194,18 +3194,44 @@
 </div><!-- /container -->
 
 <script>
+// 2026-08-14 ON-BRAND EXIT PALETTE. Was the stock flat-UI palette (#2ecc71/#f39c12/
+// #7f8c8d...), which clashed with the house neons AND rendered the two most common
+// buckets as two nearly identical greys: updown_expired was '#7f8c8d' and
+// hold_catastrophic_stop was absent from the map entirely, so it fell through to the
+// '#34495e' unknown slate. A 25-vs-2 split read as grey-on-grey.
+//
+// Hue is now SEMANTIC, so the bar is readable without the legend:
+//   green  = held to resolution (the house default path, no exit logic fired)
+//   cyan   = we took profit
+//   red    = a loss cap fired
+//   orange = a stop/cut fired
+//   yellow = time ran out
+//   purple = real on-chain resolution
 const EXIT_REASON_COLORS = {
-    take_profit: '#2ecc71',
-    updown_stop_loss: '#f39c12',
-    updown_time_stop: '#e67e22',
-    updown_time_limit: '#95a5a6',
-    updown_expired: '#7f8c8d',
-    stop_loss: '#e74c3c',
-    time_limit: '#bdc3c7',
-    'RESOLVED:YES': '#3498db',
-    'RESOLVED:NO': '#9b59b6',
+    // held to resolution — the intended path
+    updown_expired: 'var(--gr)',                       // #00ff88
+    // profit-taking
+    take_profit: 'var(--cy)',                          // #00e5ff
+    take_profit_late: '#0093a8',
+    // loss caps
+    hold_catastrophic_stop: '#c4204a',
+    stop_loss: '#c4204a',
+    // stops / cuts
+    updown_stop_loss: '#ff7a3d',
+    never_green_cut: '#ff9f1c',
+    hold_early_stop: '#ff9f1c',
+    updown_flatten_pre_resolution: '#ffb347',
+    // time
+    updown_time_stop: 'var(--ye)',                     // #ffd700
+    updown_time_limit: '#d4b106',
+    time_limit: '#d4b106',
+    // real resolution
+    'RESOLVED:YES': 'var(--pu)',                       // #b060ff
+    'RESOLVED:NO': '#7b3fd4',
+    'RESOLVED:YES (real)': 'var(--pu)',
+    'RESOLVED:NO (real)': '#7b3fd4',
 };
-const UNKNOWN_EXIT_REASON_COLOR = '#34495e';
+const UNKNOWN_EXIT_REASON_COLOR = '#4a5a7a';
 
 // ── Canonical strategy colors (single source for pills, chart markers, journal, scan rows, BT cards, canvas charts) ──
 window.STRATS = {
@@ -7680,7 +7706,7 @@ function updateExitReasons(d) {
         const sum = Number(pnlStats[reason]?.pnl || 0);
         const avg = n ? sum / n : 0;
         const width = Math.max(1, (n / total) * 100);
-        return `<div title="${esc(reason)}: ${n} trades, total ${_usd(sum)} (avg ${_usd(avg)})" style="height:100%;width:${width}%;background:${color};"></div>`;
+        return `<div title="${esc(reason)}: ${n} trades, total ${_usd(sum)} (avg ${_usd(avg)})" style="height:100%;width:${width}%;background:${color};box-shadow:inset -1px 0 0 rgba(0,0,0,0.45);"></div>`;
     }).join('');
     legend.innerHTML = rows.map(([reason, count]) => {
         const n = Number(count || 0);

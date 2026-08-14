@@ -92,12 +92,26 @@ def ingest(con, live_only: bool = False) -> dict:
         f"TRY_CAST(json_extract_string(j, '$.{k}') AS {v}) AS \"{k}\""
         for k, v in COLUMNS.items()
     )
+    # 2026-08-14 CORRUPTION FIX — the INSERT below MUST name its target columns.
+    # It used to be a bare `INSERT INTO ghost_settled SELECT ...`, which assigns
+    # POSITIONALLY against the table's physical column order. The table on disk was
+    # created 2026-06-17 ending (..., reason, market_id, convergence_score) while
+    # COLUMNS in this file ends (..., convergence_score, reason, market_id). Values
+    # were therefore rotated by one for the last three columns on every insert:
+    # reason -> market_id, market_id -> convergence_score. A catch-up ingest wrote
+    # 812,267 rows where market_id held strings like
+    # 'buy_no_5m_oversold_hard_floor(rsi=36<40)'. count(distinct market_id) reported
+    # 296 markets for August instead of ~28,400 — silent, and it would have poisoned
+    # every dedupe-by-market analysis downstream.
+    # Naming the columns makes the insert order-independent, so the table's physical
+    # order and this dict can drift again without corrupting anything.
+    insert_cols = ", ".join(f'"{k}"' for k in COLUMNS)
     for src in _sources(live_only=live_only):
         # read_json_objects returns one column ('json') holding each line's whole
         # JSON object; extract the curated scalar fields from it.
         con.execute(
             f"""
-            INSERT INTO ghost_settled
+            INSERT INTO ghost_settled ({insert_cols})
             SELECT {select_cols}
             FROM (
                 SELECT json AS j FROM read_json_objects('{src}',
