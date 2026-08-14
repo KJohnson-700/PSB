@@ -121,9 +121,16 @@ def check_all():
         f"{tb} in last 800 lines" + ("" if log_fresh else " (STALE LOG — not scored)"))
 
     # --- LIVE config changes (BROKEN if reverted; PROBATION until realized-proven) ---
-    add("flat_sizing $15",
-        "PROBATION" if (trad.get("flat_sizing_enabled") and float(trad.get("flat_base_usd", 0)) == 15.0) else "BROKEN",
-        f"enabled={trad.get('flat_sizing_enabled')} base={trad.get('flat_base_usd')}")
+    # SUPERSEDED 2026-08-13 by a8f5da7 "size(clean-era): base 15->20, cap bitcoin+doge
+    # to 12". This row expected base==15.0 and so has paged on every run since. The
+    # operator has also said repeatedly that flat sizing "isnt gonna work", so pinning a
+    # specific flat base as the health target was wrong twice over. Now: check only that
+    # a base is CONFIGURED (a missing/zero base IS a real fault), not that it equals 15.
+    _fb = float(trad.get("flat_base_usd", 0) or 0)
+    add("flat_sizing base set",
+        "PROBATION" if _fb > 0 else "BROKEN",
+        f"enabled={trad.get('flat_sizing_enabled')} base={trad.get('flat_base_usd')} "
+        f"(was pinned to 15.0; a8f5da7 moved it to 20 on purpose)")
 
     eth = strat.get("eth_macro", {})
     fade = eth.get("fade_regime_windows")
@@ -157,10 +164,17 @@ def check_all():
                         and float(xrp.get("lane_min_notional_5m_down", 1)) == 0) else "BROKEN",
         f"btc1h_up={strat.get('bitcoin', {}).get('lane_min_notional_1h_up')} xrp5m_down={xrp.get('lane_min_notional_5m_down')}")
 
-    # eth shut down at the scanner (operator order 2026-08-06; worst-direction 43% + over-scanned)
-    add("eth_scanner_off",
-        "PROBATION" if strat.get("eth_macro", {}).get("enabled") is False else "BROKEN",
-        f"eth_macro.enabled={strat.get('eth_macro', {}).get('enabled')} (BROKEN=eth re-enabled unexpectedly)")
+    # SUPERSEDED 2026-08-09. This row encoded the 08-06 order to shut eth off at the
+    # scanner and flagged "eth re-enabled unexpectedly" as BROKEN. That order was REVERSED
+    # three days later: the 08-09 verdict is that ETH HAS EDGE (momentum 55%, gross +$1,519,
+    # b=1.64; it nets negative only through the stop-leak) -> RE-ENABLE. eth 5m is also a
+    # designated COLLECTION lane that must never be disabled. So a row demanding eth be OFF
+    # was paging for eth being correctly ON — inverted, and the single most misleading line
+    # on the list. Now asserts the CURRENT intent: eth stays enabled.
+    add("eth_enabled(collection lane)",
+        "PROVEN" if strat.get("eth_macro", {}).get("enabled") is not False else "BROKEN",
+        f"eth_macro.enabled={strat.get('eth_macro', {}).get('enabled')} "
+        f"(BROKEN = eth got disabled; 08-09 verdict says keep it ON)")
 
     # exit fix: tape-hold deferral on proven shorts at floor 0.30 (2026-08-06, restart-applied)
     th = c.get("tape_hold_stop", {}).get("by_lane", {})
@@ -179,12 +193,85 @@ def check_all():
     add("ngc_defer_killed", "PROVEN" if ngc_gone else "BROKEN", "tape_defer absent" if ngc_gone else "tape_defer REAPPEARED")
 
     # --- observe-only shadows (BROKEN if daemon died; PROBATION = accumulating) ---
+    # qwen_2model_engine: the AI direction SIDE-OVERRIDE was deliberately benched
+    # 2026-08-14 (commit 3f02678, direction.mode: quant / enforce: false) after being
+    # measured LAST of five policies on 171,380 settled ghosts (ai_hist 47.79%,
+    # EV/$1 -0.0584; a coinflip beats it). A dead daemon is now the INTENDED state, so
+    # this row must not page. Kept visible so the bench stays on the radar.
     qe = _pgrep("ai_direction_engine.py")
-    add("qwen_2model_engine", "PROBATION" if qe else "BROKEN", f"pid={qe or 'DEAD'} (right-side% vs realized pending; Hermes: format/vision ok, math weak=NA)")
+    add("qwen_2model_engine", "SUPERSEDED" if not qe else "PROBATION",
+        f"pid={qe or 'DEAD'} — benched on purpose 08-14 (3f02678); DEAD is correct here")
     lag = _pgrep("cex_pm_lag_shadow.py")
     add("cex_pm_lag_detector", "PROBATION" if lag else "BROKEN", f"pid={lag or 'DEAD'} (verdict pending; run cex_pm_lag_analyze.py)")
 
     return R
+
+
+# ── REGRESSION vs NEVER-SHIPPED ────────────────────────────────────────────────
+# 2026-08-14. The checklist was reporting 11 BROKEN on a config that had just produced
+# the best session of the week (+$73.59), and EVERY one of those 11 was equally red
+# during that winning session — verified by diffing config at 80e0067 (a commit that
+# landed mid-session). A list that screams 11 alarms on a winning config is a list that
+# gets ignored, which is the one failure mode it was built to prevent.
+#
+# ROOT CAUSE: every row was binary PROVEN/BROKEN, so it could not tell apart
+#   (a) this WAS working and has now regressed        <- the only thing worth paging
+#   (b) this has been red since the day it was added  <- never shipped, not a regression
+#   (c) you deliberately reversed this later          <- the expectation is just stale
+# All three printed identically as 🔴 BROKEN.
+#
+# FIX: persist per-row history. A row only pages as REGRESSION if it was observed
+# healthy at least once and has since gone red. Rows red since birth are NEVER_SHIPPED
+# (visible, not paging — they belong on the roadmap's build queue, not the alarm list).
+# SUPERSEDED is set explicitly in-code, with the commit/decision that reversed it.
+STATE_PATH = os.path.join(_REPO, "data/runtime/probation_state.json")
+
+
+def _load_state():
+    try:
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_state(st):
+    try:
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(st, f, indent=2, sort_keys=True)
+        os.replace(tmp, STATE_PATH)
+    except Exception:
+        pass
+
+
+def classify(R):
+    """Re-grade raw statuses against per-row history. Returns (rows, page_items)."""
+    st = _load_state()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    out = []
+    for name, status, detail in R:
+        rec = st.setdefault(name, {"first_seen": now, "ever_ok": False, "first_bad": None})
+        healthy = status in ("PROVEN", "PROBATION", "SUPERSEDED")
+        if healthy:
+            rec["ever_ok"] = True
+            rec["first_bad"] = None
+        graded = status
+        if status == "BROKEN":
+            if rec["ever_ok"]:
+                graded = "REGRESSION"          # was fine, now broken -> the real alarm
+                rec["first_bad"] = rec.get("first_bad") or now
+            else:
+                graded = "NEVER_SHIPPED"       # red since birth -> a build item, not an alarm
+        rec["last_status"] = graded
+        rec["last_seen"] = now
+        if graded == "REGRESSION" and rec.get("first_bad"):
+            detail = f"{detail}  [broken since {rec['first_bad']}]"
+        out.append((name, graded, detail))
+    _save_state(st)
+    page = [r for r in out if r[1] == "REGRESSION"]
+    return out, page
 
 
 def main():
@@ -192,13 +279,23 @@ def main():
     if "--json" in sys.argv:
         print(json.dumps([{"item": n, "status": s, "detail": d} for n, s, d in R]))
         return
-    broken = [r for r in R if r[1] == "BROKEN"]
-    order = {"BROKEN": 0, "WARN": 1, "PROBATION": 2, "PROVEN": 3}
+    R, page = classify(R)
+    order = {"REGRESSION": 0, "WARN": 1, "NEVER_SHIPPED": 2, "PROBATION": 3,
+             "SUPERSEDED": 4, "PROVEN": 5}
+    mark = {"PROVEN": "✅", "PROBATION": "🟡", "WARN": "⚠️", "REGRESSION": "🔴",
+            "NEVER_SHIPPED": "⬜", "SUPERSEDED": "⚪"}
     print("=== PROBATION CHECK — everything built stays here until PROVEN ===")
     for n, s, d in sorted(R, key=lambda x: order.get(x[1], 9)):
-        mark = {"PROVEN": "✅", "PROBATION": "🟡", "WARN": "⚠️", "BROKEN": "🔴"}.get(s, "?")
-        print(f"  {mark} {s:9} {n:24} {d}")
-    print(f"\n{len(broken)} BROKEN / {len(R)} tracked" + ("  <-- PAGE" if broken else "  — all in place"))
+        print(f"  {mark.get(s,'?')} {s:14} {n:26} {d}")
+    ns = [r for r in R if r[1] == "NEVER_SHIPPED"]
+    sup = [r for r in R if r[1] == "SUPERSEDED"]
+    print()
+    print(f"  {len(page)} REGRESSION (was healthy, now broken)   "
+          f"{len(ns)} never-shipped   {len(sup)} superseded   {len(R)} tracked")
+    print("  " + ("<-- PAGE" if page else "no regressions — nothing to page"))
+    if ns:
+        print("  ⬜ never-shipped are BUILD ITEMS, not alarms — they belong on the roadmap queue:")
+        print("     " + ", ".join(r[0] for r in ns))
 
 
 if __name__ == "__main__":
