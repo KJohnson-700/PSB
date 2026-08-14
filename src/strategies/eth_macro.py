@@ -1463,9 +1463,45 @@ class ETHMacroStrategy(SolMacroStrategy):
                         _own, _larger = eth.macd_15m, eth.macd_1h
                     else:  # 5m
                         _own, _larger = eth.macd_5m, eth.macd_15m
+                    # 2026-08-14 SIDE-SYMMETRY FIX #2 — the same defect as
+                    # _eth_5m_macd_score (see the long note at ~line 539), in a second
+                    # place. WAS: `histogram > 0 and histogram_rising` on both clauses.
+                    # The bear twin above asks `histogram < 0 and NOT histogram_rising`,
+                    # and `histogram_rising` is `curr > prev` (STRICT), so FLAT confirms a
+                    # bear and cannot confirm a bull. Measured today on eth 5m:
+                    # buy_yes_no_eth_momentum_confirm_shadow fired on 22.2% of LONG
+                    # evaluations vs 7.7% for the buy_no twin on SHORT.
+                    #
+                    # ⚠ THIS GATE BLOCKS NOTHING TODAY. config
+                    # strategies.eth_macro.eth_momentum_confirm has buy_yes: [] and
+                    # buy_no: [] with shadow on all of 5m/15m/1h, so `_block` is False
+                    # everywhere and the branch only logs. Zero live trades change.
+                    #
+                    # It is still worth fixing, and that is the whole point: this shadow
+                    # IS the evidence base for a future promote-to-blocking decision. Left
+                    # asymmetric it manufactures the exact conclusion that would justify
+                    # promoting it — "LONG momentum confirms 3x less often than SHORT" —
+                    # when that gap is the gate's own arithmetic, not the tape. A shadow
+                    # that measures its own bug is worse than no shadow.
+                    #
+                    # Bull-side only, mirroring the Codex ruling on gate #1: loosening the
+                    # bear side would confirm a RECOVERING downtrend (hist < 0 AND rising),
+                    # and fixing symmetry by TIGHTENING bear is off the table in a
+                    # calibration phase where frequency is priority #1.
+                    #
+                    # OWN-TF ONLY — the `_larger` fallback deliberately KEEPS its
+                    # `histogram_rising` requirement (Codex, this review). My first pass
+                    # dropped it from both clauses; that over-loosens. `_larger` is a
+                    # FALLBACK across horizons (5m falls back to 15m, 15m to 1h), and a
+                    # positive-but-stalling 15m/1h histogram is a weaker claim about a 5m
+                    # long than positive own-window tape. So the bull `_larger` clause
+                    # stays stricter than its bear twin ON PURPOSE. That residual asymmetry
+                    # is a deliberate conservatism about cross-horizon inference, NOT the
+                    # flat-histogram bug — do not "fix" it without ghost data that
+                    # specifically supports relaxing the fallback.
                     _eth_bull_confirmed = (
                         _own.crossover == "BULLISH_CROSS"
-                        or (_own.histogram > 0 and _own.histogram_rising)
+                        or (_own.histogram > 0)
                         or _larger.crossover == "BULLISH_CROSS"
                         or (_larger.histogram > 0 and _larger.histogram_rising)
                     )
