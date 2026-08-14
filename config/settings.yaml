@@ -2468,12 +2468,51 @@ updown_composite:
 # enforce=true; enforce=false = SHADOW (logs DIRECTION_OVERRIDE, never changes a side).
 # Toggle live with scripts/claude_direction.py. Fail-safe: any problem => quant side.
 direction:
-  mode: claude    # 2026-08-12 RESTORED BY OPERATOR ORDER (2nd restore today; Codex benched it twice). Journal proof it was NOT the bleed: all 96 closes of the prior session were ai=False (native); BTC 5m/15m DIRECTION_OVERRIDE applied=True stayed 0 for 9h.
-  enforce: true
+  # ══════════════════════════════════════════════════════════════════════════════
+  # 2026-08-14 DIRECTION SIDE-OVERRIDE BENCHED (operator GO). THIS IS THE SWITCH,
+  # NOT A NEW DECISION — it makes the config agree with what the code already does.
+  #
+  # SCOPE — read this before touching it. This benches the direction SIDE-OVERRIDE
+  # engine ONLY (the ai_direction_engine/psb_direction_driver daemons that write
+  # override_file). It does NOT touch the `ai:` block at line ~2597, which stays
+  # enabled: true / live_inferencing: true. Turning THAT off was wrong once already
+  # (feedback_btc_ai_off_revert_guardrail_2026_06_29) and is not what this is.
+  #
+  # WHY — the override lost to a coin flip, twice, on real resolutions:
+  #   * a72b16e2 + 4eb70038, scripts/resolver_vs_quote.py, 171,380 settled ghosts in
+  #     the 0.45-0.55 band, every policy on the SAME rows, EV/$1 @1c:
+  #         favorite 50.63% -0.0215 | always_up 50.59% -0.0133 | coinflip 50.09% +0.0020
+  #         resolver 48.24% -0.0525 | ai_hist  47.79% -0.0584  <- AI is LAST of five
+  #   * scripts/ai_direction_exact_join.py, 31,142 calls / 7,147 markets: providers
+  #     carry NO information beyond the quote. Roadmap logs this REFUTED/CLOSED.
+  #
+  # AND ITS SIDE IS DISCARDED ANYWAY. With side_policy: favorite below, sol_macro.py
+  # :3729 (and the eth/bitcoin twins) overwrite the override's side with the market
+  # favorite two statements after reading it. The override's only surviving effect is
+  # ADMISSION: it turns a NEUTRAL sit-out into a trade at the favorite's side, i.e.
+  # more volume on a pool whose own measured EV is negative. That is not a frequency
+  # fix, and reopening the neutral pool has its own sanctioned path — roadmap S3, bar
+  # n>=300 settled true-neutral rows/lane/side, positive after 2c, 5m excluded. As of
+  # 2026-08-14 S3 is NOT graduated (max 107 markets, 5m only, ~coinflip).
+  #
+  # NO BEHAVIOUR CHANGE TODAY. The daemons died 2026-08-13 19:34 (all providers ERR)
+  # and override_file has been an empty 2-byte '{}' since, so resolve() already
+  # returned quant_side on every call. mode: quant takes the same branch immediately
+  # (direction_override.py:166). This edit prevents a future daemon restart from
+  # silently RE-ARMING a measured-negative policy — the kill was only in git history,
+  # where it was invisible to the running system. `direction` is in
+  # _HOT_RELOAD_TOP_LEVEL_KEYS (main.py:96), so this applies without a restart.
+  #
+  # TO REVERT: mode: claude + enforce: true, and restart the two daemons. Do that only
+  # with a CURRENT-ERA live-realized measure that beats the quote — not on a hunch, and
+  # not because trade frequency looks low. Frequency is not evidence of edge.
+  # ══════════════════════════════════════════════════════════════════════════════
+  mode: quant     # was: claude (2026-08-12 operator restore, PRE-DATES the 08-13 refutation above)
+  enforce: false  # was: true
   override_file: data/runtime/claude_direction_override.json
   max_age_sec: 900       # override staleness belt (each entry may also carry its own ttl)
-  override_when_quant_neutral: true    # CLAUDE-DRIVEN: my calls apply even where quant sat out
-  apply_windows: ['1h', '15m']    # operator directive: 15m was ALWAYS meant to be AI-driven.
+  override_when_quant_neutral: true    # inert while mode: quant — kept so a revert is one-line
+  apply_windows: ['1h', '15m']    # inert while mode: quant. Operator directive: 15m was ALWAYS meant to be AI-driven.
   min_conf: 0.0          # ignore overrides below this confidence
   # ── SIDE POLICY (2026-08-13, operator GO after Codex design review) ────────────
   # WHO PICKS THE SIDE. `resolver` = legacy (the native bias stack + its flip/fade
