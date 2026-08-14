@@ -539,9 +539,46 @@ class ETHMacroStrategy(SolMacroStrategy):
             if macd_5m.crossover == "BULLISH_CROSS":
                 score = 0.06
                 reasons.append("ETH5m bull cross")
-            elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
+            # 2026-08-14 SIDE-SYMMETRY FIX (Codex GO-WITH-CHANGES, Option B).
+            # WAS: `macd_5m.histogram > 0 and macd_5m.histogram_rising`.
+            # That was NOT the mirror of the SHORT clause below. `histogram_rising` is
+            # `curr_hist > prev_hist` (STRICT — sol_btc_service.py:744), so a FLAT
+            # histogram is False. SHORT's 0.04 asks only for `not rising`, which INCLUDES
+            # flat; LONG's asked for strictly rising. The true mirror of "positive and
+            # rising" is "negative and falling", not "negative and not-rising".
+            #
+            # Effect on the fall-through (score 0.0 => below eth_follow_5m_min_adj 0.02
+            # => rejected as eth_5m_weak_confirm):
+            #   LONG  fell through on hist > 0 AND not rising  -> SUPPORTING evidence discarded
+            #   SHORT falls through on hist < 0 AND rising     -> DETERIORATING evidence discarded
+            # So the LONG side was throwing away good evidence and the SHORT side was not.
+            #
+            # MEASURED 2026-08-14 (live --paper, one day, eth_macro 5m):
+            #   eth_5m_weak_confirm rejections   LONG 509 (19.1%)  SHORT 201 (7.7%)  = 2.5x
+            #     of those, scored exactly 0.0   LONG 29.1%        SHORT 7.0%
+            #     deduped by market_id           LONG 36 markets   SHORT 7 markets
+            #   Candidate pool by quote:  yes>0.50 (LONG) 58.9%  /  yes<0.50 (SHORT) 38.1%
+            #   Actual entries, last 20:  BUY_NO 85%  /  BUY_YES 15%
+            # The market offered LONG and the book went 85% SHORT. On a flat tape (ETH
+            # -0.116% over 26 bars) the histogram is flat constantly, which is exactly the
+            # state that passed SHORT and rejected LONG — so every eth 5m position became
+            # the same correlated short and they lost as a clump.
+            #
+            # ⚠ THIS IS NOT ADMISSION-ONLY. eth_5m_adj also feeds est_prob_up (line ~2026),
+            # `confidence` (~2041, via abs()), and through those the edge and Kelly sizing.
+            # Flipping this cohort 0.0 -> 0.04 therefore also adds +0.04 to est_prob_up and
+            # lifts confidence 0.55 -> 0.58 on these LONGs. That is the intended direction
+            # (the side was under-scored), but it is a real scope note, not a no-op.
+            #
+            # ⛔ REJECTED ALTERNATIVE (Codex NO on Option A): also dropping `not rising`
+            # from the SHORT clause. That would admit `hist < 0 AND rising` — a RECOVERING
+            # downtrend — on a side that already carries b=0.77 / 56.4% breakeven, and via
+            # the est_prob path it would make NO look stronger and size it larger.
+            # Fixing the symmetry by TIGHTENING short is also off the table: this project
+            # is in a calibration phase where frequency is priority #1.
+            elif macd_5m.histogram > 0:
                 score = 0.04
-                reasons.append("ETH5m green+rising")
+                reasons.append("ETH5m green")
             elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
                 score = -0.05
                 reasons.append("ETH5m against")
