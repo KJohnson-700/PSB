@@ -4,6 +4,20 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-08-12 — Emergency clean-baseline bleed intervention
+
+**Context.** Clean baseline since `20260811_2059` produced 118 closed trades, net `-$173.26`. The loss was not explained by low payoff; it was concentrated in low-WR route families plus high-MFE round trips that were allowed to settle red.
+
+**What changed.**
+- Disabled `risk.rsi_fade.enabled` after the current config still emitted `*_rsi_fade` trades; observed RSI-fade families netted `-$68.85`, led by BTC 15m `-$54.38`.
+- Re-enabled `trading.exit_rules.tp_giveback_enabled`; losers with MFE `>=30%` totaled `-$131.71`, including BTC trades that reached `+50%` to `+350%` MFE before closing red/zero.
+- Applied targeted side/window cuts: BTC 15m bearish BUY_NO, ETH 15m BUY_YES, BNB 15m BUY_YES, XRP 5m BUY_NO.
+- Disabled live AI/Claude direction forcing (`direction.mode: quant`, `direction.enforce: false`), cleared `data/runtime/claude_direction_override.json`, and stopped `scripts/psb_direction_driver.py` plus `scripts/ai_direction_engine.py`. These background writers were restoring BTC/BNB LONG overrides and produced live `DIRECTION_OVERRIDE ... applied=True` lines even after static config edits.
+
+**Counterfactual.** On the same clean window, the entry blocks remove 53 observed exits totaling `-$197.59`; the remaining observed exits net `+$24.33` before any MFE-giveback improvement.
+
+**Ops.** `risk.rsi_fade.enabled` is hot-reloadable; `tp_giveback_enabled` is restart-class in `LiveTesting.__init__`, so restart the local paper bot for the exit fix to apply. Restarted locally as session `test_20260812_132943`; first post-fix pulse showed BTC skipping via `buy_no_15m_bearish_disabled` and no new entries.
+
 ## 2026-06-16 — BNB pocket refinements (queued task): short RSI floors + 15m-long reclaim
 
 **Context.** Executed the queued BNB/DOGE pocket-refinement task. Re-verified pockets on the settled ghost log (no backtester).

@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-08-12 — Emergency cut: XRP 5m shorts disabled, 15m longs preserved
+
+- **What changed:** Set `strategies.xrp_macro.disable_buy_no_5m: true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Confirmed `disable_buy_yes_15m` remains `false` so the positive XRP 15m long lane is not accidentally cut.
+- **Why:** Clean baseline since `20260811_2059` showed XRP 5m BUY_NO net `-$18.24`, PF `0.68`, 30% WR. In the same window, XRP 15m BUY_YES was `+$27.10` with PF `6.55`, and XRP 15m BUY_NO was `+$19.33` with PF `1.32`.
+- **Hypothesis:** Cutting only XRP 5m shorts removes the bad low-WR cohort while preserving the strongest current XRP 15m edges.
+- **Expected outcome:** No new XRP 5m BUY_NO entries; XRP contribution should be dominated by 15m native/fresh-cross/macd positive cohorts.
+- **Actual outcome:** `pending` — requires at least 15 closed XRP trades after rollout.
+- **Status:** `pending`
+
 ### 2026-07-13 — Let XRP 5m DOWN floor survive MINIMAL sizing brake
 
 - **What changed:** In the shared SOL macro sizing path inherited by XRP, per-lane sizing now applies lift → floor → hard cap. `PAUSED` still blocks all overrides; `MINIMAL` skips lift but can honor explicit floor opt-ins. Config added `xrp_macro.lane_min_notional_5m_down: 15` and `xrp_macro.lane_min_notional_ignores_minimal_5m_down: true`.

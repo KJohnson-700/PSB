@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-08-12 — Emergency cut: RSI fade off and BTC 15m bearish shorts blocked
+
+- **What changed:** Set `risk.rsi_fade.enabled: false` and `strategies.bitcoin.disable_buy_no_15m_when_bearish: true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Also re-enabled cross-strategy `trading.exit_rules.tp_giveback_enabled` to bank high-MFE round trips, disabled live direction forcing (`direction.mode: quant`, `enforce: false`), cleared `data/runtime/claude_direction_override.json`, and stopped the background direction writers.
+- **Why:** Clean baseline since `20260811_2059` produced 118 closed trades, net `-$173.26`. BTC was the largest drag: `bitcoin|15m|up|bearish|htf_bearish_side_short_rsi_fade` lost `-$54.38` over 17 closes, and BTC 15m bearish BUY_NO lost `-$30.57`; the drift subset was 0/3, `-$38.85`, despite MFE up to `+357%`.
+- **Hypothesis:** Removing RSI fade and BTC 15m bearish shorts stops the current low-WR BTC bleed, while MFE giveback converts future high-MFE BTC round trips before they settle red.
+- **Expected outcome:** No new BTC `*_rsi_fade` entries; no BTC 15m bearish BUY_NO entries; no `DIRECTION_OVERRIDE ... applied=True` forcing BTC long; BTC realized WR should rise because the worst forced/reversal routes stop firing.
+- **Actual outcome:** `pending` — requires restart for the exit toggle and at least 15 closed BTC trades after rollout.
+- **Status:** `pending`
+
 ### 2026-07-31 — Revert BTC paper sizing to linear Kelly
 
 - **What changed:** Set `strategies.bitcoin.use_true_kelly_sizing: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), forcing BTC entries back through `KellySizer.size_from_edge` instead of `size_binary_position`.

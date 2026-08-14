@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-08-12 — Emergency re-cut: BNB 15m longs disabled again
+
+- **What changed:** Set both effective `strategies.bnb_macro.disable_buy_yes_15m` keys to `true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) so YAML duplicate ordering cannot reopen the lane.
+- **Why:** Clean baseline since `20260811_2059` showed BNB 15m BUY_YES net `-$36.59`, PF `0.22`, 17% WR. This matches the older 2026-06-15 finding that BNB 15m long was the structural BNB bleed, but current config had drifted back open.
+- **Hypothesis:** Re-disabling BNB 15m longs removes one of the main `standard`-family loss contributors while preserving BNB shorts and other windows for forward evidence.
+- **Expected outcome:** No new BNB 15m BUY_YES entries; BNB realized WR should improve by removing the 17% WR long cohort.
+- **Actual outcome:** `pending` — requires at least 15 closed BNB trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-16 — BNB pocket refinements: short RSI floors + 15m-long reclaim
 
 - **Context.** Pocket-hunt (queued task) re-verified on settled ghost. BNB est_prob is the best-calibrated alt, so its lanes have real edge concentrated in RSI slices. Live session `test_20260616_030355` also showed a −$12 stop on `1h BUY_NO` at RSI 37 — outside the +EV pocket.

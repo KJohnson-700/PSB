@@ -461,7 +461,8 @@ async def test_entry_dry_run_fresh_fill_uses_executable_ask_within_smoke_toleran
     )
 
     kw = c.place_order.call_args.kwargs
-    assert kw["price"] == pytest.approx(0.52)
+    # fresh-fill = book-walk ask (0.52) + the existing paper latency slip (~0.25%) => 0.5213
+    assert kw["price"] == pytest.approx(0.5213)
     assert kw["size"] == pytest.approx(10.0)
     assert kw["order_type"] == "FAK" and kw["post_only"] is False
 
@@ -497,7 +498,8 @@ async def test_entry_dry_run_fresh_fill_records_partial_executable_size():
     )
 
     kw = c.place_order.call_args.kwargs
-    assert kw["price"] == pytest.approx(0.51)
+    # book-walk ask (0.51) + paper latency slip (~0.25%) => 0.511275
+    assert kw["price"] == pytest.approx(0.511275)
     assert kw["size"] == pytest.approx(6.0)
 
 

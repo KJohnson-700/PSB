@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-08-12 — Emergency cut: ETH 15m longs disabled
+
+- **What changed:** Set `strategies.eth_macro.disable_buy_yes_15m: true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Cross-strategy MFE giveback was also re-enabled.
+- **Why:** Clean baseline since `20260811_2059` showed ETH 15m BUY_YES net `-$38.35`, PF `0.57`; the standard ETH 15m long subset was `-$30.58`. ETH 15m BUY_NO remained positive (`+$16.85`, PF `1.52`), so this is side/window-specific rather than a full ETH shutdown.
+- **Hypothesis:** Removing 15m longs while keeping 15m/5m shorts preserves the current profitable ETH side and lifts overall WR by cutting a repeated wrong-side long route.
+- **Expected outcome:** No new ETH 15m BUY_YES entries; ETH closes should skew toward the positive short/native cohorts.
+- **Actual outcome:** `pending` — requires at least 15 closed ETH trades after rollout.
+- **Status:** `pending`
+
 ### 2026-07-15 — Cap ETH 5m BUY_NO entries at yes<=0.51
 
 - **What changed:** Added timeframe-scoped `buy_no_min_no_price_{tf}` lookup in [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) and set `strategies.eth_macro.buy_no_min_no_price_5m: 0.49` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). ETH 15m/1h BUY_NO keep the legacy fallback `0.20`; ETH BUY_YES does not read this key.
