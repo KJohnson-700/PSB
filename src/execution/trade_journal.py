@@ -607,6 +607,15 @@ class TradeJournal:
             _efq = _entry_sig.get("paper_fill_quality")
             if isinstance(_efq, dict):
                 pos["entry_paper_fill_quality"] = _efq
+            # 2026-08-14 Same lift for the MAKER-vs-TAKER execution path, stamped onto
+            # Order.execution by clob_client._lc() and carried in via log_entry(extra=).
+            # Deliberately separate from paper_fill_quality: that block is None on LIVE
+            # (it is the paper sim-fill record), and this field must survive a LIVE run —
+            # it is the only entry-execution fact that does. See calibration_log for why
+            # (fill_fee_rate is a flat 0.07 taker, but ~50% of live entries fill as maker).
+            _eex = _entry_sig.get("entry_execution")
+            if isinstance(_eex, dict):
+                pos["entry_execution"] = _eex
         self.closed_trades.append(pos)
         del self.open_positions[trade_id]
         self.total_entries = len(self.open_positions) + len(self.closed_trades)

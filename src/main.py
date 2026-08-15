@@ -5280,6 +5280,16 @@ class PolyBot:
                             "exit_fill_ratio": getattr(exit_decision, "exit_fill_ratio", None),
                             "exit_mark_src": getattr(exit_decision, "exit_mark_src", None),
                             "exit_mark_age_ms": getattr(exit_decision, "exit_mark_age_ms", None),
+                            # 2026-08-14 EXIT MAKER-vs-TAKER, NESTED (Codex required).
+                            # `**order_execution` below splats fill_path/is_maker in at TOP
+                            # level, but calibration_log reads closed["exit_execution"] —
+                            # so relying on the splat would journal exit_is_maker=None on
+                            # every trade. Nest it explicitly. This is the leg where maker
+                            # fills dominate: 67% of live exits vs 50% of entries (n=63).
+                            "exit_execution": {
+                                "fill_path": order_execution.get("fill_path"),
+                                "is_maker": order_execution.get("is_maker"),
+                            },
                             **order_execution,
                         },
                     )
@@ -7025,6 +7035,15 @@ class PolyBot:
                     # signal mark + book state). None on live/non-fresh-fill entries ->
                     # such rows are lower-confidence for the fillability analyzer.
                     "paper_fill_quality": order_execution.get("paper_fill_quality"),
+                    # 2026-08-14 MAKER-vs-TAKER path, stamped by clob_client._lc() onto the
+                    # same Order.execution dict. Unlike paper_fill_quality above this is
+                    # POPULATED ON LIVE, and it is the only entry-execution fact that is:
+                    # fill_fee_rate is journalled as a flat 0.07 taker while ~50% of live
+                    # entries actually fill as maker at 0% (order_lifecycle.jsonl, n=63).
+                    "entry_execution": {
+                        "fill_path": order_execution.get("fill_path"),
+                        "is_maker": order_execution.get("is_maker"),
+                    },
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
@@ -7491,6 +7510,15 @@ class PolyBot:
                     # signal mark + book state). None on live/non-fresh-fill entries ->
                     # such rows are lower-confidence for the fillability analyzer.
                     "paper_fill_quality": order_execution.get("paper_fill_quality"),
+                    # 2026-08-14 MAKER-vs-TAKER path, stamped by clob_client._lc() onto the
+                    # same Order.execution dict. Unlike paper_fill_quality above this is
+                    # POPULATED ON LIVE, and it is the only entry-execution fact that is:
+                    # fill_fee_rate is journalled as a flat 0.07 taker while ~50% of live
+                    # entries actually fill as maker at 0% (order_lifecycle.jsonl, n=63).
+                    "entry_execution": {
+                        "fill_path": order_execution.get("fill_path"),
+                        "is_maker": order_execution.get("is_maker"),
+                    },
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),

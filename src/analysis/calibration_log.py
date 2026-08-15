@@ -281,6 +281,34 @@ def build_record_from_closed_trade(
             (closed.get("entry_paper_fill_quality") or {}).get("fee_usdc")
             if isinstance(closed.get("entry_paper_fill_quality"), dict) else None
         ),
+        # 2026-08-14 MAKER-vs-TAKER, the field a live maker-first run cannot do without.
+        # Everything above it comes from entry_paper_fill_quality, which is None on LIVE
+        # (it is the paper sim-fill block) — so on a live run entry_fee_usdc/spread/depth
+        # are all null and these two are the only entry-execution facts that survive.
+        # Sourced from Order.execution, stamped by clob_client._lc() at the moment the
+        # order resolves, so it works identically in paper and live.
+        #
+        # WHY IT MATTERS: fill_fee_rate is recorded as a flat 0.07 (taker) on every fill,
+        # but order_lifecycle.jsonl shows 50% of live ENTRIES and 67% of live EXITS
+        # actually fill as MAKER at 0% fee (n=63, 07-30 -> 08-09). Without this field the
+        # smoke would over-report entry fees on roughly half its trades with no way to
+        # correct it after the fact. is_maker is None when unknown — never False.
+        "entry_fill_path": (
+            (closed.get("entry_execution") or {}).get("fill_path")
+            if isinstance(closed.get("entry_execution"), dict) else None
+        ),
+        "entry_is_maker": (
+            (closed.get("entry_execution") or {}).get("is_maker")
+            if isinstance(closed.get("entry_execution"), dict) else None
+        ),
+        "exit_fill_path": (
+            (closed.get("exit_execution") or {}).get("fill_path")
+            if isinstance(closed.get("exit_execution"), dict) else None
+        ),
+        "exit_is_maker": (
+            (closed.get("exit_execution") or {}).get("is_maker")
+            if isinstance(closed.get("exit_execution"), dict) else None
+        ),
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         **bucket_tags,
     }

@@ -119,6 +119,25 @@ class OrderStatus(Enum):
     FAILED = "failed"
 
 
+# 2026-08-14 Which lifecycle paths ended in a MAKER fill (0% fee) vs a TAKER cross (0.07).
+# Derived from the paths emitted by place_entry_order/place_exit_order:
+#   maker_only          rested post_only GTC, filled as maker
+#   maker_full          maker leg filled in full inside maker_wait_sec
+#   maker_partial_keep  maker leg partially filled; remainder NOT crossed (kept as maker)
+#   marketable          straight FAK taker (paper always takes this path)
+#   maker_zero_cross_fak / maker_post_failed_fak  rested and did NOT fill -> crossed as taker
+# Unknown/new paths map to None, never False — "unknown" must not read as "taker".
+_MAKER_PATHS = {
+    "maker_only": True,
+    "maker_full": True,
+    "maker_partial_keep": True,
+    "marketable": False,
+    "maker_zero_cross_fak": False,
+    "maker_post_failed_fak": False,
+    "maker_unknown_skip": None,
+}
+
+
 @dataclass
 class Order:
     """Represents a trade order"""
@@ -1598,6 +1617,29 @@ class CLOBClient:
 
         # data-loop A: one order_lifecycle.jsonl row per resolved order (live maker/FAK path).
         def _lc(path, order, submit_mono=None, matched=None, fallback=None):
+            # 2026-08-14 STAMP THE FILL PATH ONTO THE ORDER ITSELF.
+            # Until now `path` went ONLY to order_lifecycle.jsonl, while the economics
+            # (fee, slippage, spread, depth) go to trades.jsonl — and the two are joinable
+            # only by market_id, which is 0/5,849 populated. So there was no way to ask the
+            # one question a live maker-first run exists to answer: what did filling as
+            # MAKER actually save per trade.
+            #
+            # Measured from order_lifecycle.jsonl (n=63 real live fills, 07-30 -> 08-09):
+            #   ENTRY 21/42 = 50% maker-filled,  EXIT 14/21 = 67% maker-filled.
+            # Maker fee is 0%, taker is 0.07 — so on half the entries the journal's
+            # hardcoded fill_fee_rate 0.07 is simply WRONG, and nothing downstream can tell.
+            #
+            # Additive and defensive: writes into the existing Order.execution dict, never
+            # raises, and changes no order routing or P&L. `is_maker` is None (not False)
+            # when the path is unknown, so "unknown" can never be mistaken for "taker".
+            try:
+                if order is not None:
+                    _ex = getattr(order, "execution", None)
+                    if isinstance(_ex, dict):
+                        _ex["fill_path"] = path
+                        _ex["is_maker"] = _MAKER_PATHS.get(path)
+            except Exception:
+                pass
             _order_lifecycle.record(
                 self._order_lifecycle_log_enabled, kind="entry", path=path,
                 token_id=token_id, side=side, requested_price=price, requested_size=size,
@@ -1781,6 +1823,19 @@ class CLOBClient:
 
         # data-loop A: one order_lifecycle.jsonl row per resolved LIVE exit order.
         def _lc(path, order, submit_mono=None, matched=None, fallback=None):
+            # 2026-08-14 EXIT-SIDE STAMP (Codex caught this omission). My first pass
+            # replace-all keyed on `kind="entry"`, so ONLY the entry helper got stamped and
+            # every exit would have journalled exit_is_maker=None — silently under-reporting
+            # the leg where maker fills are actually MOST common (67% of live exits vs 50%
+            # of entries, order_lifecycle.jsonl n=63). Same contract as the entry helper.
+            try:
+                if order is not None:
+                    _ex = getattr(order, "execution", None)
+                    if isinstance(_ex, dict):
+                        _ex["fill_path"] = path
+                        _ex["is_maker"] = _MAKER_PATHS.get(path)
+            except Exception:
+                pass
             _order_lifecycle.record(
                 self._order_lifecycle_log_enabled, kind="exit", path=path,
                 token_id=token_id, side=side, requested_price=price, requested_size=size,
