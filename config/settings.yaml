@@ -76,7 +76,25 @@ trading:
     apply_in_paper: true
     paper_mode: observe
     max_slippage_cents: 0.02
-    max_spread_cents: 0.05
+    max_spread_cents: 0.10   # 2026-08-15 LOOSENED 0.05 -> 0.10 for the live smoke (operator).
+    # PICKED FROM THE BOOK, NOT A GUESS. Real spread at entry, n=4,458 (entry_book_shadow):
+    #   p50 0.010  p75 0.030  p90 0.070  p95 0.110  p99 0.260  max 0.740
+    # Share of real entries the cap would BLOCK:
+    #   0.03 -> 21.3%  (the value that STARVED live 2026-07-28: signals fired, 0 entries)
+    #   0.05 -> 12.4%  (previous)
+    #   0.10 ->  5.2%  (this)      0.12 -> 3.4%   0.15 -> 2.4%
+    # THE MAKER ARGUMENT, which is why this is not merely "loosen and hope": the cap was
+    # calibrated for a TAKER, where a wide spread is a cost you pay. entry_mode is hybrid —
+    # we REST post_only inside the spread for entry_maker_wait_sec before crossing. For a
+    # maker, a wide book is where the edge IS, not a hazard: you post inside it and get paid
+    # to wait. Blocking wide spreads is therefore backwards for a maker-first run, and the
+    # smoke exists precisely to measure maker economics (50% of live entries / 67% of exits
+    # already fill maker, order_lifecycle.jsonl n=63).
+    # RESIDUAL RISK, deliberately kept: if the maker leg does NOT fill in 8s it crosses FAK
+    # and pays the full spread. 0.10 still blocks the p95+ tail (0.11 and up, incl. the 0.26
+    # p99 and 0.74 max) so genuinely broken books are still refused. Not going past 0.12
+    # without live fill data. Hot-reloadable (slippage_guard is in _HOT_RELOAD_TRADING_KEYS,
+    # main.py:127) and live-only — paper_mode: observe, so this changes nothing in paper.
     require_full_depth: false
     depth_price_ceiling_cents: 0.02
   clob_ws:
