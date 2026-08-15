@@ -3383,11 +3383,51 @@ class PolyBot:
             path = os.path.join("data", "calibration", "trades.jsonl")
             if not os.path.exists(path):
                 return
+            # ── 2026-08-14 PER-LANE DEPTH, NOT A WALL-CLOCK WINDOW ────────────────
+            # WAS: one 12h cutoff applied to every lane. That made warm-start a function
+            # of WHEN you restart rather than of the lane, and it is the mechanism behind
+            # the operator's long-standing report that "every restart the behavior shifts
+            # and the set of active asset lanes changes".
+            #
+            # MEASURED on the two restarts either side of that complaint:
+            #   winner  08-13 19:55 PT -> 37 closes / 9 lanes (5 lanes >= min_samples)
+            #   next    08-14 12:10 PT -> 15 closes / 4 lanes (3 lanes >= min_samples)
+            # Same config, same code, 2.5x the adaptive state. xrp|15m and hype|15m booted
+            # WARM into the first and were absent entirely from the second. A lane under
+            # min_samples reports admission_delta 0.0 and size_mult 1.0 — i.e. tape-BLIND
+            # and unmanaged — so a lane that merely happened to be QUIET before the restart
+            # gets a free pass, while a busy one gets scrutinised. That is backwards, and it
+            # is arbitrary with respect to which lanes are actually any good.
+            #
+            # NOW: take the last `k` closes PER LANE walking newest->oldest, so every lane
+            # boots at the same depth no matter what the clock says and two restarts are
+            # comparable. `k` is the adapter's own rolling buffer length (window_closes),
+            # so this hydrates exactly what the live buffer would have held — no more.
+            #
+            # An absolute staleness ceiling is still required and is NOT the same knob.
+            # De-sizing off a stale close is harmless (max_mult <= 1.0 can never enlarge a
+            # position) but ADMISSION can go negative, i.e. a stale WINNING close would
+            # LOOSEN a lane. hydrate_max_age_hours is therefore retained as that ceiling
+            # and widened to 7d, rather than doubling as the depth control it used to be.
+            try:
+                k_per_lane = int(getattr(adapter, "k", 5) or 5)
+            except (TypeError, ValueError):
+                k_per_lane = 5
+            # Codex fix #1: group with the ADAPTER'S OWN key normalization
+            # (sol_macro->sol, BUY_YES->up), not a raw f-string. Today's data happens to
+            # carry no mixed variants, so a raw key would score identically — but the
+            # instant one row writes 'up' instead of 'BUY_YES' the raw key silently splits
+            # one lane into two and each half gets its own k. Normalize at the source.
+            try:
+                from src.analysis.lane_tape_adapter import lane_key as _lane_key
+            except Exception:  # pragma: no cover - defensive
+                def _lane_key(a, w, s):
+                    return f"{a}|{w}|{s}"
             try:
                 cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_h)).isoformat()
             except Exception:
                 cutoff = ""
-            rows = []
+            all_rows = []
             with open(path) as fh:
                 for line in fh:
                     try:
@@ -3395,13 +3435,58 @@ class PolyBot:
                     except Exception:
                         continue
                     ts = str(d.get("ts") or "")
-                    # ISO8601 UTC strings sort lexicographically; skip anything older
-                    # than the cutoff so hydration reflects the CURRENT tape only.
+                    # ISO8601 UTC strings sort lexicographically. This is now only the
+                    # absolute staleness FLOOR, not the depth control.
                     if cutoff and ts and ts < cutoff:
                         continue
-                    rows.append(d)
-            # chronological (oldest -> newest) so record_close keeps the latest k/lane
-            rows.sort(key=lambda d: str(d.get("ts") or ""))
+                    all_rows.append(d)
+            all_rows.sort(key=lambda d: str(d.get("ts") or ""))
+            # Walk NEWEST -> OLDEST keeping at most k per lane, then restore chronological
+            # order (record_close is order-sensitive: the recency ramp weights newest most).
+            #
+            # Codex fix #2: a row must be VALID before it counts against the lane's k.
+            # Otherwise a malformed row consumes a slot here and is then skipped by the
+            # validation below, so the lane silently hydrates to k-1, k-2... — depth
+            # inconsistency reappearing through the back door, which is the whole bug.
+            def _usable(_d):
+                if not (_d.get("strategy")
+                        and (_d.get("window") or _d.get("window_size"))
+                        and (_d.get("action") or _d.get("side"))
+                        and _d.get("ts")):
+                    return False
+                _p = _d.get("pnl")
+                if _p is None:
+                    return False
+                try:
+                    float(_p)
+                except (TypeError, ValueError):
+                    return False
+                return True
+
+            _per_lane: Dict[str, int] = {}
+            rows = []
+            for d in reversed(all_rows):
+                if not _usable(d):
+                    continue
+                _lk = _lane_key(
+                    d.get("strategy"),
+                    d.get("window") or d.get("window_size"),
+                    d.get("action") or d.get("side"),
+                )
+                if _per_lane.get(_lk, 0) >= k_per_lane:
+                    continue
+                _per_lane[_lk] = _per_lane.get(_lk, 0) + 1
+                rows.append(d)
+            rows.reverse()  # back to oldest -> newest
+            # Codex fix #5 — KELLY MUST NOT EAT THE LANE-CAPPED ROWS. The tape adapter is
+            # keyed (asset|window|SIDE); KellySizer tracks (strategy) and (strategy, window)
+            # with NO side dimension. Feeding it a per-SIDE-capped sample distorts its
+            # streaks: a strategy whose two sides both traded gets up to 2k rows while a
+            # one-sided strategy gets k, so its win/loss streaks reflect the cap, not the
+            # tape. That is a defect I introduced with the per-lane cap and it does not
+            # exist in the old wall-clock version. Kelly gets its own feed: plain
+            # chronological rows inside the staleness ceiling, uncapped.
+            _kelly_rows = [d for d in all_rows if _usable(d)]
             closes = []
             kelly = getattr(self, "kelly_sizer", None)
             for d in rows:
@@ -3421,12 +3506,17 @@ class PolyBot:
                     continue
                 mfe = d.get("mfe_pct")
                 closes.append((strat, window, side, mfe, pnl))
-                if kelly is not None:
+            # Kelly from its OWN uncapped chronological feed (see Codex fix #5 above).
+            if kelly is not None:
+                for d in _kelly_rows:
                     try:
-                        win = bool(d.get("win")) if d.get("win") is not None else (pnl > 0)
-                        kelly.record_outcome(strat, win, window)
+                        _p = float(d.get("pnl"))
+                        _w = bool(d.get("win")) if d.get("win") is not None else (_p > 0)
+                        kelly.record_outcome(
+                            d.get("strategy"), _w, d.get("window") or d.get("window_size")
+                        )
                     except Exception:
-                        pass
+                        continue
             ingested = adapter.hydrate(closes)
             # Persist immediately so the strategy readers (get_tape_admission_delta,
             # RSI-floor) see the hydrated deltas at once instead of a stale/missing
@@ -3436,11 +3526,58 @@ class PolyBot:
                 adapter.persist_state()
             except Exception:
                 pass
-            logging.info(
-                "[tape-adapter] hydrated %d recent closes across %d lanes "
-                "(<=%.1fh) on restart", ingested, len(adapter._lanes), max_age_h,
+            # ── MAKE THIS VISIBLE ─────────────────────────────────────────────────
+            # This function runs from __init__ (main.py:886), BEFORE logging is
+            # configured — so this logging.info has been silently discarded on EVERY
+            # restart the bot has ever performed. Verified: `hydrated=0 skipped=0` across
+            # every polybot_*.log on disk, while the code was in fact running every time.
+            # The single most useful line for diagnosing restart-to-restart drift was
+            # unobservable, which is why the drift went undiagnosed for so long.
+            # print() reaches stdout, which the nohup restart wrapper captures, so the
+            # record survives regardless of logging state. Keep the logging.info too for
+            # the case where a later caller runs this with logging already up.
+            _warm = sum(1 for _k in adapter._lanes
+                        if len(adapter._lanes[_k].buf) >= int(getattr(adapter, "min_samples", 3) or 3))
+            _msg = (
+                f"[tape-adapter] hydrated {ingested} closes across {len(adapter._lanes)} lanes "
+                f"({_warm} at/above min_samples, k={k_per_lane}/lane, staleness ceiling "
+                f"{max_age_h:.0f}h) on restart"
             )
+            try:
+                print(_msg, flush=True)
+            except Exception:
+                pass
+            logging.info(_msg)
+            # Session-comparability manifest: record WHICH lanes booted warm. Two sessions
+            # whose warm-lane sets differ are not comparable, and until now nothing recorded
+            # that — so cross-session lane analysis silently mixed managed and unmanaged
+            # lanes. Written best-effort; never blocks startup.
+            try:
+                _manifest = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ingested": ingested,
+                    "k_per_lane": k_per_lane,
+                    "staleness_ceiling_h": max_age_h,
+                    "lanes": {
+                        _k: {
+                            "n": len(adapter._lanes[_k].buf),
+                            "warm": len(adapter._lanes[_k].buf) >= int(getattr(adapter, "min_samples", 3) or 3),
+                        }
+                        for _k in adapter._lanes
+                    },
+                }
+                _mpath = os.path.join("data", "runtime", "hydrate_manifest.json")
+                os.makedirs(os.path.dirname(_mpath), exist_ok=True)
+                with open(_mpath + ".tmp", "w") as _fh:
+                    json.dump(_manifest, _fh, indent=2, sort_keys=True)
+                os.replace(_mpath + ".tmp", _mpath)
+            except Exception:
+                pass
         except Exception as _hexc:  # noqa: BLE001 — warm-start is best-effort
+            try:
+                print(f"[tape-adapter] hydrate SKIPPED: {_hexc}", flush=True)
+            except Exception:
+                pass
             logging.warning("adaptive-state hydrate skipped: %s", _hexc)
 
     def _apply_tape_adapter_size(

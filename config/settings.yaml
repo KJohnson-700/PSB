@@ -2599,6 +2599,22 @@ direction:
   # favorites with working exits and judge on CLEAN data. Freshness was ruled out (losers had
   # fresher prices). If it still loses with working caps -> then cut for real.
 lane_tape_adapter:
+  # 2026-08-14 RESTART REPRODUCIBILITY. hydrate_max_age_hours is now ONLY the absolute
+  # staleness ceiling — depth is per-lane (last `window_closes` per lane, main.py
+  # _hydrate_adaptive_state). It used to be BOTH, at 12h, which made warm-start a function
+  # of when you restarted: 08-13 19:55 PT booted 37 closes/9 lanes, 08-14 12:10 PT booted
+  # 15/4 off identical config. A lane under min_samples is tape-BLIND (delta 0.0, mult 1.0),
+  # so which lanes were merely BUSY before a restart decided which lanes got managed.
+  # Widened to 7d because it no longer controls depth. Lower it if stale closes prove to
+  # loosen admission wrongly (admission_delta can go negative; size_mult never enlarges).
+  # Codex measured the trade-off: 48h -> 15 lanes/11 warm, 72h -> 28/20, 120h -> 36/33,
+  # 168h -> 38/33. So 48-72h do NOT preserve the warm set (clock-dependence returns for
+  # slow lanes); 120h buys the same warm set as 168h with 2 fewer days of staleness.
+  # RESIDUAL HAZARD, deliberately NOT patched here: admission_delta is SIGNED, so a stale
+  # WINNING close can still LOOSEN a lane. Codex's fix is a per-lane "no negative admission
+  # until N fresh live closes" freshness clamp — a real mechanism with its own state, so it
+  # gets its own change, not a rider on this one. Size is already safe (max_mult <= 1.0).
+  hydrate_max_age_hours: 120.0
   mode: "live"                # 2026-08-11 REALIZED SIZING LIVE (operator: results, not shadow). min_mult 0.25/max_mult 1.0 => DE-SIZE realized losers to as low as 25% bet, NEVER upsizes; winner-protected (avg_pnl>=0 never cut) + green-gated (only cuts lanes that STOPPED going green). Shrinks the band-long bleed the adapter already flags (hype15m/bitcoin5m up) and self-lifts when a lane recovers. Revert mode:"off" to disable.
   admission_mode: "live"      # 2026-08-08 PLUG IN THE REALIZED SELF-FLIPPING BRAIN. Was default-off, so every gate calling get_tape_admission_delta() (eth/btc/sol min_edge + favorite sit-out) read a hardcoded 0.0 = tape-blind. Per-(asset|window|side) delta from the last k realized closes: >0 tightens a net-losing/never-green side, <0 loosens a winning+green side; flips sign automatically as the tape turns.
   window_closes: 6            # rolling realized closes per lane (fast reaction)
