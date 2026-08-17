@@ -129,21 +129,30 @@ trading:
     hold_fixed_take_profit:
       enabled: true
       threshold_pct: 0.40
-      # 2026-08-17 LIVE TRIAGE. Session test_20260816_185756 again gave back from
-      # +$84.50 closed peak to +$37.48 while price regime stayed flat/chop. Six
-      # losing closes had reached >=+40% MFE; doge 5m UP and xrp 5m UP accounted
-      # for four of them. Fixed banking only, not trailing/giveback.
+      # 2026-08-17 ALL-LANES (operator GO, Codex GO). The per-lane allowlist was
+      # rearview whack-a-mole: it was built from the 08-16 session's giveback losers,
+      # and the NEXT session's giveback came from 4 lanes NOT on it (eth|5m|up peaked
+      # +83% then rode to -100%; sol|1h|up, bnb|5m|up, xrp|15m|down likewise) —
+      # ~$90 missed while the covered lanes earned +$15.77. Settled vs real
+      # resolutions, only 57% of the session's 30 bar-crossers won held vs ~70%
+      # market-implied at the spike: the +40% spike systematically overprices
+      # resolution, so banking at the bar beat holding on covered AND uncovered.
+      # Under hold_all this is the bot's ONLY banking mechanism (regular TP is
+      # disabled under hold; tp_giveback measured off 08-13), so coverage gaps ride
+      # to resolution or the -55% catastrophic with no way to bank.
+      # Matcher is prefix-based (candidate.startswith), so 7 strategy prefixes —
+      # WITH trailing "|", no blank entries (Codex: "" would match everything) —
+      # cover every lane of every strategy. threshold_pct unchanged at 0.40.
+      # RESTART-CLASS: the lanes set is cached in live_testing __init__.
+      # REVERT: restore the 10-lane list from settings.yaml.bak_pre_fixedtp_alllanes_144341.
       lanes:
-        - "eth_macro|15m|down"
-        - "xrp_macro|5m|down"
-        - "eth_macro|5m|down"
-        - "sol_macro|1h|down"
-        - "xrp_macro|1h|down"
-        - "bitcoin|1h|down"
-        - "doge_macro|5m|up"
-        - "xrp_macro|5m|up"
-        - "bnb_macro|15m|down"
-        - "eth_macro|1h|up"
+        - "bitcoin|"
+        - "eth_macro|"
+        - "sol_macro|"
+        - "xrp_macro|"
+        - "hype_macro|"
+        - "doge_macro|"
+        - "bnb_macro|"
     stop_loss_pct: 0.3
     max_hold_hours: 72
     updown_stop_cents: 1.0  # 2026-08-13 DISABLED by making it UNREACHABLE (operator: trace it and kill it). TRACE: updown_stop_cents -> cents_stop_for_entry_price -> up_stop_cents -> adverse_for_updown_cents_time_stop (updown_exit_shared.py:691), which tests `current <= entry_price - up_stop_cents`, and that gates updown_time_stop inside the last updown_exit_window_mins (2.25) of the window. Net effect: in the final ~2 minutes, any position more than 3c underwater was CLOSED AT A LOSS instead of being allowed to resolve. CRITICAL: setting this to 0.0 does NOT disable it -- the test degrades to `current <= entry_price`, i.e. EVERY not-in-profit position becomes adverse and the time stop fires on all of them. Strictly worse. There is no >0 guard on this path, unlike the trail (trail_arm_pct>0) and the pct stop (effective_stop_loss_pct!=0). 1.0 is unreachable because token prices live in [0,1], so the condition can never trip. REVERT: 0.03 / 0.02.
@@ -519,7 +528,7 @@ trading:
     # HOT-RELOADABLE: read in live_testing.reload_from_config (~line 314) and exit_rules is in
     # _HOT_RELOAD_TRADING_KEYS. The "RESTART-CLASS / frozen at __init__" note below is STALE.
     # REVERT: set true (no restart needed).
-    hold_mfe_conditional_stop_enabled: false   # 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
+    hold_mfe_conditional_stop_enabled: true   # 2026-08-17 ENABLED (operator: "stop building things I need and leaving them disabled"). Restores the Olympus loss geometry: 07-22 +$561 session cut 89% of losses before -60% (avg depth -32%); since early_stop_windows:[] on 08-16 the bot had ZERO active loss caps — 70 straight full-forfeit losses at avg -97% of stake, b collapsed 1.62->0.43. Never-green (peak MFE<8%) cut at -34%; ever-green rides (90% WR held), so the 08-16 sol-1h bad-stop class cannot recur. Was: false. 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
     hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
     hold_5m_loser_floor_pct: 0.4
