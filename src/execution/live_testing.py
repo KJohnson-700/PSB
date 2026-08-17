@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 
 from src.execution.updown_exit_shared import (
     CRYPTO_UPDOWN_STRATEGIES,
@@ -370,6 +370,15 @@ class PositionExitManager:
         self._tp_net_min_pct = float(
             exit_cfg.get("take_profit_net_min_pct", 0.0) or 0.0
         )
+        _hold_fixed_tp = exit_cfg.get("hold_fixed_take_profit", {}) or {}
+        self._hold_fixed_tp_enabled = bool(_hold_fixed_tp.get("enabled", False))
+        self._hold_fixed_tp_pct = float(_hold_fixed_tp.get("threshold_pct", 0.40) or 0.40)
+        _hold_fixed_lanes = _hold_fixed_tp.get("lanes", []) or []
+        self._hold_fixed_tp_lanes: Set[str] = {
+            str(lane).strip()
+            for lane in _hold_fixed_lanes
+            if str(lane).strip()
+        }
         # Wide-book winner guard (2026-07-21). When the executable-price stop is
         # evaluated on a book WIDER than exit_max_book_spread, also require the YES
         # midpoint to confirm the loss before firing — the executable bid can sit far
@@ -545,6 +554,27 @@ class PositionExitManager:
             end_date=getattr(pos, "end_date", None),
         )
         return str(label).lower() in ws
+
+    def _hold_fixed_tp_matches(self, pos, entry_signal: Dict[str, Any]) -> bool:
+        if not self._hold_fixed_tp_lanes:
+            return False
+        window = str(
+            getattr(pos, "window_size", "")
+            or entry_signal.get("window_size")
+            or ""
+        ).strip()
+        side = "down" if str(getattr(pos, "entry_leg", "") or "") == "NO" else "up"
+        candidates = [
+            str(entry_signal.get("lane_id") or "").strip(),
+            f"{getattr(pos, 'strategy', '')}|{window}|{side}",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            for prefix in self._hold_fixed_tp_lanes:
+                if candidate == prefix or candidate.startswith(prefix):
+                    return True
+        return False
 
     def _tpgb_retrace_for(self, pos) -> float:
         """Give-back retrace for THIS position's window. Global default unless the window
@@ -1288,9 +1318,15 @@ class PositionExitManager:
                     not resolved.updown_hold_winners_to_resolution
                     and pnl_pct >= resolved.take_profit_pct
                 )
+                _hold_fixed_tp_ready = (
+                    resolved.updown_hold_winners_to_resolution
+                    and self._hold_fixed_tp_enabled
+                    and pnl_pct + 1e-9 >= self._hold_fixed_tp_pct
+                    and self._hold_fixed_tp_matches(pos, entry_signal)
+                )
                 _tp_net_ok = True
                 if (
-                    _tp_mark_ready
+                    (_tp_mark_ready or _hold_fixed_tp_ready)
                     and self._tp_require_executable_net
                     and _tp_exec_net_pnl_pct is not None
                 ):
@@ -1380,8 +1416,12 @@ class PositionExitManager:
                         setattr(pos, "_tpgb_retrace_used", _tpgb_r)
                     except Exception:
                         pass
-                elif _tp_mark_ready and _tp_net_ok:
-                    reason = "take_profit"
+                elif (_tp_mark_ready or _hold_fixed_tp_ready) and _tp_net_ok:
+                    reason = (
+                        "hold_fixed_take_profit"
+                        if _hold_fixed_tp_ready
+                        else "take_profit"
+                    )
                 elif (
                     effective_stop_loss_pct != 0
                     and stop_pnl_pct <= -effective_stop_loss_pct
@@ -1783,7 +1823,7 @@ class PositionExitManager:
             # fills in [0, floor) stay protected; a bogus-negative anchor no longer suppresses.
             if (
                 is_updown
-                and reason in ("take_profit", "updown_stop_loss", "never_green_cut")
+                and reason in ("take_profit", "hold_fixed_take_profit", "updown_stop_loss", "never_green_cut")
                 and _min_hold_floor > 0
                 and 0.0 <= _held_eff_secs < _min_hold_floor
             ):
@@ -1856,6 +1896,7 @@ class PositionExitManager:
                     # loss-cutting exits, not rest a limit that may never fill in a fast
                     # binary. Same reasoning as take_profit_late immediately below.
                     "take_profit",
+                    "hold_fixed_take_profit",
                     # 2026-07-17 (Codex catch): the time-gated late TP fires INSIDE the
                     # final gate window, so it must take the bid NOW (FAK) like the other
                     # near-resolution exits. Left as a resting GTC it would not fill at the

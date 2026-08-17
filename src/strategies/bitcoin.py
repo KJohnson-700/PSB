@@ -48,8 +48,10 @@ from src.analysis.ai_decision_broker import (
 )
 from src.analysis.rejected_candidate_log import (
     build_market_context,
+    build_packet,
     build_threshold_probe_variants,
     log_rejected_candidate,
+    log_skip_packet,
     DEFAULT_CALIBRATION_DIR,
 )
 
@@ -2424,6 +2426,29 @@ class BitcoinStrategy:
                 _sample("ltf_strength", ltf_strength)
                 if ltf_confirmed and not _simple_1h_long:
                     _bump_skip("ltf_confirmed_late_entry")
+                    # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                    # Purely additive telemetry — no decision is ever read back from it. The try/except
+                    # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                    # while BUILDING the args, before log_skip_packet could swallow it.
+                    try:
+                        _skip_packet_side = str(allowed_side).upper()
+                        _skip_packet_action = "BUY_YES" if _skip_packet_side == "LONG" else "BUY_NO"
+                        _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                        log_skip_packet(
+                            strategy="bitcoin", window=_updown_tf,
+                            side=_skip_packet_side, action=_skip_packet_action,
+                            reason="ltf_confirmed_late_entry", market=market, yes_price=yes_price,
+                            est_prob_up=None,
+                            htf_bias=htf_bias, gate_stage="ltf_confirmed_late_entry",
+                            packet=build_packet(
+                                raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                gate_failed="ltf_confirmed_late_entry",
+                                died_before_edge_computed=True,
+                            ),
+                        )
+                    except Exception:
+                        pass
                     logger.info(
                         "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
                         market.question[:40],
@@ -2500,6 +2525,29 @@ class BitcoinStrategy:
                 _our_price = (1.0 - yes_price) if allowed_side == "SHORT" else yes_price
                 if _our_price < 0.20:
                     _bump_skip("price_too_far_from_50_50")
+                    # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                    # Purely additive telemetry — no decision is ever read back from it. The try/except
+                    # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                    # while BUILDING the args, before log_skip_packet could swallow it.
+                    try:
+                        _skip_packet_side = str(allowed_side).upper()
+                        _skip_packet_action = "BUY_YES" if _skip_packet_side == "LONG" else "BUY_NO"
+                        _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                        log_skip_packet(
+                            strategy="bitcoin", window=_updown_tf,
+                            side=_skip_packet_side, action=_skip_packet_action,
+                            reason="price_too_far_from_50_50", market=market, yes_price=yes_price,
+                            est_prob_up=None,
+                            htf_bias=htf_bias, gate_stage="price_too_far_from_50_50",
+                            packet=build_packet(
+                                raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                gate_failed="price_too_far_from_50_50",
+                                died_before_edge_computed=True,
+                            ),
+                        )
+                    except Exception:
+                        pass
                     logger.debug(
                         f"  BTC skip '{market.question[:40]}' — our-side price "
                         f"{_our_price:.2f} < 0.20 (yes={yes_price:.2f}, {allowed_side})"
@@ -2700,6 +2748,29 @@ class BitcoinStrategy:
                         _pq_clean = re.sub(r'\d+:\d+[AP]M[-–]\d+:\d+[AP]M', '', _pq).strip()
                         if _pq_clean == _q_clean:
                             _bump_skip("correlated_exposure_5m")
+                            # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                            # Purely additive telemetry — no decision is ever read back from it. The try/except
+                            # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                            # while BUILDING the args, before log_skip_packet could swallow it.
+                            try:
+                                _skip_packet_side = str(allowed_side).upper()
+                                _skip_packet_action = action
+                                _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                                log_skip_packet(
+                                    strategy="bitcoin", window=_updown_tf,
+                                    side=_skip_packet_side, action=_skip_packet_action,
+                                    reason="correlated_exposure_5m", market=market, yes_price=yes_price,
+                                    est_prob_up=None,
+                                    htf_bias=htf_bias, gate_stage="correlated_exposure_5m",
+                                    packet=build_packet(
+                                        raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                        lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                        gate_failed="correlated_exposure_5m",
+                                        died_before_edge_computed=True,
+                                    ),
+                                )
+                            except Exception:
+                                pass
                             logger.info(
                                 f"  BTC [5m] skip '{market.question[:40]}' — "
                                 f"correlated_exposure_5m (open pos on same question)"
@@ -2821,6 +2892,29 @@ class BitcoinStrategy:
                     )
                     if quant.rsi_blocked:
                         _bump_skip("rsi_overbought_5m")
+                        # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                        # Purely additive telemetry — no decision is ever read back from it. The try/except
+                        # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                        # while BUILDING the args, before log_skip_packet could swallow it.
+                        try:
+                            _skip_packet_side = str(allowed_side).upper()
+                            _skip_packet_action = action
+                            _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                            log_skip_packet(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=_skip_packet_side, action=_skip_packet_action,
+                                reason="rsi_overbought_5m", market=market, yes_price=yes_price,
+                                est_prob_up=None,
+                                htf_bias=htf_bias, gate_stage="rsi_overbought_5m",
+                                packet=build_packet(
+                                    raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                    lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                    gate_failed="rsi_overbought_5m",
+                                    died_before_edge_computed=True,
+                                ),
+                            )
+                        except Exception:
+                            pass
                         logger.debug(
                             f"  BTC skip '{market.question[:40]}' — "
                             f"5m LONG blocked: RSI={ta.rsi_14:.0f} > 65"
@@ -4151,6 +4245,30 @@ class BitcoinStrategy:
                 and float(getattr(ta, "rsi_14", 50.0) or 50.0) >= _ob_rsi_1h
             ):
                 _bump_skip("buy_yes_overbought_rsi_1h")
+                # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                # Purely additive telemetry — no decision is ever read back from it. The try/except
+                # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                # while BUILDING the args, before log_skip_packet could swallow it.
+                try:
+                    _skip_packet_side = str(allowed_side).upper()
+                    _skip_packet_action = action
+                    _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                    log_skip_packet(
+                        strategy="bitcoin", window=_updown_tf,
+                        side=_skip_packet_side, action=_skip_packet_action,
+                        reason="buy_yes_overbought_rsi_1h", market=market, yes_price=yes_price,
+                        est_prob_up=est_prob_up,
+                        htf_bias=htf_bias, gate_stage="buy_yes_overbought_rsi_1h",
+                        packet=build_packet(
+                            raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                            lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                            gate_failed="buy_yes_overbought_rsi_1h",
+                            edge_chain=[{"step": "at_gate", "edge": edge,
+                                         "effective_min_edge": effective_min_edge}],
+                        ),
+                    )
+                except Exception:
+                    pass
                 logger.info(
                     "  BTC skip '%s' BUY_YES RSI %.1f >= overbought %.1f (buy_yes_overbought_rsi_1h)",
                     market.question[:40], float(getattr(ta, "rsi_14", 50.0) or 50.0), _ob_rsi_1h,
@@ -4361,6 +4479,30 @@ class BitcoinStrategy:
                     )
                     if _broker_state == "pending":
                         _bump_skip("ai_pending_async")
+                        # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                        # Purely additive telemetry — no decision is ever read back from it. The try/except
+                        # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                        # while BUILDING the args, before log_skip_packet could swallow it.
+                        try:
+                            _skip_packet_side = str(allowed_side).upper()
+                            _skip_packet_action = action
+                            _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                            log_skip_packet(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=_skip_packet_side, action=_skip_packet_action,
+                                reason="ai_pending_async", market=market, yes_price=yes_price,
+                                est_prob_up=est_prob_up,
+                                htf_bias=htf_bias, gate_stage="ai_pending_async",
+                                packet=build_packet(
+                                    raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                    lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                    gate_failed="ai_pending_async",
+                                    edge_chain=[{"step": "at_gate", "edge": edge,
+                                                 "effective_min_edge": effective_min_edge}],
+                                ),
+                            )
+                        except Exception:
+                            pass
                         continue
                 if (not _async_ok) or _broker_state == "unavailable":
                     # Synchronous fallback (flag off or broker not wired). FAIL-CLOSED:
@@ -4458,6 +4600,30 @@ class BitcoinStrategy:
                         continue
                     if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
                         _bump_skip("ai_low_confidence_marginal_updown")
+                        # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                        # Purely additive telemetry — no decision is ever read back from it. The try/except
+                        # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                        # while BUILDING the args, before log_skip_packet could swallow it.
+                        try:
+                            _skip_packet_side = str(allowed_side).upper()
+                            _skip_packet_action = action
+                            _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                            log_skip_packet(
+                                strategy="bitcoin", window=_updown_tf,
+                                side=_skip_packet_side, action=_skip_packet_action,
+                                reason="ai_low_confidence_marginal_updown", market=market, yes_price=yes_price,
+                                est_prob_up=est_prob_up,
+                                htf_bias=htf_bias, gate_stage="ai_low_confidence_marginal_updown",
+                                packet=build_packet(
+                                    raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                                    lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                                    gate_failed="ai_low_confidence_marginal_updown",
+                                    edge_chain=[{"step": "at_gate", "edge": edge,
+                                                 "effective_min_edge": effective_min_edge}],
+                                ),
+                            )
+                        except Exception:
+                            pass
                         logger.info(
                             f"  BTC AI skip '{market.question[:45]}' — confidence "
                             f"{ai_decision.confidence:.2f} < {self.ai_confidence_threshold:.2f}"
@@ -5279,6 +5445,30 @@ class BitcoinStrategy:
                     )
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")
+                # 2026-08-17 DECISION PACKET: this gate previously counted a skip and wrote NOTHING.
+                # Purely additive telemetry — no decision is ever read back from it. The try/except
+                # is REQUIRED, not belt-and-braces: a NameError from an out-of-scope local is raised
+                # while BUILDING the args, before log_skip_packet could swallow it.
+                try:
+                    _skip_packet_side = str(allowed_side).upper()
+                    _skip_packet_action = action
+                    _skip_packet_ud = "up" if _skip_packet_action == "BUY_YES" else "down"
+                    log_skip_packet(
+                        strategy="bitcoin", window=_updown_tf,
+                        side=_skip_packet_side, action=_skip_packet_action,
+                        reason="kelly_nonpositive", market=market, yes_price=yes_price,
+                        est_prob_up=est_prob_up,
+                        htf_bias=htf_bias, gate_stage="kelly_nonpositive",
+                        packet=build_packet(
+                            raw_side=_skip_packet_side, final_side=_skip_packet_side, final_action=_skip_packet_action,
+                            lane_policy="bitcoin|" + str(_updown_tf) + "|" + _skip_packet_ud,
+                            gate_failed="kelly_nonpositive",
+                            edge_chain=[{"step": "at_gate", "edge": edge,
+                                         "effective_min_edge": effective_min_edge}],
+                        ),
+                    )
+                except Exception:
+                    pass
                 continue
 
             if self._btc_1h_regime_gates.get("enabled", False):

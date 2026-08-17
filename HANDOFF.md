@@ -1,3 +1,154 @@
+## Claude Handoff — 2026-08-17 PSB Chop-Bleed Wiring Audit
+
+### Immediate Context
+
+The operator asked for an audit of the losing strategies in the current paper run because the bot started strong and then bled sideways. Treat the active run as a **split session**:
+
+- `data/paper_trades/test_20260817_011504`
+- `data/paper_trades/test_20260817_025250`
+
+Do **not** review only the newer session. A restart split the journal, and the combined run is the real operational picture.
+
+### What Codex Changed
+
+#### 1. BTC 15m cheap-NO floor
+
+File: `config/settings.yaml`
+
+Added:
+
+```yaml
+strategies:
+  bitcoin:
+    buy_no_min_no_price_15m: 0.40
+```
+
+Reason:
+
+- Combined split-session losses showed `bitcoin|15m|down` was the worst confirmed closed lane:
+  - `n=2`
+  - `WR=0%`
+  - `PnL=-$25.33`
+- Both losses were `BUY_NO` at cheap NO prices:
+  - `YES=0.805`, NO about `0.20`, expired red for `-$12.71`
+  - `YES=0.715`, NO about `0.29`, expired red for `-$12.62`
+- The journaled `entry_policy` for `bitcoin|15m|down` showed a `0.45-0.55` band, but BTC had no `buy_no_min_no_price_15m`, so the final lane-price check fell back to the generic cheap-NO floor `0.20`.
+- ETH/XRP/DOGE already had this class of cheap-NO floor; BTC 15m did not.
+
+This is a **narrow wiring/config fix**, not a blanket cut of `bitcoin|15m|down`.
+
+Expected behavior:
+
+- Blocks BTC 15m down entries where NO is below `0.40`.
+- Keeps near-centered BTC 15m down entries eligible, e.g. `YES=0.595` gives NO `0.405` and is not blocked by this floor.
+
+#### 2. BNB duplicate key cleanup
+
+File: `config/settings.yaml`
+
+Removed a duplicate `bnb_macro.disable_buy_yes_15m` key. Both copies were `true`, so this is source-of-truth cleanup only, not a behavior change.
+
+#### 3. Prior same-session triage already present
+
+These were already applied during this incident and should not be casually reverted:
+
+- `trading.exit_rules.hold_fixed_take_profit` enabled with `threshold_pct: 0.40`.
+- Fixed-TP lane list includes:
+  - `eth_macro|15m|down`
+  - `xrp_macro|5m|down`
+  - `eth_macro|5m|down`
+  - `sol_macro|1h|down`
+  - `xrp_macro|1h|down`
+  - `bitcoin|1h|down`
+  - `doge_macro|5m|up`
+  - `xrp_macro|5m|up`
+  - `bnb_macro|15m|down`
+  - `eth_macro|1h|up`
+- `sol_macro.alt_1h_simple_long.enabled: false`
+- `sol_macro.marginal_ev_admit_lanes: []`
+- `sol_macro.admit_marginal_on_quant_sides: SHORT`
+- `bnb_macro.marginal_ev_admit_lanes: ["15m:LONG"]`
+- `bnb_macro.admit_marginal_on_quant_sides: SHORT`
+
+Purpose: remove below-min 1h LONG rescues and bank specific green giveback lanes while the exit layer is being re-evaluated.
+
+### Evidence From The Split Session
+
+Closed-lane recompute after the audit:
+
+| Lane | Closed | PnL | WR |
+|---|---:|---:|---:|
+| `bitcoin|15m|down` | 2 | `-$25.33` | `0.00` |
+| `eth_macro|5m|up` | 3 | `-$16.87` | `0.33` |
+| `bnb_macro|5m|down` | 1 | `-$15.64` | `0.00` |
+| `doge_macro|5m|up` | 5 | `-$14.96` | `0.60` |
+| `xrp_macro|1h|down` | 2 | `-$8.27` | `0.50` |
+| `bnb_macro|1h|up` | 2 | `-$3.62` | `0.50` |
+| `bnb_macro|15m|down` | 2 | `+$8.52` | `1.00` |
+| `eth_macro|5m|down` | 2 | `+$11.30` | `1.00` |
+| `hype_macro|1h|up` | 1 | `+$14.96` | `1.00` |
+
+Important interpretation:
+
+- BTC 15m down had a confirmed config/wiring gap.
+- ETH/DOGE 5m losses are not confirmed crossed-wiring from this sample. They may be strategy/exit economics issues.
+- BNB `5m|up` looked directionally crossed in the journal because the reason text retained pre-flip `side=SHORT`, but the later `macd5m_momentum_flip` intentionally executed `BUY_YES`. Treat that as telemetry debt unless future rows show final action and final side truly disagree.
+
+### What Not To Undo
+
+- Do not revert `buy_no_min_no_price_15m: 0.40` unless clean live data shows BTC 15m down at NO `<0.40` is positive after current exit fixes.
+- Do not re-enable SOL/BNB broad `admit_marginal_on_quant_sides: both`; that was the below-min 1h leak.
+- Do not infer `eth_macro|5m|down` should be data-cut from recent bugged/favorite-policy data. Prior audit found the clean-native sample was not cut-ready.
+- Do not treat old per-lane `updown_stop_loss_pct` values as active under current `hold_all: true`; current resolver sets up/down stop loss to `0.0`.
+- Do not call this a regime-only issue until journaled code/config changes are separated from tape effects.
+
+### Validation Already Run
+
+Commands:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_bitcoin.py::test_bitcoin_15m_buy_no_quant_guard_reads_explicit_15m_keys \
+  tests/test_bitcoin.py::test_bitcoin_direction_resolver_suppresses_quant_flip_without_momentum \
+  tests/test_live_exit_overrides.py::test_hold_fixed_take_profit_banks_configured_hold_lane \
+  -q
+```
+
+Result:
+
+```text
+3 passed
+```
+
+Additional checks:
+
+- YAML parses.
+- Duplicate YAML key scan passed.
+- `strategies.bitcoin.buy_no_min_no_price_15m` resolves to `0.40`.
+- The new floor blocks the two observed BTC 15m losses and does not block centered NO prices.
+
+### Files Updated By Codex In This Incident
+
+- `config/settings.yaml`
+- `src/execution/live_testing.py`
+- `tests/test_live_exit_overrides.py`
+- `docs/AGENT_CHANGELOG.md`
+- `HANDOFF.md`
+- Second Brain note:
+  - `/Users/mainfolder/Documents/Hermes Second Brain/psb/hourly-briefs/2026-08-16/2026-08-17-chop-bleed-triage.md`
+
+### Next Claude Task
+
+1. Combine both session folders when reviewing current performance.
+2. Verify no new BTC 15m down entries occur with NO `<0.40`.
+3. Review whether fixed TP is clipping 5m winners too small:
+   - compare `hold_fixed_take_profit` wins against subsequent resolution outcome and MFE.
+   - especially `doge_macro|5m|up`, `eth_macro|5m|up`, and `xrp_macro|5m|up`.
+4. Clean up telemetry debt:
+   - final journal reason should include final side/action after flip.
+   - avoid stale pre-flip `side=SHORT` text surviving into executed `BUY_YES` rows.
+5. Do not add new gates before proving whether the current loss is entry-side direction, exit economics, or clipped winners.
+
 ## Claude Handoff — Alt 15m/1h Volatility Capture Simplification
 
 ### Objective

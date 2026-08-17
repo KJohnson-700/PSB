@@ -29,7 +29,41 @@ from ..journal_features import enrich_entry_extra, enrich_exit_extra
 # with rejected_candidates.jsonl; ANNOTATION is skipped on load). Keeping ENTRY/EXIT/SNAPSHOT/
 # ERROR makes every dashboard parse ~9x cheaper. Escape hatch: set JOURNAL_LOG_ALL_EVENTS=1.
 _JOURNAL_NOISE_EVENTS = frozenset({"PRICE_UPDATE", "BUY_NO_SKIP", "SKIP", "ANNOTATION"})
-_JOURNAL_LOG_ALL_EVENTS = os.getenv("JOURNAL_LOG_ALL_EVENTS", "").strip().lower() in ("1", "true", "yes")
+
+
+def _resolve_journal_keep_events() -> frozenset:
+    """Which normally-suppressed events to KEEP. Config-driven so it survives restarts.
+
+    2026-08-16: the escape hatch above was ENV-ONLY, so it silently died on every restart —
+    and `SKIP` is the ONLY record of why a signal never became an entry. With it off, a
+    measured 763 signals -> 6 entries (bitcoin 547 -> 0) was completely invisible; turning it
+    on named the cause in one cycle (term_risk min_edge 0.05 vs the favorite policy's fixed
+    0.02). An instrument that needs an env var re-typed by hand is an instrument that is off.
+
+    Precedence: env override (back-compat) > trading.journal_log_all_events > trading.journal_keep_events.
+    Default keeps SKIP only — PRICE_UPDATE/ANNOTATION/BUY_NO_SKIP were ~85% of the old 50MB
+    file and have no consumers, so blanket-ALL is deliberately not the default.
+    Read once at import: restart-class, which is all that is required here.
+    """
+    if os.getenv("JOURNAL_LOG_ALL_EVENTS", "").strip().lower() in ("1", "true", "yes"):
+        return _JOURNAL_NOISE_EVENTS
+    try:
+        import yaml
+        cfg_path = Path(__file__).resolve().parent.parent.parent / "config" / "settings.yaml"
+        with open(cfg_path, encoding="utf-8") as fh:
+            trading = ((yaml.safe_load(fh) or {}).get("trading") or {})
+        if bool(trading.get("journal_log_all_events", False)):
+            return _JOURNAL_NOISE_EVENTS
+        keep = trading.get("journal_keep_events")
+        if keep is None:
+            return frozenset()
+        return frozenset(str(x).strip().upper() for x in keep if str(x).strip())
+    except Exception:
+        # never let journal config break the journal
+        return frozenset()
+
+
+_JOURNAL_KEEP_EVENTS = _resolve_journal_keep_events()
 
 logger = logging.getLogger(__name__)
 
@@ -1306,7 +1340,8 @@ class TradeJournal:
 
     def _append_entry(self, entry: JournalEntry):
         # JOURNAL-SLIM: drop diagnostic-noise events (see _JOURNAL_NOISE_EVENTS note at top).
-        if not _JOURNAL_LOG_ALL_EVENTS and str(getattr(entry, "event", "") or "").upper() in _JOURNAL_NOISE_EVENTS:
+        _ev = str(getattr(entry, "event", "") or "").upper()
+        if _ev in _JOURNAL_NOISE_EVENTS and _ev not in _JOURNAL_KEEP_EVENTS:
             return
         with open(self._entries_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(entry), default=str) + "\n")

@@ -165,6 +165,47 @@ def test_updown_hold_winners_to_resolution_suppresses_take_profit():
     assert exits == []
 
 
+def test_hold_fixed_take_profit_banks_configured_hold_lane():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.10,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_hold_winners_to_resolution": True,
+                "hold_fixed_take_profit": {
+                    "enabled": True,
+                    "threshold_pct": 0.40,
+                    "lanes": ["eth_macro|15m|down"],
+                },
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Ethereum Up or Down - test",
+        outcome="NO",
+        strategy="eth_macro",
+        size=10.0,
+        entry_price=0.50,
+        current_price=0.50,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=2),
+        end_date=now + timedelta(minutes=10),
+        entry_leg="NO",
+        window_size="15m",
+    )
+
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.30}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+
+    assert len(exits) == 1
+    assert exits[0].reason == "hold_fixed_take_profit"
+
+
 def test_bitcoin_1h_up_late_take_profit_banks_green_hold_lane():
     cfg = {
         "trading": {
@@ -309,7 +350,16 @@ def test_updown_stop_requires_consecutive_ticks_to_confirm():
                 "updown_exit_window_mins": 0.5,
                 "updown_max_hold_mins": 600,
                 "updown_stop_confirm_ticks": 2,
-            }
+            },
+            # 2026-08-17: isolate the SUBJECT of this test. The 2026-08-03 late-only stop
+            # gate suppresses the % stop until `earliest_mins` into a 15m/1h window (1h:
+            # last 15 min only), so on this 60-min-remaining fixture the stop never armed
+            # and `_stop_confirm_count` was never touched — the test had been failing since
+            # that gate shipped, at HEAD, for a CORRECT reason. The confirm-tick mechanism
+            # is a separate concern with its own job (one noisy book read must not cut a
+            # winner) and it still runs ungated on 5m lanes. Disable the unrelated gate here
+            # rather than contort the fixture, so this test keeps testing one thing.
+            "updown_late_stop_enabled": False,
         }
     }
     mgr = PositionExitManager(cfg)
@@ -357,7 +407,13 @@ def test_updown_min_hold_suppresses_early_pct_exit_but_not_late_stops():
                 "updown_exit_window_mins": 0.5,
                 "updown_max_hold_mins": 600,
                 "updown_min_hold_sec_before_pct_exit": 60,
-            }
+            },
+            # 2026-08-17: same isolation as the confirm-ticks test above. This test's subject
+            # is the MIN-HOLD floor (phantom exits were 3-41s holds); the 08-03 late-only stop
+            # gate is an independent suppressor that also blocked the "now it fires" assertion
+            # on a 60-min-remaining fixture. Turn it off so a min-hold regression is what fails
+            # here, not a window-timing rule.
+            "updown_late_stop_enabled": False,
         }
     }
     mgr = PositionExitManager(cfg)

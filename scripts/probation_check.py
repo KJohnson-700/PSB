@@ -12,6 +12,7 @@ Usage: .venv/bin/python scripts/probation_check.py   (add --json for machine out
 import json
 import os
 import re
+import datetime
 import subprocess
 import sys
 import time
@@ -267,6 +268,247 @@ def check_all():
                 f"detail: scripts/lane_cut_watchlist.py")
     except Exception as e:  # never let the watchlist break the health check
         add("eth_cut_watchlist", "WARN", f"watchlist unreadable: {type(e).__name__}")
+
+    # 2026-08-17 TOOLING DAEMON. Two pipelines were dead for DAYS and neither said so:
+    # ghost rotation (launchd agent, TCC-blocked on ~/Documents -> exit 1 every run while
+    # the reject log grew to 1.3GB) and the stopped-trade settler (hand-started --loop,
+    # died with the shell). Liveness is NOT the test here — per the standing rule, check
+    # OUTPUT: the settler must be WRITING, and the reject log must be BOUNDED. A daemon
+    # that is up but producing nothing is the exact failure this row exists to catch.
+    _pidf = os.path.join(_REPO, "data/calibration/psb_tooling_daemon.pid")
+    _alive = False
+    try:
+        with open(_pidf) as fh:
+            os.kill(int(fh.read().strip()), 0)
+        _alive = True
+    except Exception:
+        _alive = False
+
+    # ⛔ DO NOT use the output file's mtime here. The settler is IDEMPOTENT — it skips
+    # already-settled trade_ids — so when there is nothing new to settle it runs fine and
+    # writes NOTHING, and mtime does not advance. That produced a false REGRESSION at
+    # "settler_write_age=144m" while the daemon log showed it running every 30 min on
+    # schedule (and zero new stops to settle is GOOD news, not a fault). The real signal is
+    # whether the settler RAN, which the daemon log records.
+    _settled_age_min = None
+    try:
+        _dlog = os.path.join(_REPO, "data/calibration/psb_tooling_daemon.log")
+        _last_run = None
+        with open(_dlog, errors="ignore") as fh:
+            for _ln in fh:
+                if "SETTLER:" not in _ln:
+                    continue
+                try:
+                    _last_run = datetime.datetime.strptime(
+                        _ln.split(" ", 1)[0], "%Y-%m-%dT%H:%M:%S%z"
+                    )
+                except Exception:
+                    continue
+        if _last_run is not None:
+            _settled_age_min = (
+                datetime.datetime.now(datetime.timezone.utc) - _last_run
+            ).total_seconds() / 60.0
+    except Exception:
+        pass
+
+    _reject_mb = None
+    try:
+        _reject_mb = os.path.getsize(
+            os.path.join(_REPO, "data/calibration/rejected_candidates.jsonl")
+        ) / 1024 / 1024
+    except Exception:
+        pass
+
+    # Settler runs every 30 min, so >90 min of no write means it is not producing.
+    # Rotate threshold is 200MB and fires daily; >1500MB means rotation is not landing.
+    _stale_settler = _settled_age_min is not None and _settled_age_min > 90
+    _unbounded = _reject_mb is not None and _reject_mb > 1500
+    _detail = (
+        f"daemon={'up' if _alive else 'DOWN'} "
+        f"settler_last_run={'?' if _settled_age_min is None else f'{_settled_age_min:.0f}m ago'} "
+        f"reject_log={'?' if _reject_mb is None else f'{_reject_mb:.0f}MB'}"
+    )
+    if not _alive:
+        add("tooling_daemon", "BROKEN",
+            f"{_detail} — relaunch: nohup scripts/psb_tooling_daemon.sh > /dev/null 2>&1 < /dev/null & disown")
+    elif _stale_settler or _unbounded:
+        add("tooling_daemon", "BROKEN",
+            f"{_detail} — daemon is UP but not PRODUCING (check OUTPUT, not liveness)")
+    else:
+        add("tooling_daemon", "PROBATION",
+            f"{_detail} — settler running on cadence, reject log bounded")
+
+    # 2026-08-17 RELEASE GUARDS. cut_reopen_tripwire + floor_release_monitor were
+    # TCC-disabled 08-14, and when I checked before re-arming them BOTH watched gates
+    # that no longer exist (min_edge 0.30 cut: gone, live floors 0.05-0.09; pocket_off
+    # reasons: 0 of 1,823 rows). Replaced by blocked_band_guard.py against the live
+    # reasons. This row exists because a release guard that reads zero is INDISTINGUISHABLE
+    # from a gate that is behaving — the thing that let the originals rot for weeks.
+    _g_reasons_live = 0
+    try:
+        import collections as _c
+        _seen = _c.Counter()
+        with open(os.path.join(_REPO, "data/calibration/rejected_candidates.jsonl"),
+                  errors="ignore") as fh:
+            for _ln in fh:
+                try:
+                    _r = str((json.loads(_ln) or {}).get("reason") or "")
+                except Exception:
+                    continue
+                if _r == "rsi_hard_blocked" or _r.endswith("_disabled_lane"):
+                    _seen[_r] += 1
+        _g_reasons_live = sum(_seen.values())
+    except Exception:
+        _g_reasons_live = -1
+
+    _g_out = os.path.join(_REPO, "data/calibration/floor_release_shadow.jsonl")
+    _g_age_min = None
+    try:
+        _g_age_min = (time.time() - os.stat(_g_out).st_mtime) / 60.0
+    except Exception:
+        pass
+
+    if not os.path.isfile(os.path.join(_REPO, "scripts/blocked_band_guard.py")):
+        add("release_guards", "BROKEN", "blocked_band_guard.py MISSING — no reopen/release watch")
+    elif _g_reasons_live == 0:
+        # the watched reasons vanished from the log = the gates moved again = guard is blind
+        add("release_guards", "BROKEN",
+            "0 rows for rsi_hard_blocked / *_disabled_lane — the watched gate reasons MOVED again; "
+            "re-derive targets before trusting any 'gate_holding' verdict")
+    else:
+        add("release_guards", "PROBATION",
+            f"watching {_g_reasons_live} live blocked rows; last write "
+            f"{'never' if _g_age_min is None else f'{_g_age_min:.0f}m ago'} — FLAG-only, never writes config")
+
+    # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
+    # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
+    # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused
+    # lanes still taking entries, min-edge/price-band contradictions, and comments that
+    # contradict their own value.
+    # 2026-08-17 SESSION LEDGER (architecture item 2). The cross-session ledger was already
+    # complete for CLOSED trades (EXIT events match trades.jsonl 1:1 every session), so the
+    # real damage is ORPHANED OPEN POSITIONS: a restart abandons whatever is open, those
+    # never close, never reach the ledger, and their P&L is missing from every review.
+    # Measured 197 across 88 folders. They ARE recoverable — up/down markets resolve — so
+    # this row tracks the UNSETTLED backlog. A growing backlog means restarts are eating
+    # money silently, which is exactly what "a restart cannot hide part of the run" means.
+    try:
+        _lids = set()
+        with open(os.path.join(CAL, "trades.jsonl"), errors="ignore") as fh:
+            for _ln in fh:
+                try:
+                    _lids.add(str(json.loads(_ln).get("trade_id")))
+                except Exception:
+                    continue
+        _settled_orph = set()
+        _op = os.path.join(CAL, "orphaned_positions_settled.jsonl")
+        if os.path.isfile(_op):
+            with open(_op, errors="ignore") as fh:
+                for _ln in fh:
+                    try:
+                        _settled_orph.add(str(json.loads(_ln).get("trade_id")))
+                    except Exception:
+                        continue
+        _paper = os.path.join(_REPO, "data/paper_trades")
+        _unsettled = 0
+        for _s in os.listdir(_paper):
+            _pp = os.path.join(_paper, _s, "positions.json")
+            if not os.path.isfile(_pp):
+                continue
+            try:
+                _j = json.load(open(_pp, encoding="utf-8"))
+            except Exception:
+                continue
+            _items = _j if isinstance(_j, list) else (
+                list(_j.values()) if isinstance(_j, dict) else [])
+            for _p in _items:
+                if not isinstance(_p, dict):
+                    continue
+                _tid = str(_p.get("trade_id") or "")
+                if _tid and _tid not in _lids and _tid not in _settled_orph:
+                    _unsettled += 1
+        if _unsettled > 25:
+            add("session_ledger", "BROKEN",
+                f"{_unsettled} orphaned positions UNSETTLED — restart-abandoned P&L missing "
+                f"from every review; run scripts/session_ledger.py --settle-orphans")
+        else:
+            add("session_ledger", "PROBATION",
+                f"{_unsettled} unsettled orphan(s), {len(_settled_orph)} recovered — "
+                f"detail: scripts/session_ledger.py")
+    except Exception as e:
+        add("session_ledger", "WARN", f"ledger check failed: {type(e).__name__}")
+
+    # 2026-08-17 ENTRY/EXIT SPLIT (architecture item 3). The two buckets are only comparable
+    # when both cover the SAME trades, so the health metric is BUCKET-A COVERAGE: what share
+    # of exit-layer trades have a settled held-to-resolution counterfactual. Low coverage does
+    # not read as "no exit leak", it reads as "we cannot tell" — and the first version of the
+    # tool inflated the delta by +$73 precisely because it compared unequal trade sets.
+    try:
+        _res_reasons = {"updown_expired", "RESOLVED:YES (real)", "RESOLVED:NO (real)"}
+        _held_ids = set()
+        for _lp in ("stopped_trades_settled.jsonl", "orphaned_positions_settled.jsonl",
+                    "exit_layer_settled.jsonl"):
+            _p = os.path.join(CAL, _lp)
+            if not os.path.isfile(_p):
+                continue
+            with open(_p, errors="ignore") as fh:
+                for _ln in fh:
+                    try:
+                        _r = json.loads(_ln)
+                    except Exception:
+                        continue
+                    if _r.get("held_pnl_net") is not None or _r.get("settled_pnl_net") is not None:
+                        _held_ids.add(str(_r.get("trade_id")))
+        _early = _covered = 0
+        with open(os.path.join(CAL, "trades.jsonl"), errors="ignore") as fh:
+            for _ln in fh:
+                try:
+                    _t = json.loads(_ln)
+                except Exception:
+                    continue
+                if _t.get("pnl") is None or str(_t.get("opened_at") or "") < "2026-08-13":
+                    continue
+                if str(_t.get("exit_reason")) in _res_reasons:
+                    continue
+                _early += 1
+                if str(_t.get("trade_id")) in _held_ids:
+                    _covered += 1
+        _pct = (_covered / _early * 100) if _early else 100.0
+        if _early and _pct < 50.0:
+            add("entry_exit_split", "BROKEN",
+                f"bucket-A coverage {_covered}/{_early} ({_pct:.0f}%) of post-08-13 exit-layer "
+                f"trades — the split cannot separate entry from exit; "
+                f"run scripts/entry_exit_split.py --settle")
+        else:
+            add("entry_exit_split", "PROBATION",
+                f"bucket-A coverage {_covered}/{_early} ({_pct:.0f}%) post-08-13 — "
+                f"detail: scripts/entry_exit_split.py")
+    except Exception as e:
+        add("entry_exit_split", "WARN", f"split check failed: {type(e).__name__}")
+
+    _audit = os.path.join(_REPO, "scripts/config_audit.py")
+    if not os.path.isfile(_audit):
+        add("config_audit", "BROKEN", "scripts/config_audit.py MISSING")
+    else:
+        try:
+            _p = subprocess.run(
+                [os.path.join(_REPO, ".venv/bin/python"), _audit, "--quiet"],
+                capture_output=True, text=True, timeout=120,
+            )
+            _txt = _p.stdout or ""
+            _f = _txt.count("🔴 FAIL")
+            _w = _txt.count("🟡 WARN")
+            if _p.returncode == 2:
+                add("config_audit", "BROKEN", "settings.yaml DOES NOT PARSE")
+            elif _f:
+                _first = next((l.strip() for l in _txt.splitlines() if "FAIL" in l), "")
+                add("config_audit", "BROKEN",
+                    f"{_f} FAIL / {_w} WARN — {_first[:140]}")
+            else:
+                add("config_audit", "PROBATION",
+                    f"0 FAIL / {_w} WARN — detail: scripts/config_audit.py")
+        except Exception as e:
+            add("config_audit", "WARN", f"audit did not run: {type(e).__name__}")
 
     return R
 

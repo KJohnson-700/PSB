@@ -126,6 +126,24 @@ trading:
   exit_rules:
     enabled: true
     take_profit_pct: 0.3
+    hold_fixed_take_profit:
+      enabled: true
+      threshold_pct: 0.40
+      # 2026-08-17 LIVE TRIAGE. Session test_20260816_185756 again gave back from
+      # +$84.50 closed peak to +$37.48 while price regime stayed flat/chop. Six
+      # losing closes had reached >=+40% MFE; doge 5m UP and xrp 5m UP accounted
+      # for four of them. Fixed banking only, not trailing/giveback.
+      lanes:
+        - "eth_macro|15m|down"
+        - "xrp_macro|5m|down"
+        - "eth_macro|5m|down"
+        - "sol_macro|1h|down"
+        - "xrp_macro|1h|down"
+        - "bitcoin|1h|down"
+        - "doge_macro|5m|up"
+        - "xrp_macro|5m|up"
+        - "bnb_macro|15m|down"
+        - "eth_macro|1h|up"
     stop_loss_pct: 0.3
     max_hold_hours: 72
     updown_stop_cents: 1.0  # 2026-08-13 DISABLED by making it UNREACHABLE (operator: trace it and kill it). TRACE: updown_stop_cents -> cents_stop_for_entry_price -> up_stop_cents -> adverse_for_updown_cents_time_stop (updown_exit_shared.py:691), which tests `current <= entry_price - up_stop_cents`, and that gates updown_time_stop inside the last updown_exit_window_mins (2.25) of the window. Net effect: in the final ~2 minutes, any position more than 3c underwater was CLOSED AT A LOSS instead of being allowed to resolve. CRITICAL: setting this to 0.0 does NOT disable it -- the test degrades to `current <= entry_price`, i.e. EVERY not-in-profit position becomes adverse and the time stop fires on all of them. Strictly worse. There is no >0 guard on this path, unlike the trail (trail_arm_pct>0) and the pct stop (effective_stop_loss_pct!=0). 1.0 is unreachable because token prices live in [0,1], so the condition can never trip. REVERT: 0.03 / 0.02.
@@ -741,6 +759,15 @@ trading:
   # every per-lane ceiling ($12-$40) above it was unreachable. Raising the floor is the small half
   # of that fix; the eth flat-sizing guard (eth_macro.py) is the large half.
   min_live_notional: 12.0
+  # 2026-08-16 SKIP JOURNAL, config-driven so it SURVIVES RESTARTS. The 07-16 JOURNAL-SLIM
+  # escape hatch was env-only (JOURNAL_LOG_ALL_EVENTS=1) and silently died on every restart.
+  # SKIP is the ONLY record of why a signal never became an entry: with it off, a measured
+  # 763 signals -> 6 entries (bitcoin 547 -> 0) was invisible; with it on, the cause named
+  # itself in one cycle (term_risk min_edge 0.05 vs the favorite policy's fixed 0.02 edge).
+  # Deliberately NOT journal_log_all_events: PRICE_UPDATE / ANNOTATION / BUY_NO_SKIP were ~85%
+  # of the old 50MB file and have no consumers. Keep the diagnostic, not the noise.
+  # Restart-class (read at import). Env var still overrides for a one-off full dump.
+  journal_keep_events: ["SKIP"]
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -765,6 +792,8 @@ lane_management:
     "bitcoin|5m|up": paused        # -$40 / 11% WR n=9 — never-green longs, structural (tape-independent)
     "xrp_macro|1h|up": paused      # -$34 / 0% WR n=5 — Codex-flagged + data-confirmed
     "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
+    "eth_macro|15m|down": paused   # 2026-08-16 live triage: current session n=5, 20% WR, -$45.66; temporary pause while fixed-TP trial runs.
+    "xrp_macro|5m|down": paused    # 2026-08-16 live triage: current session n=3, 0% WR, -$37.72; temporary pause, not permanent data-backed cut.
   state_meta: {}
   recommendations:
     min_live_trades: 15
@@ -882,6 +911,7 @@ strategies:
     neutral_rsi_max: 55.0
     neutral_rsi_extra_min_edge: 0.02
     buy_yes_overbought_rsi_1h: 65.0
+    buy_no_min_no_price_15m: 0.40   # 2026-08-17 SESSION WIRING FIX: BTC 15m BUY_NO was falling back to the generic cheap-NO floor 0.20 while the logged lane policy showed a 0.45-0.55 entry band. Current split session took two BTC 15m DOWN losses at NO=0.20/0.29 (YES=0.805/0.715), both `neutral_resolver` shorts under BULLISH HTF and both expired red for -$25.33. Mirror the existing ETH/XRP cheap-NO floor class without cutting the whole lane; BUY_NO must pay at least 0.40 unless this lane earns a lower floor on clean live data.
     # 2026-08-15 BTC STARVATION FIX — the gate was the cause, measured not guessed.
     # htf_bias came back NEUTRAL on 100% of 4,643 evals and neutral_bias was 63.1% of all
     # BTC rejections. Cause: |4H MACD hist| has p50 15.3 (n=355,133 live observations), so
@@ -1127,9 +1157,8 @@ strategies:
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
-    admit_marginal_on_quant_sides: both
-    marginal_ev_admit_lanes:
-    - 1h:LONG
+    admit_marginal_on_quant_sides: SHORT  # 2026-08-17 BELOW-MIN LEAK FIX: explicit 1h:LONG removal was bypassed by the legacy broad BOTH path. Keep shorts eligible, block unlisted 1h LONG marginal rescues.
+    marginal_ev_admit_lanes: []  # 2026-08-17 CHOP TRIAGE: remove 1h LONG below-min rescue. Session test_20260816_185756 sol 1h UP simple-band/marginal entries were 4/4 below lane min-edge and net -$6.62 in flat price regime.
     disable_buy_no_5m_native: false
     enabled: true
     use_ai: true
@@ -1198,7 +1227,7 @@ strategies:
     oracle_basis_relax_max_bps_15m_buy_yes: 40.0
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: true
+      enabled: false  # 2026-08-17 CHOP TRIAGE: this path sets effective_min_edge=0 for 1h simple-band longs; current session sol 1h UP was 4/4 below-min via sol_1h_native+simple_band_long. Re-enable only after settled clean-lane proof.
       entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
@@ -2415,10 +2444,11 @@ strategies:
     - 15m:LONG
     rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
-    admit_marginal_on_quant_sides: both
+    admit_marginal_on_quant_sides: SHORT  # 2026-08-17 BELOW-MIN LEAK FIX: explicit 15m:LONG allowlist still passes via marginal_ev_admit_lanes; legacy broad BOTH no longer admits unlisted 1h LONG window-delta flips below lane min-edge.
     marginal_ev_admit_lanes:
     - 15m:LONG
-    - 1h:LONG
+    # 2026-08-17 CHOP TRIAGE: removed 1h:LONG. Current open bnb_macro|1h|up
+    # entered edge 0.06 below policy min_edge 0.08 via bnb_1h_native+window_delta_flip.
     disable_buy_no_5m_native: false
     enabled: true
     use_ai: true
@@ -2617,7 +2647,6 @@ strategies:
         BULL: 1.0
         RANGE: 0.7
         BEAR: 0.5
-    disable_buy_yes_15m: true   # 2026-08-12 effective duplicate override: keep BNB 15m longs disabled; earlier key in this block is also true.
     overconfidence_sitout:
       enabled: true
       band: 0.01

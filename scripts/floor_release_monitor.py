@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+# ⛔⛔ SUPERSEDED 2026-08-17 — DO NOT RE-ARM THIS FILE.
+# It watches gates that NO LONGER EXIST. Measured against the current build:
+#   cut_reopen_tripwire  : min_edge 0.30 cut is GONE (live floors 0.05-0.09);
+#                          reasons lane_min_edge / min_edge = 0 of 1,823 rows.
+#                          Also had NO time filter -> era-pooled the reject log.
+#   floor_release_monitor: buy_no_*_pocket_off / eth_buy_no_rsi_floor_off = 0 of 1,823.
+#                          RSI blocking now logs as `rsi_hard_blocked`.
+# Both also joined resolutions by grepping "Market <id> resolved:" from data/logs/*.log —
+# now 7 lines a day across a 3.6GB glob.
+# REPLACEMENT: scripts/blocked_band_guard.py (live reasons, GAMMA resolutions,
+# market_id dedupe, era filter, ranks on EV/$ not a flat 0.52 WR bar).
+
 """floor_release_monitor.py — tape-aware RELEASE monitor for the 2026-07-24 RSI floors.
 
 WHY: doge 5m (RSI>=35) and xrp 5m (RSI>=45) BUY_NO floors are REGIME-DEPENDENT — the

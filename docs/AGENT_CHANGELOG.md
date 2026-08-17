@@ -8,6 +8,62 @@
 
 ---
 
+## 2026-08-17 — Chop bleed triage: bank givebacks and remove below-min 1h exceptions
+
+**Context:** Session `test_20260816_185756` was still profitable but showed the same failure shape: closed PnL peaked at `+$84.50`, then fell to `+$37.48` while the regime watcher reported price regime `flat` and Polymarket regime `signal`. The drawdown was not stop-driven; `38/39` closes were `updown_expired`, and the only `hold_fixed_take_profit` exit was green. The red flags were `doge_macro|5m|up` and `xrp_macro|5m|up` giving back trades that had reached `>=+40%` MFE, plus below-min 1h exception entries (`sol_1h_native+simple_band_long`, `bnb_1h_native+window_delta_flip`).
+
+**What changed:** Expanded `trading.exit_rules.hold_fixed_take_profit.lanes` to include `doge_macro|5m|up`, `xrp_macro|5m|up`, `bnb_macro|15m|down`, and `eth_macro|1h|up`. Disabled `sol_macro.alt_1h_simple_long` and removed `sol_macro` / `bnb_macro` `1h:LONG` marginal-admit exceptions so those 1h LONG paths must clear the lane min-edge instead of relying on flat-edge/bypass admission.
+
+**Validation:** YAML parses with the expanded fixed-TP lane list, `sol_macro.alt_1h_simple_long.enabled=false`, `sol_macro.marginal_ev_admit_lanes=[]`, DOGE marginal lanes restored, and `bnb_macro.marginal_ev_admit_lanes=["15m:LONG"]`. Focused tests passed: `test_hold_fixed_take_profit_banks_configured_hold_lane`, `test_alt_1h_simple_long_defaults_off`, and `test_alt_1h_simple_long_reads_config_when_enabled`.
+
+**Follow-up correction:** A fresh post-restart `bnb_macro|1h|up` still entered below min-edge (`edge=0.06`, policy `min_edge=0.08`) because the legacy broad marginal switch `admit_marginal_on_quant_sides: both` bypassed the explicit `marginal_ev_admit_lanes` removal. Narrowed SOL and BNB only to `admit_marginal_on_quant_sides: SHORT`; BNB keeps explicit `15m:LONG`, while unlisted `1h:LONG` no longer rescues below-min `window_delta_flip` entries. Parsed config verified: SOL=`SHORT`/`[]`, BNB=`SHORT`/`["15m:LONG"]`, ETH/HYPE/XRP/DOGE unchanged. Restarted local paper bot; PID `58401`.
+
+**Legacy wiring sweep:** Removed a duplicate `disable_buy_yes_15m` key inside the BNB config block; both copies were `true`, so this is a source-of-truth cleanup rather than a behavior change. Rechecked exit overrides: stale per-lane `updown_stop_loss_pct` values remain in config, but current `hold_all: true` resolves all up/down lanes to `updown_stop_loss_pct=0.0`, so those legacy percent stops are inert unless `hold_all` is later disabled. New runtime session `test_20260817_025250` has `2` entries and `0` below-min admissions so far; previous session `test_20260817_011504` has the two known pre-fix BNB 1h below-min entries.
+
+**Losing-strategy wiring audit:** Reviewed split-session losses across `test_20260817_011504` and `test_20260817_025250`. Confirmed one live-impacting BTC config gap: `bitcoin|15m|down` entered two `BUY_NO` trades at NO `0.20` / `0.29` (`YES=0.805` / `0.715`) while the lane policy logged a `0.45-0.55` price band; BTC had no `buy_no_min_no_price_15m`, so it fell back to the generic `0.20` cheap-NO floor. Added `strategies.bitcoin.buy_no_min_no_price_15m: 0.40`, mirroring the existing cheap-NO floor class on ETH/XRP/DOGE without cutting the whole BTC 15m down lane. Also noted BNB `5m|up` “wrong side” evidence is partly telemetry stale-side confusion: the reason string still carries the pre-flip `side=SHORT` while `macd5m_momentum_flip` intentionally executes `BUY_YES`; that is observability debt, not proof of opposite execution.
+
+**Claude handoff:** Detailed current-session handoff written to root `HANDOFF.md` under `Claude Handoff — 2026-08-17 PSB Chop-Bleed Wiring Audit`, including exact session folders, BTC 15m cheap-NO floor evidence, validation, files touched, and what not to undo.
+
+## 2026-08-16 — Live bleed triage: pause two lanes, add fixed hold TP
+
+**Context:** Session `test_20260816_155632` started unusually strong, peaking at `+$160.11` closed PnL, then bled to `+$13.28` with about `-$12.13` open PnL. The drawdown was **not** caused by stops: closed exits after the restart were `27/27 updown_expired` and `0 hold_catastrophic_stop`. The leak was green intrawindow trades expiring wrong; a rough `+40%` fixed-TP counterfactual touched 10 losing closes for about `+$188` swing.
+
+**What changed:** Paused `eth_macro|15m|down` and `xrp_macro|5m|down` through `lane_management.states` as temporary live-triage pauses. Added `trading.exit_rules.hold_fixed_take_profit` with `threshold_pct: 0.40` for the current round-trip lanes: `eth_macro|15m|down`, `xrp_macro|5m|down`, `eth_macro|5m|down`, `sol_macro|1h|down`, `xrp_macro|1h|down`, and `bitcoin|1h|down`. Implemented `hold_fixed_take_profit` as a distinct fixed bank exit that can fire under `updown_hold_winners_to_resolution`; it is not a trailing/giveback exit.
+
+**Validation:** YAML parses and `LaneManager` blocks the two paused lane prefixes. Targeted tests passed: `test_updown_hold_winners_to_resolution_suppresses_take_profit`, `test_hold_fixed_take_profit_banks_configured_hold_lane`, and `test_bitcoin_1h_up_late_take_profit_banks_green_hold_lane`. Restarted the local paper bot; new process PID `23940` is listening on `127.0.0.1:8082` and loaded fixed-TP config. Full exit test file still has pre-existing realistic-fill expectation mismatches unrelated to this change.
+
+## 2026-08-16 — SOL 1h ever-green catastrophic stop disabled
+
+**Context:** Fresh clean-native session `test_20260816_153245` stopped `sol_macro|1h|BUY_NO` market `3616429` at `22:53:30Z` for `-$12.62` via `hold_catastrophic_stop`, despite the trade having reached `+45.65%` MFE. The trade is not settled yet, so the hold counterfactual is pending, but mechanically this was the exact 1h hold-vs-stop concern.
+
+**What changed:** Set `favorite_lane.early_stop_windows: []` so 1h hold lanes no longer take the early catastrophic backstop. With current `hold_mfe_conditional_stop_enabled: false`, this makes 1h hold lanes ride to resolution unless another final-resolution/presettle path applies.
+
+**Validation:** YAML parses with `early_stop_windows=[]`. Restarted the local paper child; new session `test_20260816_155632` is running as PID `11516` and listening on `127.0.0.1:8082`.
+
+## 2026-08-16 — Exposure rollback and lane-tape live hold
+
+**Context:** Claude flagged two recent exposure edits and the green-gate lane-tape tightening as unproven. A local replay confirmed the concern: full-journal resolution-sign MFE produced 22 tightened lanes, but resolution-only `trades_settled.jsonl` produced 7; live hard-floor cuts on `bnb|5m|up` and `hype|5m|up` had no resolution-only support.
+
+**What changed:** Reverted broad exposure tier values to `full_size: 25`, `moderate_size: 15`, `minimal_size: 8`, and `moderate_min_trade_usd: 15`. Set `lane_tape_adapter.mode: shadow` and `lane_tape_adapter.admission_mode: off` so realized-P&L tape keeps observing but cannot de-size trades or alter min-edge admission while the stop/exit confound is re-derived. Neutralized the persisted `data/calibration/lane_tape_state.json` snapshot so stale admission deltas cannot survive the config hold.
+
+**Validation:** YAML parses with exposure back at `25/15/8`, moderate floor `15`, tape mode `shadow`, and admission mode `off`. Resolution-only adapter probe: `rows=198`, `warm_lanes=9`, `tightened=7`; full-journal with resolution-sign MFE: `rows=6088`, `warm_lanes=42`, `tightened=22`.
+
+## 2026-08-16 — Clean native-lane restart after ETH 5m cut audit
+
+**Context:** Operator challenged the `eth_macro|5m|down` pause because the cut recommendation appeared to use recent bugged/unfinished runtime data. Direct journal review confirmed the post-anchor ETH 5m BUY_NO loss sample was `n=7`, `WR 28.6%`, `net -$47.76`, but all seven closes were `side_source=eth_5m_native+market_favorite`; clean native resolver sample was `n=0`. The lane watchlist verdict was `ACCRUING`, not cut-ready (`n=7/45`).
+
+**What changed:** Removed the manual `eth_macro|5m|down` pause from `config/settings.yaml`, set `direction.side_policy: resolver`, reset `data/calibration/lane_cut_watchlist_anchor.json` to `2026-08-16T22:33:27.116282+00:00`, and restarted the local paper bot through `launchctl`. Cleaned `docs/ACTIVE_RECOMMENDATIONS.md` by collapsing duplicate self-healing cold-lane spam into one pending review item. Fixed the XRP cap mismatch by setting `strategies.xrp_macro.lane_max_notional_15m_up: 40`, matching its documented trial value.
+
+**Validation:** YAML parses with `side_policy=resolver`, no `eth_macro|5m|down` state, and XRP 15m up cap `40`. The bot is running via launchctl (`com.psb.codex.paper`), dashboard `http://127.0.0.1:8082`; first clean scans show native side sources (`eth_15m_native`, `eth_5m_native`) and no `market_favorite` contamination.
+
+## 2026-08-16 — Favorite-policy admission no longer bypasses lane min-edge
+
+**Context:** Current paper regression was not explained by native 5m failure alone. Post-anchor audit showed every clean 5m loss bucket was `market_favorite`, and 17 post-anchor entries would have failed their own `entry_policy.min_edge` if that gate had still been enforced. The worst affected cohort was `sol_macro|1h|up|market_favorite`: `13/13` entered below lane min-edge, with `7` catastrophic stops.
+
+**What changed:** Updated the side-policy admission blocks in `src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`, and `src/strategies/bitcoin.py` so favorite-policy trades keep the flat-edge sizing floor but no longer set `effective_min_edge = 0.0`. Favorite policy may still select the side, but lane/window `min_edge` remains the admission bar. Also tagged BTC `side_source` with `+market_favorite` after side-policy selection so attribution matches SOL/ETH.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_side_policy_admission.py tests/test_lane_review.py` -> `4 passed`; `.venv/bin/python -m py_compile src/strategies/sol_macro.py src/strategies/eth_macro.py src/strategies/bitcoin.py scripts/lane_review.py` passed. `scripts/probation_check.py` still pages on pre-existing runtime/state signals (`bot_alive` dead locally and `xrp_macro|15m|BUY_YES` protected-lane degradation).
+
 ## 2026-07-10 — Restart candidate: restore real AI routing for BTC marginals and alt 15m/1h gates
 
 **Context:** VPS audit showed the running/candidate config could emit AI-looking decision logs while `ai.decision_layer.enabled` was false, meaning `evaluate_trade_decision()` returned pass-through `decision_layer_disabled` approvals. Operator requirement: BTC 5m remains quant-only, BTC 15m/1h marginal trades get real AI help, and SOL/ETH/HYPE/XRP/DOGE/BNB regain AI sorting/gating on non-5m windows.

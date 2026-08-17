@@ -439,6 +439,62 @@ def build_market_context(
     return out
 
 
+def build_packet(
+    *,
+    raw_side: Optional[str] = None,
+    final_side: Optional[str] = None,
+    final_action: Optional[str] = None,
+    price_basis: Optional[Dict[str, Any]] = None,
+    lane_policy: Optional[str] = None,
+    gates_passed: Optional[List[str]] = None,
+    gate_failed: Optional[str] = None,
+    edge_chain: Optional[List[Dict[str, Any]]] = None,
+    exit_policy: Optional[str] = None,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Assemble the Decision-Packet dict. Pure, never raises, drops None keys."""
+    out: Dict[str, Any] = {
+        "raw_side": raw_side,
+        "final_side": final_side,
+        "final_action": final_action,
+        "price_basis": price_basis,
+        "lane_policy": lane_policy,
+        "gates_passed": list(gates_passed) if gates_passed else None,
+        "gate_failed": gate_failed,
+        "edge_chain": list(edge_chain) if edge_chain else None,
+        "exit_policy": exit_policy,
+    }
+    for k, v in (extra or {}).items():
+        out[k] = v
+    # raw != final is the BNB-class defect; flag it in the row so a grep finds it
+    if raw_side and final_side and str(raw_side).upper() != str(final_side).upper():
+        out["side_overridden"] = True
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def log_skip_packet(**kwargs: Any) -> bool:
+    """`log_rejected_candidate` that CANNOT raise into the scan loop.
+
+    2026-08-17. The 8 highest-volume gates in bitcoin.py counted a skip and emitted no
+    record at all — `kelly_nonpositive` alone fires ~500x/day with zero rows in a
+    27,000-row reject log, which is why a shipped fix for it could not be validated.
+    Closing those sites means adding calls on the live hot path, so this wrapper exists to
+    make the failure mode impossible: any exception (a local not in scope, a bad market
+    object, a full disk) is swallowed and the scan continues untouched. Telemetry must
+    never be able to stop a trade.
+
+    Returns True only if a row was actually written.
+    """
+    try:
+        return log_rejected_candidate(**kwargs)
+    except Exception:  # noqa: BLE001 — deliberate: never propagate into the scan loop
+        try:
+            logger.debug("log_skip_packet suppressed an exception", exc_info=True)
+        except Exception:
+            pass
+        return False
+
+
 def log_rejected_candidate(
     *,
     strategy: str,
@@ -468,6 +524,7 @@ def log_rejected_candidate(
     gate_stage: Optional[str] = None,
     btc_1h_regime: Optional[str] = None,
     convergence_score: Optional[float] = None,
+    packet: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Append one ghost-trade record. Returns True on success.
 
@@ -601,6 +658,37 @@ def log_rejected_candidate(
             or ""
         ).strip()
 
+        # 2026-08-17 DECISION PACKET (additive, schema 6). One immutable per-candidate
+        # record answering "what actually decided this trade". Everything here was
+        # previously either absent or scattered:
+        #   raw_side / final_side  the pair, explicitly — a stale `side=SHORT` alongside an
+        #                          executed BUY_YES is the bug class this makes impossible
+        #                          to miss (it used to require cross-reading two files).
+        #   price_basis            WHICH price we judged on (mid/bid/ask + spread + mark age).
+        #                          `entry_spread` is recorded on 0 of 287 trades today, so the
+        #                          slippage guard is currently unscoreable.
+        #   gates_passed           the gates a candidate CLEARED. Only the first FAILING
+        #                          reason was ever stored, so "which gate is the binding
+        #                          constraint" was unanswerable without re-running the scan.
+        #   edge_chain             ordered edge mutations (raw -> calibrated -> floors ->
+        #                          exemptions -> effective). Three separate consumers were
+        #                          stranded by the 08-13 favorite port precisely because the
+        #                          chain was invisible.
+        #   exit_policy            which exit policy the candidate would have been assigned.
+        # ⛔ SCHEMA STAYS AT 5 — Codex NO-GO'd a bump to 6 (2026-08-17). I audited all ~50
+        # readers of rejected_candidates.jsonl and none pins the version (the only
+        # schema_version equality checks are lane_thresholds.py against its OWN
+        # lane_thresholds.json, and calibration_log.py WRITING its own into trades.jsonl), so
+        # a bump would in fact have been safe. Complying anyway: it costs nothing, and the
+        # PRESENCE of the `packet` key is a strictly better discriminator than a version
+        # number — a reader can branch on `"packet" in row` with no version table at all.
+        _packet = None
+        if packet:
+            try:
+                _packet = {k: v for k, v in dict(packet).items() if v is not None}
+            except Exception:
+                _packet = None
+
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "schema_version": 5,
@@ -652,6 +740,12 @@ def log_rejected_candidate(
     except (TypeError, ValueError, AttributeError) as exc:
         logger.warning("rejected_candidate_log build failed: %s", exc)
         return False
+
+    # Attach the packet ONLY when there is one. json.dumps here does not strip nulls, so an
+    # unconditional key would put `"packet":null` on all ~27k rows/day and break the
+    # byte-identical guarantee above — the shape of every existing row would change.
+    if _packet:
+        record["packet"] = _packet
 
     path = Path(log_path) if log_path is not None else DEFAULT_REJECTED_LOG
     try:
