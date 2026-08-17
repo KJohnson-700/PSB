@@ -292,6 +292,99 @@ def _self_rss_mb() -> Optional[float]:
             return None
 
 
+# ── RSS GUARD ────────────────────────────────────────────────────────────────
+# 2026-08-15. Until now NOTHING watched this process's own memory: no ceiling, no
+# alarm, no page. The only backstop was macOS Jetsam, which on a desktop means the
+# operator beachballs first and finds out afterwards. That is precisely the shape of
+# the 2026-06-18 event — 678MB -> 4.7GB in one interval, stuck ~5GB until Jetsam.
+#
+# Steady state is ~990MB (measured: sawtooth 957-990 over hours, plateaued, not a
+# runaway), so the WARN bar sits well above the normal working set and only trips on
+# a genuine climb. This is a SMOKE ALARM, not a killer: it logs, asks the allocator to
+# hand arenas back, and pages. It never kills or throttles the bot — an unattended
+# process must not decide on its own to stop trading the operator's book.
+_RSS_GUARD: Dict[str, Any] = {"state": "ok", "since": 0.0, "last_page": 0.0, "peak": 0.0}
+# Live config, published by AppMain._rebuild_runtime_config_dependents (init + hot-reload)
+# so module-level breadcrumb writers can read thresholds without a restart.
+_RUNTIME_CONFIG: Dict[str, Any] = {}
+
+
+def _rss_guard_tick(rss_mb: Optional[float], config: Optional[Dict[str, Any]] = None) -> None:
+    """Watch our own RSS; relieve + page on a sustained climb. Never raises.
+
+    STATEFUL WITH BACKOFF, deliberately. A fire-once-on-transition alert is what let
+    an overnight bleed go unread before: the condition persists, the alert doesn't,
+    and silence reads as "resolved". So a bad state keeps re-paging on a backoff, and
+    a return to ok emits one recovery line carrying the peak and the time spent there.
+    """
+    try:
+        if rss_mb is None:
+            return
+        cfg = ((config or {}).get("monitoring") or {}).get("rss_guard") or {}
+        if not bool(cfg.get("enabled", True)):
+            return
+        warn_mb = float(cfg.get("warn_mb", 1400) or 1400)
+        crit_mb = float(cfg.get("critical_mb", 1800) or 1800)
+        now = time.monotonic()
+        state = "critical" if rss_mb >= crit_mb else ("warn" if rss_mb >= warn_mb else "ok")
+        prev = _RSS_GUARD["state"]
+
+        if state == "ok":
+            if prev != "ok":
+                _dur = (now - float(_RSS_GUARD["since"] or now)) / 60.0
+                logging.warning(
+                    "[rss-guard] RECOVERED %.0fMB (was %s for %.0f min, peak %.0fMB)",
+                    rss_mb, prev, _dur, float(_RSS_GUARD["peak"] or 0.0),
+                )
+                _RSS_GUARD.update({"state": "ok", "since": now, "last_page": 0.0, "peak": 0.0})
+            return
+
+        if prev != state:
+            _RSS_GUARD.update({"state": state, "since": now, "last_page": 0.0})
+        _RSS_GUARD["peak"] = max(float(_RSS_GUARD["peak"] or 0.0), rss_mb)
+
+        # Ask the allocator for the pages back BEFORE paging a human — the 06-18 ratchet
+        # was fragmentation, so relief may resolve it without anyone waking up.
+        _release_memory_to_os()
+
+        backoff = float(cfg.get("critical_repage_sec", 300) or 300) if state == "critical" \
+            else float(cfg.get("warn_repage_sec", 1800) or 1800)
+        if _RSS_GUARD["last_page"] and (now - float(_RSS_GUARD["last_page"])) < backoff:
+            return
+        _RSS_GUARD["last_page"] = now
+        _mins = (now - float(_RSS_GUARD["since"] or now)) / 60.0
+        msg = ("PSB RSS %s: %.0fMB (warn %.0f / crit %.0f), %.0f min in state, peak %.0fMB, pid %d"
+               % (state.upper(), rss_mb, warn_mb, crit_mb, _mins, float(_RSS_GUARD["peak"]), os.getpid()))
+        logging.critical("[rss-guard] %s", msg) if state == "critical" else logging.warning("[rss-guard] %s", msg)
+        _rss_guard_page(msg, cfg)
+    except Exception:
+        pass  # a memory alarm must never be the thing that breaks the trading loop
+
+
+def _rss_guard_page(msg: str, cfg: Dict[str, Any]) -> None:
+    """Best-effort out-of-band page. FIRE-AND-FORGET — never blocks the loop.
+
+    Popen with no wait() and DEVNULL on every stream: a hung/slow pager must not stall
+    a trading cycle, and its output must not be able to fill a pipe buffer and block us.
+    """
+    try:
+        if not bool(cfg.get("page_enabled", True)):
+            return
+        target = str(cfg.get("page_target", "Oracle 2") or "Oracle 2")
+        hermes = os.path.expanduser(str(cfg.get("hermes_bin", "~/.hermes/node/bin/hermes")))
+        if not os.path.exists(hermes):
+            return
+        import subprocess
+
+        subprocess.Popen(
+            [hermes, "send", "--to", target, msg],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+
 _MEM_PROFILE = {"on": False, "baseline": None, "last": 0.0, "interval": 300.0}
 
 
@@ -426,6 +519,7 @@ def _write_heartbeat(phase: str) -> None:
     """Stamp a tiny liveness file every runtime-status tick (hang/OOM detector)."""
     try:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        _rss = _self_rss_mb()
         HEARTBEAT_FILE.write_text(
             json.dumps(
                 {
@@ -433,12 +527,34 @@ def _write_heartbeat(phase: str) -> None:
                     "monotonic": time.monotonic(),
                     "pid": os.getpid(),
                     "phase": phase,
-                    "rss_mb": _self_rss_mb(),
+                    "rss_mb": _rss,
                 },
                 sort_keys=True,
             ),
             encoding="utf-8",
         )
+        # 2026-08-15 RSS HISTORY. The heartbeat above is OVERWRITTEN every tick, so the one
+        # metric that has repeatedly frozen this box had no time series at all — "is it leaking
+        # or is that just its working set?" was unanswerable, for the dashboard and for me.
+        # This appends one small row per tick so the curve exists. Deliberately NOT the
+        # tracemalloc census (_mem_profile_tick): that needs PSB_MEM_PROFILE + a restart and
+        # carries real overhead. This is 5 fields and no instrumentation cost, so it can run
+        # always-on. Rotated by size so it can never become the disk problem it is measuring.
+        try:
+            _hist = RUNTIME_DIR / "rss_history.jsonl"
+            if _hist.exists() and _hist.stat().st_size > 8 * 1024 * 1024:
+                _hist.replace(RUNTIME_DIR / "rss_history.jsonl.1")
+            with _hist.open("a", encoding="utf-8") as _fh:
+                _fh.write(json.dumps({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "pid": os.getpid(),
+                    "phase": phase,
+                    "rss_mb": _rss,
+                    "uptime_s": round(time.monotonic(), 1),
+                }) + "\n")
+        except Exception:
+            pass
+        _rss_guard_tick(_rss, _RUNTIME_CONFIG)
         _mem_profile_tick(phase)
     except Exception:
         pass  # never let a breadcrumb write affect the trading loop
@@ -1463,16 +1579,37 @@ class PolyBot:
             # closed trades (trades_settled.jsonl went dark — 0 rows this session).
             # Run the live settler here, then bail before any ghost work. Ghost
             # settle stays OFF; rejected candidates are never read on this path.
+            _exit_summary: Dict[str, Any] = {}
             try:
                 exit_cfg = (self.config.get("lane_exit_policy") or {})
                 interval = float(exit_cfg.get("settle_interval_sec", 600) or 600)
                 if force or (now_mono - self._last_exit_settle_monotonic) >= interval:
                     from src.analysis.taken_exit_settler import settle as _settle_exits
                     since = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-                    _settle_exits(since=since)
+                    _exit_summary = _settle_exits(since=since) or {}
                     self._last_exit_settle_monotonic = now_mono
+                    # 2026-08-15 THE SIZER RECOMPUTE LIVED PAST THE `return` BELOW.
+                    # `_maybe_recompute_adaptive_sizer` is called ~90 lines further down, on the
+                    # GHOST path only — so ever since auto_settle_enabled went false (07-13
+                    # operator order) it has NEVER RUN. Consequences, both observed live:
+                    #   - adaptive_sizer_state.json went stale (1.5 days) while mode:live kept
+                    #     resolving multipliers from it, so sizing ran off a frozen snapshot
+                    #   - the realized-Kelly recompute hook added earlier today was placed INSIDE
+                    #     that same dead function, i.e. a 5th no-op vector introduced while fixing
+                    #     four. Both sizers now recompute on the LIVE-EXIT settle, which is the
+                    #     correct trigger anyway: they size off REALIZED closes, not off ghosts,
+                    #     so their cadence must not be coupled to a ghost feature being enabled.
             except Exception as _xe:  # noqa: BLE001 — settle must never break trading
                 logging.warning("taken-exit settle refresh skipped: %s", _xe)
+            # Codex P1: recompute OUTSIDE the settler's try/gate. The exit settler is the
+            # new-DATA trigger, but the sizer's FRESHNESS must not depend on that settler being
+            # due or succeeding — a Gamma/API error would otherwise freeze the state indefinitely
+            # while mode:live kept resolving from it. With an empty summary the recompute still
+            # fires via the max_state_age_min staleness path, rebuilding from the local
+            # trades_settled.jsonl that is already on disk.
+            self._maybe_recompute_adaptive_sizer(
+                _exit_summary if isinstance(_exit_summary, dict) else {}
+            )
             self._last_ghost_calibration_refresh_monotonic = now_mono
             return
         cal_cfg = (self.config.get("lane_calibration") or {})
@@ -1745,7 +1882,25 @@ class PolyBot:
             return
         min_new = int(cfg.get("recompute_min_new_settles", 10) or 10)
         # exit settler summary uses ``n_settled`` (newly resolved this run).
-        if int(settle_summary.get("n_settled", 0) or 0) < min_new:
+        _n_new = int(settle_summary.get("n_settled", 0) or 0)
+        # 2026-08-15 TIME-BASED FLOOR. Settle-count alone is not a sufficient trigger: it
+        # assumes early exits keep arriving. After the 08-13/14 exit kill the bot holds to
+        # resolution, so `n_settled` rarely reaches 10 — and a sizer running mode:live kept
+        # resolving multipliers from a state file that had not been rebuilt in 1.5 days.
+        # A stale state driving LIVE sizing is strictly worse than no sizer: it sizes off a
+        # dead era. So force a rebuild once the state ages past a ceiling, whatever the
+        # settle count. Same guarantee the realized-Kelly path got via max_state_age_hours.
+        _stale = False
+        try:
+            from src.analysis.adaptive_lane_sizer import STATE_PATH as _SZ_STATE
+            _max_age_min = float(cfg.get("max_state_age_min", 60) or 0)
+            if _max_age_min > 0:
+                _age_min = ((time.time() - _SZ_STATE.stat().st_mtime) / 60.0
+                            if _SZ_STATE.exists() else 1e9)
+                _stale = _age_min > _max_age_min
+        except Exception:
+            _stale = False
+        if _n_new < min_new and not _stale:
             return
         from src.analysis.adaptive_lane_sizer import build as _sizer_build, write as _sizer_write
         state = _sizer_build(self.config)
@@ -1756,6 +1911,26 @@ class PolyBot:
             state.get("mode"), len(state.get("lanes", [])),
             {l["lane"]: l["ema_mult"] for l in top if l.get("ema_mult") != 1.0},
         )
+        # 2026-08-15 (Codex P0 "state freshness is missing"): rebuild the realized-Kelly state on
+        # the SAME cadence. Without this the resolver reads whatever was last written by hand —
+        # on 2026-08-15 that was a 6-day-old file containing ZERO eth lanes while eth carried the
+        # book. A sizer reading stale state is not a stale sizer, it is a WRONG one: it starves
+        # lanes that no longer exist and boosts lanes that are paused. Failure here is logged and
+        # swallowed; resolve() independently degrades to 1.0 past max_state_age_hours.
+        try:
+            from src.analysis.realized_kelly_shadow import build as _rk_build, write as _rk_write
+            _rk_state = _rk_build(self.config)
+            _rk_write(_rk_state)
+            _rk_lanes = _rk_state.get("lanes", [])
+            _rk_up = [l for l in _rk_lanes if float(l.get("mult", 1.0)) > 1.0]
+            _rk_dn = [l for l in _rk_lanes if float(l.get("mult", 1.0)) < 1.0]
+            logging.info(
+                "[realized-kelly] recomputed mode=%s rows=%s lanes=%d up=%d starved=%d",
+                _rk_state.get("mode"), _rk_state.get("settled_n_recent"),
+                len(_rk_lanes), len(_rk_up), len(_rk_dn),
+            )
+        except Exception as _rke:
+            logging.error("[realized-kelly] recompute failed: %s", _rke, exc_info=True)
 
     def _maybe_alert_exit_policy_drift(self, settle_summary: Dict[str, Any]) -> None:
         """Recompute the exit-policy shadow recommendation; queue drift for review.
@@ -2012,6 +2187,12 @@ class PolyBot:
 
     def _rebuild_runtime_config_dependents(self) -> None:
         """Refresh live objects that cache config-derived fields at init time."""
+        # Publish the live config to the module-level breadcrumb writers. _write_heartbeat
+        # (and the RSS guard it drives) are module-level and have no `self`, so without this
+        # the guard could only ever use hardcoded thresholds. Set here because this runs at
+        # init AND on every hot-reload, so retuning warn_mb/critical_mb needs no restart.
+        global _RUNTIME_CONFIG
+        _RUNTIME_CONFIG = self.config
         trading_cfg = self.config.get("trading", {}) or {}
         self.position_sizer = PositionSizer(
             kelly_fraction=trading_cfg.get("kelly_fraction", 0.25),
@@ -3504,7 +3685,17 @@ class PolyBot:
                     pnl = float(pnl)
                 except (TypeError, ValueError):
                     continue
+                # 2026-08-16 GREEN-GATE fix, HYDRATE half. The live record_close now feeds
+                # resolutions a pnl-sign mfe (see the exit-path comment); without the SAME rule
+                # here the restart re-imports the raw journal mfe, refills every buffer with
+                # phantom-green losers, and the fix stays inert until ~6 fresh closes per lane
+                # replace them — i.e. a fix that never reaches the state it exists to change.
+                # Identical rule, identical scope: resolutions only, catastrophic stops keep
+                # their real mfe.
                 mfe = d.get("mfe_pct")
+                _hxr = str(d.get("exit_reason") or "").strip().lower()
+                if _hxr.endswith("updown_expired"):
+                    mfe = 1.0 if pnl > 0 else 0.0
                 closes.append((strat, window, side, mfe, pnl))
             # Kelly from its OWN uncapped chronological feed (see Codex fix #5 above).
             if kelly is not None:
@@ -3641,10 +3832,28 @@ class PolyBot:
             # per-lane cap + dust-floor logic below therefore runs ONLY in live.
             if not _sizer_live:
                 return final_size
-            mult = float(resolve_size_mult(
-                self.config, strategy=strategy,
-                window=str(window_size or ""), action=action or "",
-            ) or 1.0)
+            # 2026-08-15 REALIZED-KELLY REPLACEMENT (Codex GO-WITH-FIXES, P1 "REPLACE not stack").
+            # When trading.realized_kelly_sizer.mode == "live" the per-lane multiplier comes from
+            # realized (p, b) Kelly instead of the ROI multiplier. The two are NEVER multiplied:
+            # stacked at the clamp corners they compound to 2.0*2.0=4.0x ($80 on a $20 base) and
+            # 0.15*0.15=0.0225x ($0.45). The downstream caps would contain the notional risk but
+            # NOT the sizing intent — every top lane collapses onto the same cap and every bottom
+            # lane gets lifted back to min_live_notional, destroying the ranking the sizer exists
+            # to express. So it is strictly one source of truth or the other.
+            _mult_src = "roi"
+            _rk = (t.get("realized_kelly_sizer") or {}) if isinstance(t, dict) else {}
+            if isinstance(_rk, dict) and _rk.get("mode") == "live":
+                from src.analysis.realized_kelly_shadow import resolve as _kelly_resolve
+                mult = float(_kelly_resolve(
+                    self.config, strategy=strategy,
+                    window=str(window_size or ""), action=action or "",
+                ) or 1.0)
+                _mult_src = "kelly"
+            else:
+                mult = float(resolve_size_mult(
+                    self.config, strategy=strategy,
+                    window=str(window_size or ""), action=action or "",
+                ) or 1.0)
             # 2026-08-06 NOTE: the old `mult==1.0 -> return final_size` early-out was REMOVED so the
             # per-lane CEILING and NO-DUST FLOOR always bind, even for a lane whose realized mult is 1.0
             # (a fade long at mult 1.0 must still be clamped DOWN to its $12 ceiling).
@@ -3687,8 +3896,8 @@ class PolyBot:
                 if _eff_cap is not None:
                     new_size = min(new_size, _eff_cap)
             logging.info(
-                "[adaptive-sizer:live] %s %s %s size %.2f -> %.2f (mult=%.2f)",
-                strategy, window_size, action, final_size, new_size, mult,
+                "[adaptive-sizer:live] %s %s %s size %.2f -> %.2f (mult=%.2f src=%s)",
+                strategy, window_size, action, final_size, new_size, mult, _mult_src,
             )
             return round(new_size, 2)
         except Exception as _e:  # never break execution on a sizing helper
@@ -5231,10 +5440,39 @@ class PolyBot:
                     except Exception:
                         pass
                     try:
+                        # 2026-08-16 GREEN-GATE SEMANTIC FIX (Codex GO). The adapter only tightens
+                        # a losing lane to the extent its fills have STOPPED going green — the
+                        # premise being "still green ⇒ the ENTRY was fine and the EXIT was at
+                        # fault". That premise died with the exit layer on 08-13/14: held to
+                        # resolution, a position routinely drifts +8% favorable mid-life and then
+                        # resolves against us. That is an ORDINARY loss, but raw mfe marks it
+                        # green, so green_factor = max(0, 1 - green_rate/0.5) collapses to ZERO
+                        # and the lane cannot be tightened at all. MEASURED on the adapter's own
+                        # 6-close window — the gate was shielding losers in proportion to how
+                        # badly they bled:
+                        #    bnb|1h|up   -7.96/t green 0.83 -> delta 0.0000
+                        #    eth|5m|down -15.60/t green 0.50 -> delta 0.0033
+                        #    xrp|5m|down -10.38/t green 1.00 -> delta 0.0000
+                        #    hype|5m|up  -3.87/t green 0.17 -> delta 0.0500  (loses LEAST, tightened MOST)
+                        # The SETTLE path above already does the right thing and says why:
+                        # "Resolution exits carry no excursion … green from pnl sign". All 190
+                        # resolutions since the exit kill take THIS path instead, so they were
+                        # never getting that treatment. Mirror it here.
+                        # SCOPE: resolutions ONLY. hold_catastrophic_stop keeps its real mfe —
+                        # it IS a real exit, so "went green then stopped" still means what it
+                        # always meant (Codex q4). Not a strategy tightening: it restores a
+                        # signal that is currently inverted.
+                        _xr = str(getattr(exit_decision, "reason", "") or "").strip().lower()
+                        _is_resolution = _xr.endswith("updown_expired")
+                        _mfe = (
+                            (1.0 if float(exit_pnl or 0.0) > 0 else 0.0)
+                            if _is_resolution
+                            else float(getattr(exit_decision, "mfe_pct", 0.0) or 0.0)
+                        )
                         self.lane_tape_adapter.record_close(
                             strat, window,
                             (getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",
-                            mfe_pct=float(getattr(exit_decision, "mfe_pct", 0.0) or 0.0),
+                            mfe_pct=_mfe,
                             pnl=float(exit_pnl or 0.0),
                         )
                         self.lane_tape_adapter.persist_state()

@@ -546,7 +546,33 @@ trading:
     mode: live
     lookback_sessions: 8
     min_n_down: 4
-    min_n_up: 12
+    # 2026-08-15 12 -> 8 (Codex call). At 12 the bar was UNREACHABLE: max n on any lane was 11,
+    # and that one was a loser. Every winner — including lanes at 100% WR — sat pinned at 1.00x
+    # on `win_below_min_n_up`, so the sizer was DOWNSIZE-ONLY in practice. Root cause is session
+    # churn: short frequent restarts x lookback_sessions 8 means lanes never reach 12 closes.
+    # NOT 6: at n=6 a 4/6 lane is too weak to justify putting more money on, and that violates
+    # "size up winners, WITH PROOF". NOT solved by raising lookback_sessions either — pooling
+    # more sessions hides era drift, the known repeat failure here. 8 keeps size-up strictly
+    # slower than size-down (4) and leaves every downstream clamp binding: mult_ceil 1.6,
+    # per-lane cap, max_position_size 40, max_exposure_per_trade, min_live_notional.
+    # 2026-08-15 CENSORED-SAMPLE FIX (P0, Codex-confirmed; operator GO). RESTART-CLASS.
+    # "full"    = data/calibration/trades.jsonl — every closed trade INCLUDING stopped ones.
+    # "settled" = legacy data/calibration/trades_settled.jsonl — exit_reason "updown_expired"
+    #             ONLY (137/137). Stopped trades never entered it, so the sizer trained on a
+    #             winner-biased sample and over-rated a lane in proportion to how often it
+    #             stopped out. Measured effect of the switch:
+    #               sol_macro|1h|BUY_YES  n=11 wr=100.0 mult 1.4796 -> n=29 wr=51.7 mult 1.3694
+    #               eth_macro|1h|BUY_YES  n= 4 wr=100.0 mult 1.0000 -> n=12 wr=33.3 mult 0.8451
+    #               eth_macro|5m|BUY_NO   n=18 wr= 44.4 mult 0.6194 -> n=25 wr=52.0 mult 0.7458
+    #             FOUR lanes were reading 100% WR on the censored sample. The full journal is a
+    #             VERIFIED SUPERSET (all 137 settled trade_ids present; |actual_pnl-pnl| max 0.0).
+    # REVERT: set this to "settled".
+    source: full
+    min_n_up: 8
+    # Force a state rebuild once it ages past this, regardless of settle count. After the
+    # 08-13/14 exit kill the bot holds to resolution, so `n_settled` rarely reaches the
+    # recompute threshold and the state sat 1.5 days old while mode:live sized off it.
+    max_state_age_min: 60
     mult_floor: 0.4
     mult_ceil: 1.6          # 2026-08-10 (operator): was 1.0 = DOWNSIZE-ONLY (couldn't grow winners). 1.6 lets a proven lane grow above base toward its per-lane cap; re-clamped to max_position_size (40). "Kelly had different amounts per lane, flat isn't working."
     roi_scale: 0.22
@@ -569,7 +595,35 @@ trading:
       bitcoin|5m|BUY_YES: 12
       bnb_macro|15m|BUY_YES: 30    # UPSIZE proven winner (+$9.5, 83%WR)
       bitcoin|15m|BUY_YES: 35      # UPSIZE proven winner (+$33, 85%WR, f*0.33)
-      xrp_macro|15m|BUY_YES: 12    # KEEP LOW: loser (-$10.6, f*-0.18)
+      # 2026-08-15 REMOVED xrp_macro|15m|BUY_YES: 12 (operator GO). The 08-10 cap was CORRECT
+      # when written — n=32, b 0.22, net -$143.22, ROI -0.107: a payoff trap (high WR, tiny wins).
+      # The 08-13/14 EXIT KILL inverted it. Holding to resolution took b 0.22 -> 0.91:
+      #   at the 08-10 decision  n= 32  WR 65.6%  BEAT  -9.2p  net -143.22  b 0.22  ROI -0.107
+      #   SINCE the cap          n= 67  WR 58.2%  BEAT  +4.1p  net  +80.08  b 0.91  ROI +0.081
+      #   post-exit-kill         n= 43  WR 58.1%  BEAT  +6.9p  net  +49.07  b 0.89  ROI +0.100
+      # An explicit lane_max_usd entry SHORT-CIRCUITS resolve_lane_cap (adaptive_lane_sizer.py:369)
+      # before proven_lane_max_usd is ever read, so the 12 was absolute regardless of performance.
+      # Removing it lets the lane fall through to the PROVEN path, which it clears on its own
+      # evidence: WR 58.2% >= proven_wr_min 0.55 AND ROI +0.081 >= proven_roi_min 0.05 => $40 cap.
+      # Actual size stays well under that: flat_base_usd 20 * adaptive mult ~1.14 = ~$23.
+      # This is UPSIZE-A-WINNER, not a loosened gate: admission is untouched, only the ceiling.
+      # RESTART-CLASS — adaptive_sizer is NOT in _HOT_RELOAD_TRADING_KEYS (main.py:114).
+      # Sizing trace VERIFIED: flat_base 20 * mult 1.1879 = 23.76; eff_cap = min(lane 40,
+      # bankroll 500 * max_exposure_per_trade 0.08 = 40) = 40; 23.76 < 40 so no clamp, and the
+      # min_live_notional 12 dust floor cannot lift it. => ~$23.76 vs the $12.12 actually used (1.96x).
+      # The 0.08 exposure cap only starts binding below 23.76 once bankroll < ~$297 (23.76/0.08).
+      # CODEX: GO-WITH-CHANGES. Confirmed the trace and that nothing re-clamps to 12 or exceeds 40.
+      # The "changes" are NOT to this edit — they are a SEPARATE P0/P1 Codex confirmed: the sizer
+      # builds lane records from trades_settled.jsonl, which holds ONLY exit_reason 'updown_expired'
+      # (165/165). Stopped trades never enter it, so the sizer trains on a CENSORED winner-biased
+      # sample and over-rates any lane in proportion to how often it stops out — live proof:
+      #   sol_macro|1h|BUY_YES state n=10 wr=100.0 mult 1.4796 | truth 15 trades, 53.3% WR, 7 stops
+      #   eth_macro|1h|BUY_YES state n= 4 wr=100.0 mult 1.0    | truth 11 trades, 36.4% WR, 7 stops
+      # Codex: "min_n_up is not real containment" — it counts settled rows, it does not verify the
+      # row universe includes stopped losers. Does NOT block this lane (xrp 15m YES has ZERO stops
+      # and its state record reproduces the independent journal join exactly). FIX THE SOURCE before
+      # any STOPPED lane is allowed to graduate its sizing. sol_macro|1h|BUY_YES stays capped at 12
+      # (Codex agrees on the supplied truth data).
       bnb_macro|5m|BUY_YES: 12
       sol_macro|1h|BUY_YES: 12
       bitcoin|1h|BUY_YES: 12
@@ -641,31 +695,52 @@ trading:
   # RESTART-CLASS: flat_base_usd is not in _HOT_RELOAD_TRADING_KEYS and adaptive_sizer is not in
   # _HOT_RELOAD_TOP_LEVEL_KEYS. STAGED DELIBERATELY -- not restarting, because the favorite-lane
   # test (xrp|1h + hype|15m) started 20 min ago and a restart would destroy it.
-  adaptive_sizer:
-    enabled: true
-    mode: live     # DEFAULTS have mode:"shadow", and resolve_lane_cap returns 0.0 (=no cap) unless
-                   # enabled AND mode=="live". Without these two the whole lane_max_usd block below
-                   # is INERT -- verified: every cap resolved 0.0 before this was added. The state
-                   # file already said mode=live, which is a DIFFERENT thing (that is the sizer's own
-                   # persisted state, not the config the resolver reads).
-    # PER-LANE $ CEILINGS -- the "size DOWN" half. Keys are exact "strategy|window|action"
-    # (resolve_lane_cap has no strategy-level fallback), so every combo is enumerated.
-    # bitcoin: +0.0007/$1 on n=861 in the clean era -- the flattest lane in the book.
-    # doge:    +0.0135/$1 on n=215, and 23.5% WR / -0.2019 recently. Weakest two, capped to 12.
-    lane_max_usd:
-      "bitcoin|5m|BUY_YES": 12.0
-      "bitcoin|5m|BUY_NO": 12.0
-      "bitcoin|15m|BUY_YES": 12.0
-      "bitcoin|15m|BUY_NO": 12.0
-      "bitcoin|1h|BUY_YES": 12.0
-      "bitcoin|1h|BUY_NO": 12.0
-      "doge_macro|5m|BUY_YES": 12.0
-      "doge_macro|5m|BUY_NO": 12.0
-      "doge_macro|15m|BUY_YES": 12.0
-      "doge_macro|15m|BUY_NO": 12.0
-      "doge_macro|1h|BUY_YES": 12.0
-      "doge_macro|1h|BUY_NO": 12.0
-  min_live_notional: 11.0
+  # 2026-08-15 DUPLICATE adaptive_sizer BLOCK REMOVED. A SECOND `trading.adaptive_sizer:` key
+  # existed here; PyYAML keeps the LAST duplicate, so it silently DISCARDED the canonical block
+  # above — taking the whole 2026-08-10 operator sizing bundle with it: lookback_sessions,
+  # min_n_up/min_n_down, mult_ceil 1.6, roi_scale, ema_alpha, unproven_lane_mult,
+  # recompute_min_new_settles, proven_lane_max_usd 40 and the ENTIRE per-lane upsize map
+  # (bnb15mNO 40, bitcoin15mYES 35, xrp15mNO 40 ...). Those keys fell back to module defaults,
+  # which is why the bundle looked 'reverted' when it was really SHADOWED, and why min_n_down
+  # ran at 6 instead of the configured 4. The duplicate's flat 12->40 map has been dropped in
+  # favour of the operator's justified per-lane ceilings above. Codex P1.
+  realized_kelly_sizer:
+    # 2026-08-15 REFUTED / CLOSED (S4, operator GO). enabled true -> false. Was AWAITING GO since
+    # 08-08. NO ERA GRADUATES IT — that is the finding, and it is not fixable by reweighting:
+    #   * Jun/Jul-weighted (what era_months below selects) says UPSIZE on 23 lanes. Those lanes
+    #     went 2 POSITIVE / 21 NEGATIVE in August, combined n=1112 net -$1,293.26. It would size
+    #     UP precisely the lanes that bled. Sign flips almost everywhere across the era boundary:
+    #       sol|5m|NO   f* +0.11 (+148.9) -> -0.28 (-137.60)
+    #       xrp|5m|NO   f* +0.08 (+108.0) -> -0.19 (-118.08)
+    #       bnb|15m|NO  f* +0.20  (+94.6) -> -0.28 (-115.80)
+    #       eth|5m|YES  f* +0.27 (+153.0) -> -0.12  (-58.50)
+    #   * Current-era-only is NOT the fix: in August nearly every lane has f* < 0, so a clean-era
+    #     Kelly says "do not bet" almost everywhere and would collapse the whole book to
+    #     mult_floor 0.15. That is a shutdown, not a sizer, and it contradicts frequency = P1.
+    #   * The original walk-forward (-$295 -> +$777) is NOT evidence: it was measured THROUGH the
+    #     flat_sizing shrink bug AND across the era boundary. The registry row already suspected this.
+    # Only 2 lanes were positive in Aug: eth|15m|BUY_NO (+$37.45), hype|15m|BUY_NO (+$33.48, n=10).
+    # Kept on disk as a DIAGNOSTIC (mode stays shadow); enabled:false so it stops occupying a
+    # graduation slot. resolve() already returns 1.0 unless mode=="live", so this changes NOTHING
+    # about live sizing today — it is bookkeeping. Re-open only with a NEW question, not a reweight.
+    # See docs/PSB_RESEARCH_ROADMAP.md S4 and project_kelly_wired_shadow_era_blocker_old_kelly_found_2026_08_15.
+    enabled: false
+    mode: shadow            # "live" REPLACES adaptive_sizer's ROI mult (never stacks — Codex P1)
+    era_months: ["2026-06", "2026-07"]
+    era_from_date: "2026-08-13"
+    max_state_age_hours: 24.0   # stale state => every lane resolves neutral 1.0, never sized
+    min_n_up: 12                # slow to grow a winner
+    min_n_down: 6               # quick to cut a loser
+    mult_floor: 0.15
+    mult_ceil: 2.0
+  # 2026-08-15 11.0 -> 12.0. The operator's instruction was "no $1 trades; lowest $10-12"; 11.0
+  # was set in fde11cc2 (08-07) by taking the middle of that range and has never been the stated
+  # 12. Note this floor is doing far more work than intended: with the legacy per-lane
+  # size_multipliers crushing the $20 flat base to $3-$10, the median TOXIC-band notional was
+  # $11.26 against an $11.00 floor — i.e. nearly the whole book was landing ON the dust floor and
+  # every per-lane ceiling ($12-$40) above it was unreachable. Raising the floor is the small half
+  # of that fix; the eth flat-sizing guard (eth_macro.py) is the large half.
+  min_live_notional: 12.0
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -807,7 +882,35 @@ strategies:
     neutral_rsi_max: 55.0
     neutral_rsi_extra_min_edge: 0.02
     buy_yes_overbought_rsi_1h: 65.0
-    min_4h_hist_magnitude: 35
+    # 2026-08-15 BTC STARVATION FIX — the gate was the cause, measured not guessed.
+    # htf_bias came back NEUTRAL on 100% of 4,643 evals and neutral_bias was 63.1% of all
+    # BTC rejections. Cause: |4H MACD hist| has p50 15.3 (n=355,133 live observations), so
+    # a fixed bar of 35 forced 87.7% of ALL directional reads to NEUTRAL. Caught live in the
+    # 02:45 boot log: raw_bias=BULLISH, 2 bull votes, hist=8.84, hist_conviction_ok=false.
+    #
+    # The threshold is now a PERCENTILE of the histogram's own recent distribution, because
+    # |hist| is denominated in price units and its scale moves with price/volatility (p25 9.2
+    # -> p90 63.0 = a 30x spread in one sample). Any fixed number is a tape-blind gate: it
+    # starves BTC in a quiet tape and admits everything in a loud one. p25 => ~25% downgraded
+    # whatever the tape does, and the absolute bar self-adjusts.
+    min_4h_hist_percentile: 25.0
+    # 40, not 100. MEASURED: only 16.5% of gate evaluations are a CHANGE in |hist| (58,720 of
+    # 355,989), and live fill runs ~2.6 distinct values/min — so a 100-sample window takes ~40
+    # min to warm, and the window is in-memory, so EVERY process start spends that long on the
+    # non-adaptive fallback. 40 warms in ~15 min and still puts ~10 observations in each
+    # quartile, which is enough for a p25. Cold behaviour is the approved 20.0 bar either way,
+    # so the only thing a shorter warm-up changes is how quickly the gate starts tracking tape.
+    min_4h_hist_percentile_min_samples: 40
+    # COLD-START + FAILURE FALLBACK (used until the window reaches min_samples, and if the
+    # percentile is ever 0/invalid). 35 -> 20 RESTORES the operator's own 2026-08-02 GO:
+    #   "was 35 — the [20,35) band downgraded a DECIDED 2/3-vote bias to NEUTRAL, sitting BTC
+    #    out 7489x this session. LIVE PROOF: 4H hist=+21.9 BULLISH-by-vote knocked to NEUTRAL
+    #    by the 35 bar -> 0 aligned longs in a bull. 20 = the alt standard."
+    # That change was approved, shipped, and then silently regressed back to 35 — the same
+    # regression class as proven_lane_max_usd. 20 also matches btc_min_4h_hist_magnitude on
+    # every alt. Codex P1: cold/failed adaptive must never be LOOSER than the last approved
+    # gate, so the fallback is 20 rather than a fresh number.
+    min_4h_hist_magnitude: 20
     max_edge_updown: 0.12
     max_edge_updown_15m_short: 0.18
     max_edge_updown_1h_short: 0.23
@@ -1841,7 +1944,28 @@ strategies:
     entry_timing_window_5m_min: 0.5
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27
-    lane_max_notional_15m_up: 10
+    # 2026-08-15 10 -> 40 (operator GO, TRIAL — REVERT VALUE IS 10).
+    # ⏪ REVERT: set this back to 10. Hot-reloads (read via self.config.get() per call at
+    #    sol_macro.py:7395) — NO restart. Backup: config/settings.yaml.bak_pre_xrp15m_lanenotional_181523
+    # THE THIRD CEILING. xrp_macro|15m|BUY_YES had THREE independent caps stacked on it:
+    #   1. adaptive_sizer.lane_max_usd  12  -> REMOVED (now 40, proven path)
+    #   2. exposure MODERATE tier  const 15 -> RAISED (floor 15->20, ceiling 15->30)
+    #   3. THIS: lane_max_notional_15m_up 10 <- the actually-binding one, and the reason
+    #      removing #1 and raising #2 changed NOTHING. It is a HARD CAP applied at
+    #      sol_macro.py:7395 BEFORE the adaptive sizer runs, so it capped the sizer's INPUT
+    #      at 10; the 1.20 mult then produced 12 and min_live_notional 12 pinned it there.
+    #      Live proof, unchanged across both earlier fixes:
+    #        [adaptive-sizer:live] xrp_macro 15m BUY_YES size 10.00 -> 12.00 (mult=1.20 src=roi)
+    # WHY 40: matches the lane_max_usd ceiling this lane now resolves to, so no cap contradicts
+    # another. Expected result ~$23.92 (exposure 20 * mult ~1.196), still well under 40 — the
+    # ADAPTIVE MULT governs the climb, this is only the ceiling that permits it.
+    # EVIDENCE (same as the lane_max_usd removal): the 08-10-era caps were written when this lane
+    # was a payoff trap (b 0.22, net -$143.22, ROI -0.107, n=32). The 08-13/14 exit kill took
+    # b to 0.91: since the cap n=67 WR 58.2% net +80.08 ROI +0.081; post-exit-kill n=43 WR 58.1%
+    # net +49.07 ROI +0.100.
+    # ⚠️ TRIAL: judge on live realized closes for THIS lane. If per-trade economics degrade at the
+    # larger size (fills/slippage, or WR falling as size rises), revert to 10 — one-line, no restart.
+    lane_max_notional_15m_up: 40
     lane_max_notional_5m_up: 8
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
@@ -1884,8 +2008,37 @@ strategies:
     iql_15m_hist_floor: 0.03
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.5
-    5m_buy_yes_bullish_floor_bump: 0.22
-    15m_buy_yes_bullish_floor_bump: 0.13
+    5m_buy_yes_bullish_floor_bump: 0.22   # KEPT — live realized n=6, 83.3% WR, +$37.09, BEAT +30.3p.
+                                          # Thin (n=6) but it is the one bumped cohort that EARNS,
+                                          # so it stays until it has enough sample to refute itself.
+    # 2026-08-15 0.13 -> 0.0. This bump is an ADDITIVE inflation of est_prob applied AFTER
+    # calibration, in edge space, so it maps ~1:1 onto edge.
+    #
+    # ⚠️ CODEX CORRECTION — it does NOT force-admit this cohort. Recomputing (edge - 0.13)
+    # against the lane's recorded min_edge 0.04, ALL 26 attributed trades still pass. So zeroing
+    # it will NOT stop these trades firing and will NOT by itself recover the -$59. What it fixes
+    # is est_prob HONESTY: the inflated value is what gets stored on the signal, logged, fed to
+    # the calibration posteriors, used to reconstruct win-probability for Kelly, and passed as
+    # signal.edge to risk evaluation. A lane that reports 0.72 while realizing 0.42 poisons every
+    # downstream consumer that trusts it — that is the reason to remove it, not the P&L.
+    #
+    # Its own docstring justifies it with "the ghost log
+    # settles those same candidates at 68-76% WR / +EV (2026-05-28)" — GHOST data, 2.5 months
+    # stale, against the standing rule that ghosts never decide anything.
+    #
+    # LIVE REALIZED REFUTES IT on this lane. Current era (post-exit-kill), attribution confirmed
+    # by the observed est-minus-raw delta being EXACTLY 0.13 on every one of these trades:
+    #     xrp_macro|15m|BUY_YES   n=26   WR 42.3%   needs 51.8%   BEAT -8.6p   net -$59.01
+    # vs the unbumped book over the same window: n=158, WR 54.4%, BEAT +4.5p, +$143.31.
+    # The ghost promise of 68-76% WR is delivering 42.3%. This single lane is 26 of the 44
+    # bumped trades and -$59 of the -$70 they lost.
+    #
+    # SCOPE IS DELIBERATELY ONE LANE. doge 5m (0.17) also matched its config bump and lost, but
+    # n=2 — cutting on that would break "downsize losers WITH DATA only". bnb 1h and sol 1h
+    # showed est>raw from a DIFFERENT mechanism (their configured bump is 0.0 / unmatched), so
+    # they are not this defect and are untouched. Frequency cost ~0: these candidates still
+    # evaluate, they just stop being admitted on inflated edge.
+    15m_buy_yes_bullish_floor_bump: 0.0
     1h_buy_yes_bullish_floor_bump: 0.0
     1h_buy_yes_floor_price_min: 0.5
     1h_buy_yes_floor_price_max: 0.66
@@ -2554,7 +2707,7 @@ direction:
   # HONEST SCOPE (Codex): this is LOSS REDUCTION, not alpha. Favorite's aggregate EV is
   # still NEGATIVE. The sample is REJECTED candidates, so favorite's advantage is not
   # proven on the admitted population. Paper-only experiment with the kill rule below.
-  side_policy: favorite
+  side_policy: resolver
   # 2026-08-13 EXEMPTION REMOVED (operator challenge: "are we sure bnb 1h is really
   # benefiting?"). It was not. bnb_macro|1h was exempted off the GHOST band measure
   # (54.6% direction accuracy, EV +0.0750, n=1224) — LIVE REALIZED says the opposite and
@@ -2633,8 +2786,8 @@ lane_tape_adapter:
   # until N fresh live closes" freshness clamp — a real mechanism with its own state, so it
   # gets its own change, not a rider on this one. Size is already safe (max_mult <= 1.0).
   hydrate_max_age_hours: 120.0
-  mode: "live"                # 2026-08-11 REALIZED SIZING LIVE (operator: results, not shadow). min_mult 0.25/max_mult 1.0 => DE-SIZE realized losers to as low as 25% bet, NEVER upsizes; winner-protected (avg_pnl>=0 never cut) + green-gated (only cuts lanes that STOPPED going green). Shrinks the band-long bleed the adapter already flags (hype15m/bitcoin5m up) and self-lifts when a lane recovers. Revert mode:"off" to disable.
-  admission_mode: "live"      # 2026-08-08 PLUG IN THE REALIZED SELF-FLIPPING BRAIN. Was default-off, so every gate calling get_tape_admission_delta() (eth/btc/sol min_edge + favorite sit-out) read a hardcoded 0.0 = tape-blind. Per-(asset|window|side) delta from the last k realized closes: >0 tightens a net-losing/never-green side, <0 loosens a winning+green side; flips sign automatically as the tape turns.
+  mode: "shadow"              # 2026-08-16 SAFETY HOLD. Keep observing lane tape, but do not de-size live trades until the realized-P&L signal is re-derived against clean resolution evidence; recent hard cuts on bnb|5m|up and hype|5m|up were not backed by trades_settled.jsonl.
+  admission_mode: "off"       # 2026-08-16 SAFETY HOLD. Prevent realized-P&L tape from raising/lowering min_edge while the exit-layer stop confound is under review.
   window_closes: 6            # rolling realized closes per lane (fast reaction)
   min_samples: 3              # need >=3 closes before adapting; else neutral 0.0
   green_arm_pct: 0.08         # a close counts green if MFE reached +8%
@@ -2661,7 +2814,7 @@ favorite_lane:
   presettle_derisk_secs: 180     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled. 08-08 NUDGE 120->180: give slower 1h favorites more runway to be caught.
   presettle_derisk_price: 0.55   # 08-08 NUDGE 0.5->0.55: the bnb 1h loser expired at mark ~0.53 (entry 0.88, -40%), JUST above the 0.5 threshold, so the de-risk missed it (updown_expired -$32.39). 0.55 catches a favorite that has slipped to a coinflip-ish underdog. Still well below a winning favorite (>0.6), so it won't cut winners.
   hard_stop_price: 0.70    # 2026-08-08 06:1x DISABLED (was 0.70) — AUTOWAKE REVERT, it cut WINNERS 3-for-3 in its first 4 minutes live. Session test_20260808_060714, the 9:00-9:15AM ET window: sol entry 0.86 cut 0.695 -$15.41 | btc entry 0.90 cut 0.415 -$39.75 (the paged bust) | xrp entry 0.86 cut 0.675 -$17.09 = -$72.25 realized. CLOB prices-history says ALL THREE Up tokens settled 0.995 (WON): sol 0.875->0.685 dip->0.995, btc 0.705->0.755->0.995, xrp whipsaw->0.995. doge (control, same window, never dipped below 0.90) was never cut and won. A 15m favorite bought at 0.85-0.93 routinely dips to 0.60-0.70 mid-window and still settles 1.0 — a 0.70 mark stop is structurally guaranteed to cut the lane's winners, which IS the lane's 94%-WR edge (hold to resolution). The btc one is worse still: it fired on mark 0.415 (best_bid 0.41/ask 0.42, ws age 6.9ms) at 13:09:44 when the real tape was ~0.62-0.755 — a mark that never existed, after 106s where the position was invisible to check_exits (mfe=0.0, mae==exit pnl => not one intervening tick was evaluated). 0 => off; loss control reverts to hold_catastrophic_stop_pct -55% + the presettle de-risk above (the config the proven favorite lane ran in). Do NOT re-enable without evidence from settled favorites that a mid-window dip below 0.70 actually predicts a LOSS.
-  early_stop_windows: [1h]  # 2026-08-09 RESTORED to [1h] (was reverted to [all] by the baseline restore, which re-armed the fast-window winner-cutter; it fired once this session on xrp 15m entry 0.91 -> cut 0.665 -$20.60, the session's biggest single loss = the exact documented failure mode). [1h] = 5m/15m ride to resolution, only doge-1h keeps the stop. STAGED not restarted. 2026-08-08 WINDOW-CONDITIONAL EARLY STOPS (operator GO; held-projection this session). The early hold-lane cuts — favorite_hard_stop (above) AND the independent hold_catastrophic_stop backstop — fire ONLY on these windows; other windows ride to resolution. Default 1h. WHY: the stop-hold sweep (this session) showed 5m/15m winners routinely dip to -20..-46% MAE mid-window and STILL settle GREEN (sol 15m held +114.73 vs stopped +105.65; xrp 15m +131.86 vs +124.02; hype 15m +83.84 vs +78.72) — so a mark stop on fast windows is structurally guaranteed to cut winners (this is the SAME finding as the autowake 15m bust note on hard_stop_price above). doge 1h is the LONE lane where HOLDING LOSES (-26.62 vs +8.49 stopped, delta -35.11) => 1h KEEPS the stop. The final-seconds presettle de-risk is a SEPARATE block and stays active on every window. Tokens: "all" => keep stop on every window (pre-change behavior); [] => keep it nowhere. RESTART-CLASS (execution code, not hot-reloadable).
+  early_stop_windows: []  # 2026-08-16 SOL 1h BAD-STOP HOLD. Was [1h], which let an ever-green native SOL 1h BUY_NO (MFE +45.7%) get cut by hold_catastrophic_stop at -55.4% with 6.5m left. With current hold_mfe_conditional_stop_enabled:false, [] means 1h hold lanes now ride to resolution instead of taking early catastrophic cuts. REVERT to [1h] only if settled hold-counterfactual proves 1h dips are worse held than stopped.
   tape_sit_out_delta: 0.02  # 2026-08-08 REALIZED TAPE DEFERENCE: sit out a favorite side while get_tape_admission_delta(asset,window,side) >= this (side net-losing/never-green in CURRENT tape). Self-flips with the tape; both sides losing (chop) => both sit out. Needs lane_tape_adapter.admission_mode: live. 0 => off.
   respect_ai_direction: true  # 2026-08-08 favorite lane HONORS the AI direction driver (was side-agnostic, ignored it): AI FLAT/sit-out => skip asset; AI LONG => only UP favorites; AI SHORT => only DOWN. Kills the sol whipsaw (AI said sol=FLAT, favorite bought both sides+lost). false => legacy side-agnostic.
   fav_net_sit_out_avg: -1.0   # 2026-08-10 FAVORITE-SCOPED REALIZED-NET SIT-OUT (operator GO). Sit out a favorite (asset,window,side) while its rolling AVG realized net per favorite close <= this ($/trade). Reads favorite_net_tracker (FAVORITE-only closes, entry>=floor, keyed asset|window|side) — NOT lane_tape_adapter (which mixes favorite+band + is MFE/green not NET, so it read sol|15m|up as loosen while it bled -$99). Payoff-trap aware (favorites are high-WR/neg-NET). Validated on journal: -1.0 sits out doge15mDOWN(-6.3) xrp15mUP(-4.4) bnb1hUP(-3.5) sol1hDOWN(-2.2) etc; KEEPS xrp1h(+6.6) sol15mUP(+3.5). Self-flips: rolling window rolls losers off / recovery re-admits. null/absent => OFF (fail-open). RESTART-CLASS (favorite_lane not hot-reloadable).
@@ -2671,6 +2824,15 @@ ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
   enabled: true
+  # ⛔ 2026-08-16 LEAVE THIS TRUE. It is the MASTER switch over THREE paths — research_narrative
+  # (ai_agent:778), shadow_pipeline (:1094) and shadow_observer (:1323) — so it is far too blunt
+  # for "turn off the broken one". I set it false for ~11 minutes to stop the portfolio-JSON
+  # errors and it also took down shadow_observer, which was running fine and throwing nothing.
+  # Operator: "im talking about the ai that was supposed to be off, not the ai thats helping and
+  # not throwing errors." Correct scope is the PER-PATH knob (ai.shadow_pipeline.enabled: false).
+  # ⚠️ This knob has ALSO been reverted twice as a mistake: 06-29 "AI inference OFF was WRONG;
+  # keep AI ON", and the 07-15 AI-call skip was ruled UNAUTHORIZED and restored 07-18.
+  # Three strikes — do NOT reach for this switch to silence a single component.
   live_inferencing: true
   free_tier_daily_request_budget: 4000
   consensus_enabled: false
@@ -2747,7 +2909,15 @@ ai:
       - default
       - marginal
   shadow_pipeline:
-    enabled: true
+    # 2026-08-16 THE ONLY AI PATH THAT WAS SUPPOSED TO BE OFF — this is the error source.
+    # Both AIResponseValidationError rows ("market=… invalid portfolio JSON") come from
+    # _parse_portfolio_shadow_response (ai_agent:953), reached only via run_shadow_pipeline
+    # (:1073, parser wired at :1200). 3 failures / 71 calls = 4.2%, every HTTP 200 OK — our
+    # parser, not the vendor. Killed HERE, per-path, instead of at ai.live_inferencing:
+    # that master switch also gates shadow_observer (working, error-free) and
+    # research_narrative, so using it took down a healthy component too. Per-path knob is
+    # the correct scope. Hot-reloadable (`ai` is on _HOT_RELOAD_TOP_LEVEL_KEYS).
+    enabled: false
     max_calls_per_scan: 3
     min_confidence_to_log: 0.6
     log_jsonl: true
@@ -2836,6 +3006,9 @@ term_risk:
 exposure:
   max_same_side_notional_usd: 0.0   # 2026-08-10 SAME-SIDE $-CAP (operator GO, Codex-verified). Downsize-to-fit: cap total same-outcome (YES/NO) OPEN notional at $125/side (~12% of $1k same-direction) — crypto lanes ~90% correlated so N same-side = 1 leveraged bet (corr peak-ss-notional vs maxDD ~0.7). ⚠️ DRAWDOWN INSURANCE not EV: Codex 12-sess replay ~halves worst session (−$141→~−$91) but trims near-breakeven net slightly neg (shrinks winning clusters too). 0=off. VALUE hot-reloads (exposure); the code path in clob_client.evaluate_entry is restart-class. See project_same_side_concurrency_is_edge_not_leak_2026_08_10.
   same_side_notional_min_floor_usd: 10.0   # if remaining same-side room < this, BLOCK (don't place dust) instead of downsize
+  # 2026-08-16 ROLLBACK: revert the 2026-08-15 broad tier-cap raise until it is
+  # proven on clean native-lane data. The raise was whole-book exposure, not a
+  # correctness fix, and same-side concentration protection is currently off.
   full_size: 25.0
   moderate_size: 15.0
   minimal_size: 8.0
@@ -3026,3 +3199,25 @@ no_signal_gate:
   - hype_macro|1h|up
 ghost_calibration:
   auto_settle_enabled: false
+
+monitoring:
+  # 2026-08-15 RSS GUARD. Nothing watched the bot's own memory before this: no ceiling,
+  # no alarm, no page — the only backstop was macOS Jetsam, i.e. the operator beachballs
+  # first and finds out after. That is the 2026-06-18 shape (678MB -> 4.7GB in one
+  # interval, stuck ~5GB until Jetsam).
+  #
+  # Thresholds are set off MEASURED steady state, not guesses: RSS plateaus ~990MB
+  # (sawtooth 957-990 held over hours). warn 1400 is ~40% above that plateau so normal
+  # operation never trips it; critical 1800 still leaves headroom below the 4.7GB event.
+  # Hot-reloadable via _rebuild_runtime_config_dependents — retune without a restart.
+  #
+  # It ALARMS, it does not kill. An unattended process must not decide by itself to stop
+  # trading the book; it relieves allocator arenas, logs, and pages a human.
+  rss_guard:
+    enabled: true
+    warn_mb: 1400
+    critical_mb: 1800
+    warn_repage_sec: 1800      # persistent-state backoff, NOT fire-once-on-transition
+    critical_repage_sec: 300
+    page_enabled: true
+    page_target: "Oracle 2"    # operator moved ops alerts off the Hermes DM

@@ -6767,16 +6767,13 @@ class SolMacroStrategy:
                 if edge < _rf_flat_edge:
                     edge = _rf_flat_edge
                 reason_parts.append(f"rsi_fade_exempt({_rf_flat_edge:.3f})")
-            # 2026-08-13 SIDE-POLICY min-edge/conviction EXEMPTION (same shape as rsi_fade
-            # and _simple_band_long above; Codex q2 option (c)). When the MARKET picks the
-            # side, est_prob no longer describes the side we are taking — it came from the
-            # resolver machinery the policy just removed — so the model edge is ~0/negative
-            # by construction and lane_min_edge + the conviction floors would reject nearly
-            # every favorite candidate. Do not fabricate a probability; size on the flat
-            # edge instead. Reverts byte-identically with direction.side_policy: resolver
-            # (=> _side_policy_active False everywhere).
+            # 2026-08-16 SIDE-POLICY ADMISSION FIX. Favorite policy may choose the side,
+            # but it must not bypass the lane/window admission bar. The 08-13 version set
+            # effective_min_edge=0 here; post-anchor evidence showed weak 1h UP favorites
+            # entering below their own lane min_edge and taking the catastrophic stops.
+            # Keep the flat-edge floor for sizing telemetry, but let lane_min_edge still
+            # decide whether this lane/window is strong enough to trade.
             if _side_policy_active and _side_policy_flat_edge > 0.0:
-                effective_min_edge = 0.0
                 if edge < _side_policy_flat_edge:
                     edge = _side_policy_flat_edge
                 reason_parts.append(f"market_favorite_exempt({_side_policy_flat_edge:.3f})")

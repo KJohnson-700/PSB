@@ -28,13 +28,35 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SETTLED_PATH = ROOT / "data" / "calibration" / "trades_settled.jsonl"
+# 2026-08-15 CENSORED-SAMPLE FIX (P0, Codex-confirmed; operator GO).
+# SETTLED_PATH contains ONLY exit_reason == "updown_expired" rows (137/137 at the time of the fix)
+# — held-to-resolution trades. Trades that exit via hold_catastrophic_stop / updown_stop_loss /
+# never_green_cut NEVER enter it. So the sizer trained on a CENSORED, WINNER-BIASED sample and
+# over-rated a lane in exact proportion to how often it stopped out. A lane that stops every loser
+# reads as 100% WR. Live proof at the time of the fix:
+#     sol_macro|1h|BUY_YES  state n=10 wr=100.0 mult 1.4796  | truth 15 trades, 53.3% WR, 7 stops
+#     eth_macro|1h|BUY_YES  state n= 4 wr=100.0 mult 1.0     | truth 11 trades, 36.4% WR, 7 stops
+#     xrp_macro|15m|BUY_YES state n=43 wr= 58.1 mult 1.1879  | matches exactly — 0 stops
+# Codex: "min_n_up is not real containment against this defect. It only requires enough settled
+# rows; it does not verify that the row universe includes stopped losers." sol already slipped
+# through at n=10 with the highest multiplier in the book, on a fake 100% WR.
+# FIX: read the FULL trade journal, which is a VERIFIED SUPERSET — every one of the 137 settled
+# trade_ids is present in it, and the values are identical (|actual_pnl - pnl| max 0.000000,
+# |cost_basis - notional| max 0.00005 = rounding). It carries 6,014 closed trades incl. 366
+# hold_catastrophic_stop + 2,637 updown_stop_loss the sizer could never see.
+# The same pattern is already used by realized_kelly_shadow, which deliberately reads trades.jsonl
+# for exactly this reason (roadmap S4 row: "reads trades.jsonl not trades_settled(omits stops)").
+# Revert with trading.adaptive_sizer.source: "settled".
+FULL_JOURNAL_PATH = ROOT / "data" / "calibration" / "trades.jsonl"
 STATE_PATH = ROOT / "data" / "calibration" / "adaptive_sizer_state.json"
 SHADOW_LOG = ROOT / "data" / "calibration" / "adaptive_sizer_shadow.jsonl"
 
@@ -56,6 +78,11 @@ DEFAULTS = {
     # them — the `if k in c` filter at line ~82 strips any config key not mirrored here, which
     # would make resolve_lane_cap a silent no-op). Default 0.0 = OFF (proven-cap disabled until
     # config sets proven_lane_max_usd>0); thresholds are the proven-winner bar.
+    # 2026-08-15 CENSORED-SAMPLE FIX. MUST live in DEFAULTS or the `if k in c` filter in _cfg()
+    # strips it and the knob becomes a silent no-op (the exact trap that killed proven_lane_max_usd
+    # once already — see its note below). "full" = trades.jsonl (INCLUDES stopped trades, the fix);
+    # "settled" = legacy trades_settled.jsonl (expired-only, CENSORED) to revert.
+    "source": "full",
     "proven_lane_max_usd": 0.0,  # $ ceiling a PROVEN lane may grow to (0 = feature off)
     "proven_wr_min": 0.55,       # min recent WR (fraction) to count a lane proven
     "proven_roi_min": 0.05,      # min recent ROI (avg_pnl/avg_cost) to count a lane proven
@@ -106,20 +133,102 @@ def _cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return c
 
 
-def _load_rows(path: Path = SETTLED_PATH) -> List[Dict[str, Any]]:
+def _source_path(c: Dict[str, Any]) -> Path:
+    """Which journal feeds the sizer. 'full' (default) = trades.jsonl, which INCLUDES stopped
+    trades; 'settled' = the legacy trades_settled.jsonl, which is expired-only and CENSORED
+    (see the FULL_JOURNAL_PATH note at the top). Config: trading.adaptive_sizer.source."""
+    src = str((c or {}).get("source", "full") or "full").strip().lower()
+    return SETTLED_PATH if src == "settled" else FULL_JOURNAL_PATH
+
+
+def _normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """Full-journal rows carry pnl/notional; settled rows carry actual_pnl/cost_basis.
+    Map onto the settled names so every downstream consumer is unchanged. Verified equivalent on
+    the 137-row overlap: |actual_pnl - pnl| max 0.000000, |cost_basis - notional| max 0.00005."""
+    if r.get("actual_pnl") is None and r.get("pnl") is not None:
+        r["actual_pnl"] = r.get("pnl")
+    if r.get("cost_basis") is None and r.get("notional") is not None:
+        r["cost_basis"] = r.get("notional")
+    return r
+
+
+def _row_eligible(r: Dict[str, Any]) -> bool:
+    """2026-08-15 (Codex P1-A). The settled file was implicitly clean — every row in it was a
+    terminal, realized, paper up/down close. The full journal is NOT, so filter explicitly rather
+    than trusting it. Measured on the 6,015 rows live at the time of the fix: shadow_mode False on
+    100%, closed_at present on 100%, win-flag vs pnl-sign disagreements 0, mode in {None(4222),
+    'paper'(1793)} — so `mode` is UNSET on older rows and must NOT be required, only rejected when
+    it is explicitly something else."""
+    # realized pnl present (excludes OPEN / entry-only rows)
+    if r.get("pnl") is None and r.get("actual_pnl") is None:
+        return False
+    # terminal: a close timestamp. Settled rows were closes by construction.
+    if not (r.get("closed_at") or r.get("ts")):
+        return False
+    # never let a shadow/simulated row train the live sizer
+    if bool(r.get("shadow_mode")):
+        return False
+    # reject only an EXPLICIT foreign mode; None = legacy row, keep it (4222 of 6015)
+    _mode = r.get("mode")
+    if _mode is not None and str(_mode).strip().lower() not in ("paper", "live"):
+        return False
+    return True
+
+
+def _load_rows(path: Path = None) -> List[Dict[str, Any]]:
     # line-by-line + skip bad lines (Codex nit 2): the settler rewrites this file,
     # so a mid-write read can hit a partial/corrupt final line.
+    if path is None:
+        path = FULL_JOURNAL_PATH
     if not path.exists():
-        return []
+        # 2026-08-15 (Codex P1-C) — DO NOT fail open INTO the censored file. Silently falling back
+        # from a missing trades.jsonl to trades_settled.jsonl would reintroduce the exact P0 this
+        # fix exists to remove, with no visible failure. Falling back the OTHER way (settled ->
+        # full) is safe, because full is the uncensored superset. So:
+        #   source=full  + trades.jsonl missing      -> LOUD warn, return [] (never use settled)
+        #   source=settled + settled missing         -> LOUD warn, use full (safe direction)
+        if path == FULL_JOURNAL_PATH:
+            logging.error(
+                "[adaptive-sizer] SOURCE MISSING: %s — returning NO rows. Refusing to fall back to "
+                "the CENSORED %s (expired-only) because that silently restores the over-rating "
+                "defect. Every lane will read n=0 (neutral 1.0) until this file exists.",
+                FULL_JOURNAL_PATH, SETTLED_PATH.name,
+            )
+            return []
+        if not FULL_JOURNAL_PATH.exists():
+            logging.error("[adaptive-sizer] BOTH sources missing (%s, %s) — no rows.",
+                          SETTLED_PATH.name, FULL_JOURNAL_PATH.name)
+            return []
+        logging.warning(
+            "[adaptive-sizer] configured source %s missing — using the UNCENSORED %s instead.",
+            SETTLED_PATH.name, FULL_JOURNAL_PATH.name,
+        )
+        path = FULL_JOURNAL_PATH
     out: List[Dict[str, Any]] = []
+    _seen: set = set()
+    _skipped = 0
     for l in path.read_text().splitlines():
         l = l.strip()
         if not l:
             continue
         try:
-            out.append(json.loads(l))
+            r = json.loads(l)
         except (json.JSONDecodeError, ValueError):
             continue
+        if not _row_eligible(r):
+            _skipped += 1
+            continue
+        # 2026-08-15: de-dupe by trade_id. Measured 0 duplicates today, but the full journal is
+        # append-only and a re-journalled close would otherwise double-count into a lane's stats.
+        tid = r.get("trade_id")
+        if tid is not None:
+            if tid in _seen:
+                _skipped += 1
+                continue
+            _seen.add(tid)
+        out.append(_normalize_row(r))
+    # source telemetry (Codex P1-D): make it obvious in the log WHICH journal trained the sizer.
+    logging.info("[adaptive-sizer] source=%s rows=%d skipped=%d", path.name, len(out), _skipped)
     return out
 
 
@@ -181,7 +290,7 @@ def _target_mult(avg_pnl: float, avg_cost: float, n: int, c: Dict[str, Any]) -> 
 
 def build(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     c = _cfg(config)
-    rows_all = _load_rows()
+    rows_all = _load_rows(_source_path(c))
     rows, recent_sessions = _recent(rows_all, int(c["lookback_sessions"]))
 
     prev_state = {}
@@ -290,13 +399,37 @@ def _load_mult_map() -> Dict[str, float]:
     return _MULT_CACHE["map"]
 
 
+def _state_stale(config: Dict[str, Any]) -> bool:
+    """True when adaptive_sizer_state.json is older than ``max_state_age_min``.
+
+    2026-08-15 (Codex P0). The recompute side gained an age ceiling, but the RESOLVER had
+    no age check at all — so if the refresh worker is delayed, the exit settler throws, or
+    the state simply ages between recompute attempts, LIVE sizing kept applying multipliers
+    derived from a dead era. Observed: the state went 1.5 days stale while mode:live resolved
+    from it every entry. A missing/unreadable state counts as STALE, so the failure direction
+    is always toward neutral 1.0x, never toward an unbounded or arbitrary multiplier.
+    """
+    try:
+        max_age_min = _num(_sizer_block(config).get("max_state_age_min", 60), 60.0)
+        if max_age_min <= 0:
+            return False
+        return (time.time() - STATE_PATH.stat().st_mtime) > (max_age_min * 60.0)
+    except OSError:
+        return True
+    except Exception:
+        return False
+
+
 def resolve_size_mult(config: Dict[str, Any], *, strategy: str, window: str, action: str) -> float:
     """Phase-2 hook (returns 1.0 in shadow mode). Reads the persisted state file.
 
     In shadow mode this ALWAYS returns 1.0 so it can never move real size; the
     state file still records what it WOULD have applied for forward-testing.
+    A STALE state also resolves to 1.0 — see _state_stale.
     """
     c = _cfg(config)
+    if _state_stale(config):
+        return 1.0
     if not bool(c["enabled"]) or c["mode"] != "live":
         return 1.0
     key = "%s|%s|%s" % (strategy, window, action)
@@ -345,6 +478,13 @@ def resolve_lane_cap(config: Dict[str, Any], *, strategy: str, window: str, acti
             _lcv = _num(_lc, 0.0)
             if _lcv > 0:
                 return _lcv
+    # 2026-08-15 (Codex P0, scoped): the staleness guard belongs HERE and not above. The
+    # lane_max_usd lookup is CONFIG — always current, never stale. Everything below is derived
+    # from the persisted STATE (n / wr / ROI), so a stale file could otherwise certify a lane as
+    # "proven" on dead-era evidence and lift its ceiling to proven_lane_max_usd. Falling through
+    # to 0.0 just means the caller uses max_position_size — the conservative path.
+    if _state_stale(config):
+        return 0.0
     pmax = _num(c.get("proven_lane_max_usd", 0.0), 0.0)
     if pmax <= 0:
         return 0.0

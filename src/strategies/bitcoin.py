@@ -32,7 +32,9 @@ import asyncio
 import logging
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
+from threading import Lock
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -104,6 +106,20 @@ from src.strategies.btc_updown_5m import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 2026-08-15 Rolling |4H MACD histogram| observations backing the ADAPTIVE conviction
+# threshold in _get_higher_tf_bias. Module-level so it survives strategy re-instantiation
+# on a config hot-reload (a per-instance buffer would reset to cold every reload and pin
+# the gate back to the fixed fallback). Bounded, so it tracks the CURRENT tape rather than
+# pooling a dead era. Cold on process start by design — it falls back to the absolute
+# threshold until it has min_samples, i.e. it fails to the OLD behaviour, never to "no gate".
+_BTC_4H_HIST_WINDOW: "deque[float]" = deque(maxlen=1000)
+# Codex P2: `sorted(deque)` is not transactionally safe against a real thread mutating the
+# deque mid-iteration. Today _get_higher_tf_bias has no await and BTC scans once per unified
+# cycle, so no task switch can occur inside the critical section — but that is an invariant of
+# the CURRENT scheduler, not of this function. Take the lock and sort a SNAPSHOT so a future
+# threaded caller cannot observe a torn read.
+_BTC_4H_HIST_LOCK = Lock()
 
 
 def _btc_window_delta_ctx(ta: "TechnicalAnalysis", window: str, market) -> Dict[str, Any]:
@@ -555,11 +571,28 @@ class BitcoinStrategy:
                 momentum_side == "LONG"
                 and bool(self.config.get("btc_neutral_resolver_short_guard_enabled", True))
             ):
-                # adapter delta > escape ⇒ realized shorts winning ⇒ admit; else suppress the
-                # short-into-up-spike. Default escape 0.02: with no adapter data (delta 0.0) we
-                # suppress (safe), and loosen only once the tape earns it.
+                # 2026-08-16 SIGN INVERSION FIX (Codex GO) — the twin of the 2026-08-12 fix on
+                # the momentum-contradiction guard below, which was applied there and MISSED here.
+                # lane_tape_adapter.raw_admission_delta returns NEGATIVE (-loosen_max*strength) on
+                # a realized-WINNING lane and POSITIVE (+tighten_max*severity) on a LOSING one.
+                # The old comment claimed "delta > escape => shorts winning => admit", which has
+                # the convention backwards — a winning lane is NEGATIVE and can never exceed
+                # +0.02. So `_adm_down < +_escape` did the exact OPPOSITE of its intent:
+                #     winning short lane  delta -0.03 -> -0.03 <  +0.02  TRUE  -> SUPPRESSED
+                #     losing  short lane  delta +0.05 -> +0.05 <  +0.02  FALSE -> ADMITTED
+                # i.e. it blocked the winners and took the losers. Escape now requires a genuinely
+                # PROFITABLE short lane (delta <= -escape), matching the guard below AND
+                # sol_macro's use of the same adapter ("delta >= admit_below => BLOCK").
+                # HONEST NOTE: behaviour is UNCHANGED today, but NOT because the adapter is empty
+                # — that claim (from the 08-12 note on the guard below) is now STALE. Measured
+                # 2026-08-16: bitcoin 5m up = +0.0256 (losing), 1h up = -0.02 (winning), and all
+                # three DOWN sides = 0.0. This guard reads ONLY the "down" side, so it still sees
+                # 0.0 everywhere and both forms suppress at 0.0 (old 0.0 < +0.02, new 0.0 > -0.02).
+                # The guard BELOW reads "up" too and its 08-12 fix is already live-affecting.
+                # So: CORRECTNESS fix, no behaviour change here today — but it will bite as soon
+                # as BTC shorts start filling, which the same-day true-Kelly fix makes possible.
                 _escape = float(self.config.get("btc_neutral_resolver_guard_tape_escape", 0.02) or 0.02)
-                if _adm_down < _escape:
+                if _adm_down > -_escape:
                     _suppressed = True
                     _suppress_reason = "btc_short_against_bull_upspike"
                     reason_parts.append(
@@ -1515,15 +1548,56 @@ class BitcoinStrategy:
             return "NEUTRAL"
 
         # ── Conviction gate: require meaningful MACD histogram magnitude ──
-        # Without this, 2/3 vote with a histogram near zero (e.g. +5 when typical
-        # range is +/-200) produces weak directional calls → 50/50 coin-flip entries.
-        # Require |histogram| > min_hist_magnitude (default 20) to confirm direction.
-        # If below threshold, downgrade to NEUTRAL — tighter edge will be enforced.
-        _min_hist = self.config.get("min_4h_hist_magnitude", 20.0)
-        if abs(macd_4h.histogram) < _min_hist:
+        # Without this, 2/3 vote with a histogram near zero produces weak directional
+        # calls → 50/50 coin-flip entries.
+        #
+        # 2026-08-15 ADAPTIVE REWRITE. The fixed threshold was a TAPE-BLIND GATE — the
+        # operator's #1 recurring failure class. Measured on n=355,133 live observations:
+        #     min 0.0 | p10 3.5 | p25 9.2 | p50 15.3 | p75 25.8 | p90 63.0 | max 435.0
+        # A |histogram| is denominated in price units, so its scale moves with BTC's price
+        # and volatility — a 30x spread p25→p90 in ONE sample. The old comment assumed a
+        # "typical range +/-200"; against the actual p50 of 15.3 the configured 35 forced
+        # 87.7% of ALL directional reads to NEUTRAL, which is the BTC starvation (htf_bias
+        # NEUTRAL 100% of 4,643 evals, neutral_bias 63% of BTC rejections). Replacing 35
+        # with another constant just relocates the same bug: it starves BTC in a quiet tape
+        # and waves everything through in a loud one.
+        #
+        # So the bar is now a PERCENTILE of the histogram's OWN recent distribution. The
+        # absolute level self-adjusts as volatility expands/contracts, while the admission
+        # rate stays stable by construction (p25 => ~25% downgraded, whatever the tape is
+        # doing). Behaviour self-flips bull↔bear instead of being pinned to a constant.
+        # COLD START AND FAILURE BOTH DEGRADE TO `min_4h_hist_magnitude` (Codex P1). That
+        # value is 20 — the threshold the operator explicitly GO'd on 2026-08-02 for this exact
+        # starvation ("was 35 — sitting BTC out 7489x this session; LIVE PROOF 4H hist=+21.9
+        # BULLISH-by-vote knocked to NEUTRAL") and the standing alt-side standard. It later
+        # regressed to 35 unreviewed. So the non-adaptive path is not a number I invented: it is
+        # the last approved gate, and a cold/failed adaptive path can only ever be as loose as
+        # that, never looser.
+        _min_hist = float(self.config.get("min_4h_hist_magnitude", 20.0) or 0.0)
+        _pct = float(self.config.get("min_4h_hist_percentile", 0.0) or 0.0)
+        _pct = max(0.0, min(100.0, _pct))   # config hygiene (Codex nit)
+        _hist_abs = abs(macd_4h.histogram)
+        _basis = "fixed"
+        if _pct > 0.0:
+            # Sample only when the value CHANGES. The gate is evaluated every scan, so
+            # appending unconditionally would weight the distribution by how long a bar
+            # sits unchanged rather than by the bars themselves. Codex flagged that a live
+            # recomputing candle can jitter enough to defeat exact-float dedupe; the guard
+            # below is a magnitude epsilon, not exact equality, for that reason.
+            with _BTC_4H_HIST_LOCK:
+                if not _BTC_4H_HIST_WINDOW or abs(_BTC_4H_HIST_WINDOW[-1] - _hist_abs) > 1e-6:
+                    _BTC_4H_HIST_WINDOW.append(_hist_abs)
+                _sample = list(_BTC_4H_HIST_WINDOW)   # snapshot; sort outside the lock
+            _min_samples = int(self.config.get("min_4h_hist_percentile_min_samples", 100) or 100)
+            if len(_sample) >= _min_samples:
+                _sorted = sorted(_sample)
+                _idx = min(len(_sorted) - 1, int((_pct / 100.0) * len(_sorted)))
+                _min_hist = float(_sorted[_idx])
+                _basis = "p%.0f/n=%d" % (_pct, len(_sorted))
+        if _hist_abs < _min_hist:
             logger.info(
                 f"BTC HTF: {bias} by vote but 4H MACD hist={macd_4h.histogram:+.1f} "
-                f"below conviction threshold ({_min_hist}) — downgrading to NEUTRAL"
+                f"below conviction threshold ({_min_hist:.1f} basis={_basis}) — downgrading to NEUTRAL"
             )
             return "NEUTRAL"
 
@@ -2301,6 +2375,7 @@ class BitcoinStrategy:
                     _bump_skip(_sp.get("skip") or "favorite_policy_skip")
                     continue
                 allowed_side = _sp["side"]
+                side_source = (side_source or "") + "+" + str(_sp.get("tag") or "")
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
@@ -4479,10 +4554,11 @@ class BitcoinStrategy:
             # Reverts byte-identical when risk.rsi_fade.enabled:false (=> no *_rsi_fade tag).
             # (_is_rsi_fade defined at the conviction floor above.)
             if _side_policy_active and _side_policy_flat_edge > 0.0:
-                # 2026-08-13 SIDE-POLICY exemption (BTC port; Codex q2 option (c)). est_prob
-                # describes the resolver's side, not the market-favorite side we are taking,
-                # so gate on a flat edge instead of a fabricated probability.
-                effective_min_edge = 0.0
+                # 2026-08-16 SIDE-POLICY ADMISSION FIX. Favorite policy may choose the side,
+                # but it must not bypass the lane/window admission bar. The 08-13 version set
+                # effective_min_edge=0 here; post-anchor evidence showed weak favorites
+                # entering below their own lane min_edge. Keep the flat-edge floor for sizing
+                # telemetry, but let lane_min_edge still decide admission.
                 if edge < _side_policy_flat_edge:
                     edge = _side_policy_flat_edge
                 reason_parts.append(f"market_favorite_exempt({_side_policy_flat_edge:.3f})")
@@ -5153,6 +5229,30 @@ class BitcoinStrategy:
                         or 0.05
                     )
                     win_probability = max(0.02, min(0.98, float(entry_price) + _rf_fe))
+                # 2026-08-16 FAVORITE-POLICY Kelly fix (Codex GO) — the SAME defect the
+                # rsi_fade block above fixes, in the lane that now owns every BTC entry.
+                # True Kelly needs a SAME-SIDE win probability. Under side_policy: favorite
+                # the MARKET picks the side from its own price, so estimated_prob describes
+                # the OTHER side — this file already says so at line 4112, where the
+                # conviction floor is bypassed for exactly that reason. Feeding the
+                # wrong-side prob to size_binary_position makes f* <= 0 by construction, so
+                # every favorite-policy BTC candidate died on kelly_nonpositive: MEASURED
+                # 1,072 of 2,993 skips (35.8%) and ZERO entries in session
+                # test_20260815_223521, at the second-to-last gate in the chain. No alt hits
+                # this — use_true_kelly_sizing is set for bitcoin ONLY and is absent from
+                # both the +869 and +244 winning baselines.
+                # Reconstruct from our-side price + the policy's own flat edge, mirroring
+                # the fade fix and the min_edge floor already applied at line 4538. This is
+                # SIZING POLICY, not a fabricated model prob — the favorite lane has ~0
+                # model edge by construction, which is what side_policy_flat_edge encodes.
+                # PRECEDENCE (Codex q3): side policy wins over rsi_fade because it is what
+                # actually SELECTED the side, so its flat edge is the honest one. Moot today
+                # (risk.rsi_fade.enabled is false, and _is_rsi_fade reads side_source), but
+                # made explicit so the ordering is not accidental.
+                if _side_policy_active and _side_policy_flat_edge > 0.0:
+                    win_probability = max(
+                        0.02, min(0.98, float(entry_price) + _side_policy_flat_edge)
+                    )
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name,

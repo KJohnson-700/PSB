@@ -204,6 +204,70 @@ def check_all():
     lag = _pgrep("cex_pm_lag_shadow.py")
     add("cex_pm_lag_detector", "PROBATION" if lag else "BROKEN", f"pid={lag or 'DEAD'} (verdict pending; run cex_pm_lag_analyze.py)")
 
+    # --- 2026-08-16 the two wrong-side-prob fixes, and the eth lanes they put on notice ---
+    # Both are the SAME defect class: under side_policy "favorite" the market picks the side, so
+    # estimated_prob describes the OTHER side. BTC fed it to true-Kelly (f* <= 0 => every
+    # candidate died on kelly_nonpositive, 35.4% of skips, ZERO entries); eth fed it to an
+    # `edge <= 0` guard sitting 659 lines UPSTREAM of the flat-edge floor written to prevent
+    # exactly that (nonpositive_edge, 9.1%). If either line vanishes the lane silently starves
+    # again with no error — hence a row here rather than trust.
+    try:
+        _btc_src = open(os.path.join(_REPO, "src/strategies/bitcoin.py")).read()
+        _eth_src = open(os.path.join(_REPO, "src/strategies/eth_macro.py")).read()
+    except Exception:
+        _btc_src = _eth_src = ""
+    _btc_fix = "float(entry_price) + _side_policy_flat_edge" in _btc_src
+    add("btc_kelly_sidepolicy_fix", "PROBATION" if _btc_fix else "BROKEN",
+        "win_prob reconstructed from price+flat_edge" if _btc_fix
+        else "REVERTED — BTC true-Kelly back on the wrong-side prob, expect 0 entries")
+    _eth_fix = _eth_src.count("edge = _side_policy_flat_edge") >= 2
+    add("eth_nonposedge_order_fix", "PROBATION" if _eth_fix else "BROKEN",
+        "survival floor precedes the nonpositive_edge guard" if _eth_fix
+        else "REVERTED — eth edge guard back upstream of its own floor")
+
+    # Both BTC tape guards must keep the CORRECT polarity (delta <= -escape = winning = admit).
+    # The 08-12 fix was applied to one guard and missed the other for four days; the inverted
+    # form blocks winners and admits losers while raising no error and changing no count.
+    _g1 = "_adm_down > -_escape" in _btc_src
+    _g2 = "_adm_c > -_c_escape" in _btc_src
+    _old = "_adm_down < _escape" in _btc_src or "_adm_c < _c_escape" in _btc_src
+    add("btc_tape_guard_polarity", "PROBATION" if (_g1 and _g2 and not _old) else "BROKEN",
+        "both guards escape on delta<=-escape (winning)" if (_g1 and _g2 and not _old)
+        else f"POLARITY INVERTED — guard1_ok={_g1} guard2_ok={_g2} old_form_present={_old}")
+
+    # GREEN-GATE semantic fix: resolutions must feed the tape adapter a pnl-sign mfe, else
+    # green_factor collapses to 0 and a LOSING lane can never be tightened. Restart-class
+    # (main.py is NOT in _HOT_RELOAD_CODE_MODULES). BROKEN = reverted -> losers go unshielded again.
+    try:
+        _mn = open(os.path.join(_REPO, "src/main.py")).read()
+    except Exception:
+        _mn = ""
+    _gg = "_is_resolution = _xr.endswith(\"updown_expired\")" in _mn
+    add("green_gate_resolution_mfe", "PROBATION" if _gg else "BROKEN",
+        "resolutions feed pnl-sign mfe; catastrophic stops keep real mfe" if _gg
+        else "REVERTED — losing lanes cannot be tightened (green_factor pinned to 0)")
+
+    # OPERATOR RULE 2026-08-16: "if that continues and you dont see a fix then we cut."
+    # The watchlist owns the thresholds; this row just makes sure it is READ every tick.
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import lane_cut_watchlist as _lcw
+        _anchor, _lanes = _lcw.evaluate()
+        _bad = [x for x in _lanes if x["state"] in ("CUT NOW", "DEGRADED")]
+        _acc = [x for x in _lanes if x["state"] == "ACCRUING"]
+        if not _anchor:
+            add("eth_cut_watchlist", "WARN",
+                "ANCHOR NOT SET — run lane_cut_watchlist.py --set-anchor (verdict would read pre-fix trades)")
+        elif _bad:
+            add("eth_cut_watchlist", "BROKEN",
+                "CUT CONDITION MET: " + "; ".join(f"{x['lane']} ({x['note']})" for x in _bad))
+        else:
+            add("eth_cut_watchlist", "PROBATION",
+                f"{len(_lanes)} lanes watched, {len(_acc)} accruing, 0 at cut — "
+                f"detail: scripts/lane_cut_watchlist.py")
+    except Exception as e:  # never let the watchlist break the health check
+        add("eth_cut_watchlist", "WARN", f"watchlist unreadable: {type(e).__name__}")
+
     return R
 
 

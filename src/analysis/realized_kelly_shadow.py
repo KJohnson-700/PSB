@@ -19,7 +19,8 @@ Why this exists (2026-08-08, operator-directed):
 
 Sources / conventions mirror adaptive_lane_sizer.py so a future live flip is a drop-in:
     lane key       = "strategy|window|action"
-    settled trades = data/calibration/trades_settled.jsonl (actual_pnl, cost_basis)
+    realized ledger = data/calibration/trades.jsonl (`pnl`, INCLUDES stop-cuts)
+                      NOT trades_settled.jsonl — see REALIZED_PATH note below
     shadow log     = data/calibration/realized_kelly_shadow.jsonl  (append-only)
     state file     = data/calibration/realized_kelly_state.json    (atomic replace)
 
@@ -56,7 +57,15 @@ _DEFAULTS: Dict[str, Any] = {
     # "shadow" => resolve() ALWAYS returns 1.0 (cannot move real size). Only "live"
     # lets the multiplier bite, and only after a proven walk-forward reweight.
     "mode": "shadow",
-    "lookback_sessions": 12,     # recent-era only (tape drifts; don't pool stale sessions)
+    "lookback_sessions": 12,     # fallback ONLY when no era_months/era_from_date is set
+    # ERA SELECTION (see _era). Both are unioned. Empty => fall back to lookback_sessions.
+    "era_months": [],            # e.g. ["2026-06","2026-07"] — whole clean months
+    "era_from_date": "",         # e.g. "2026-08-13" — everything on/after this date
+    # ASYMMETRIC n-gate (mirrors adaptive_lane_sizer min_n_down=6 / min_n_up=12, and the
+    # operator's durable rule: quick to cut a loser, slow to grow a winner). min_n stays
+    # as the back-compat floor when these are unset.
+    "min_n_up": 12,              # a lane may be sized ABOVE 1.0x only at n>=this
+    "min_n_down": 6,             # a lane may be starved below 1.0x at n>=this
     "min_n": 8,                  # below this a lane is UNPROVEN -> neutral 1.0 (no starve, no boost)
     "kelly_cap": 0.5,            # half-Kelly safety clamp on the raw fraction
     "ref_fraction": 0.12,        # the Kelly fraction that maps to 1.0x base size
@@ -64,6 +73,10 @@ _DEFAULTS: Dict[str, Any] = {
     "mult_ceil": 2.0,            # a strong +Kelly lane can reach 2.0x base
     "b_cap": 5.0,                # clamp payoff ratio (a lane with ~0 losses shouldn't blow up)
     "min_losses_for_b": 2,       # below this, fall back to the global payoff ratio for b
+    # 2026-08-15 STALENESS CEILING. If realized_kelly_state.json is older than this,
+    # resolve() returns neutral 1.0 for EVERY lane rather than sizing off a dead era.
+    # 0 disables the guard (not recommended in live).
+    "max_state_age_hours": 24.0,
 }
 
 
@@ -76,8 +89,22 @@ def _num(v: Any, default: float) -> float:
 
 
 def _cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    # 2026-08-15 (Codex P0): read ``trading.realized_kelly_sizer`` FIRST, top-level only as a
+    # fallback. The module originally read top-level ONLY, so the natural config placement
+    # (`trading.realized_kelly_sizer.mode: live`, beside adaptive_sizer) would have been read as
+    # an empty block -> mode defaulted to "shadow" -> resolve() returned 1.0 for every lane. That
+    # is a SILENT no-op: the bot logs nothing, sizing is unchanged, and the flip looks applied.
+    # This was one of FOUR independent reasons the 2026-08-08 sizer never moved a single dollar.
     c = dict(_DEFAULTS)
-    block = ((config or {}).get("realized_kelly_sizer") or {}) if isinstance(config, dict) else {}
+    block: Dict[str, Any] = {}
+    if isinstance(config, dict):
+        _trading = config.get("trading")
+        if isinstance(_trading, dict):
+            block = _trading.get("realized_kelly_sizer") or {}
+        if not block:
+            block = config.get("realized_kelly_sizer") or {}
+        if not isinstance(block, dict):
+            block = {}
     for k, v in block.items():
         if k in c and v is not None:
             c[k] = v
@@ -98,6 +125,38 @@ def _load_rows(path: Path = SETTLED_PATH) -> List[Dict[str, Any]]:
             continue
         if isinstance(obj, dict):  # skip arrays/strings/etc (Codex MED: _pnl assumes .get)
             out.append(obj)
+    return out
+
+
+def _era(rows: List[Dict[str, Any]], c: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """ERA SELECTOR (2026-08-15, operator directive) — supersedes the plain N-session
+    lookback when ``era_months`` or ``era_from_date`` is configured.
+
+    WHY: ``lookback_sessions: 12`` resolved to 08-11..08-14 — 100% of the August bug
+    era — while 4,281 rows of clean Jun+Jul sat unused. The two eras give INVERTED
+    verdicts (eth|5m|BUY_YES = 2.00x clean vs 0.15x August), so the lookback silently
+    decided the entire sizing outcome. August-only also starved 8 of 9 lanes to the
+    floor, i.e. a pure downsizer, which is the opposite of the operator's intent.
+
+    ⛔ SELECTION IS BY ERA BOUNDARY, NEVER BY SESSION PROFITABILITY. Filtering to
+    winning sessions is survivorship bias with teeth: b = avgWin/avgLoss, so dropping
+    losing sessions inflates b -> inflates f* -> inflates stake. The bar for excluding
+    an era is "the machine was demonstrably different/broken", not "it lost money".
+    Losing sessions INSIDE an included era are kept — they are what defines b.
+    """
+    months = set(c.get("era_months") or [])
+    from_date = str(c.get("era_from_date") or "")
+    if not months and not from_date:
+        return _recent(rows, int(c["lookback_sessions"]))
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        t = str(r.get("ts") or r.get("timestamp") or "")
+        if not t:
+            continue
+        if months and t[:7] in months:
+            out.append(r)
+        elif from_date and t[:10] >= from_date:
+            out.append(r)
     return out
 
 
@@ -204,12 +263,23 @@ def size_mult(stat: Dict[str, Any], c: Dict[str, Any]) -> Tuple[float, float, st
     1.0 — we neither starve nor boost until it has earned an opinion.
     """
     n = int(stat.get("n", 0))
-    if n < int(c["min_n"]):
-        return 1.0, 0.0, "unproven(n=%d<%d)" % (n, int(c["min_n"]))
+    _n_down = int(c.get("min_n_down", c["min_n"]) or c["min_n"])
+    _n_up = int(c.get("min_n_up", c["min_n"]) or c["min_n"])
+    if n < min(_n_down, _n_up):
+        return 1.0, 0.0, "unproven(n=%d<%d)" % (n, min(_n_down, _n_up))
     f = kelly_fraction(float(stat["p"]), float(stat["b"]), float(c["kelly_cap"]))
     ref = float(c["ref_fraction"]) or 0.12
     mult = f / ref
     mult = max(float(c["mult_floor"]), min(mult, float(c["mult_ceil"])))
+    # ASYMMETRIC n-GATE (operator's durable sizing rule, mirrored from adaptive_lane_sizer):
+    # be QUICK to cut a loser and SLOW to grow a winner. A lane with enough evidence to be
+    # starved (n>=min_n_down) may not have enough to be BOOSTED (n>=min_n_up) — in that
+    # window it is pinned to 1.0x rather than sized up on thin proof. Sizing is the LAST
+    # knob and only after edge is proven; an over-sized thin winner is how a book blows up.
+    if mult > 1.0 and n < _n_up:
+        return 1.0, round(f, 4), "win_below_min_n_up(n=%d<%d)" % (n, _n_up)
+    if mult < 1.0 and n < _n_down:
+        return 1.0, round(f, 4), "loss_below_min_n_down(n=%d<%d)" % (n, _n_down)
     if f <= 0:
         return round(mult, 4), 0.0, "kelly<=0_starve(p=%.2f,b=%.2f)" % (stat["p"], stat["b"])
     return round(mult, 4), round(f, 4), "kelly(p=%.2f,b=%.2f,f=%.3f)" % (stat["p"], stat["b"], f)
@@ -219,7 +289,7 @@ def build(config: Optional[Dict[str, Any]] = None,
           rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     c = _cfg(config)
     all_rows = rows if rows is not None else _load_rows()
-    recent = _recent(all_rows, int(c["lookback_sessions"]))
+    recent = _era(all_rows, c)
     stats = lane_stats(recent, c)
     lanes: List[Dict[str, Any]] = []
     for lane, st in stats.items():
@@ -256,21 +326,60 @@ def write(state: Dict[str, Any]) -> None:
         f.write(json.dumps(row) + "\n")
 
 
+_STATE_CACHE: Dict[str, Any] = {"mtime": None, "mults": {}, "age_ok": False}
+
+
+def _state_mults(max_age_h: float) -> Dict[str, float]:
+    """mtime-keyed cache of lane->mult (Codex P1: resolve() ran per-entry file IO + a
+    linear scan of every lane). Re-reads ONLY when realized_kelly_state.json changes.
+
+    STALENESS GUARD (Codex P0): a state file older than ``max_state_age_hours`` returns
+    EMPTY, so every lane resolves neutral 1.0 instead of being sized off a dead era.
+    This is not hypothetical — on 2026-08-15 the on-disk state was from 08-09 and
+    contained ZERO eth lanes while eth|15m|BUY_NO was carrying the entire book. Sizing
+    off it would have starved lanes that no longer existed and boosted a lane that was
+    PAUSED. Mirrors the hydrate ceiling: stale adaptive state must go NEUTRAL, not act.
+    """
+    try:
+        mtime = STATE_PATH.stat().st_mtime
+    except Exception:
+        return {}
+    if _STATE_CACHE["mtime"] != mtime:
+        try:
+            st = json.loads(STATE_PATH.read_text())
+            _STATE_CACHE["mults"] = {
+                str(l.get("lane")): float(l.get("mult", 1.0))
+                for l in st.get("lanes", [])
+                if l.get("lane")
+            }
+        except Exception:
+            _STATE_CACHE["mults"] = {}
+        _STATE_CACHE["mtime"] = mtime
+    if max_age_h > 0:
+        import time as _t
+        if (_t.time() - mtime) > (max_age_h * 3600.0):
+            return {}
+    return _STATE_CACHE["mults"]
+
+
 def resolve(config: Dict[str, Any], *, strategy: str, window: str, action: str) -> float:
     """Live hook (NO-OP in shadow). Returns 1.0 unless mode==live, so this module can
-    never move real size until someone deliberately flips realized_kelly_sizer.mode."""
+    never move real size until someone deliberately flips realized_kelly_sizer.mode.
+
+    Any failure — missing state, unparseable state, STALE state, or an unknown lane —
+    degrades to neutral 1.0. It can never return 0.0 and never raises into the execute
+    path.
+    """
     c = _cfg(config)
     if not bool(c["enabled"]) or c["mode"] != "live":
         return 1.0
+    mults = _state_mults(float(c.get("max_state_age_hours", 24.0) or 0.0))
+    if not mults:
+        return 1.0
     try:
-        st = json.loads(STATE_PATH.read_text())
+        return float(mults.get("%s|%s|%s" % (strategy, window, action), 1.0))
     except Exception:
         return 1.0
-    key = "%s|%s|%s" % (strategy, window, action)
-    for l in st.get("lanes", []):
-        if l.get("lane") == key:
-            return float(l.get("mult", 1.0))
-    return 1.0
 
 
 def replay(config: Optional[Dict[str, Any]] = None,

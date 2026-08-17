@@ -2500,6 +2500,24 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _shrink = 1.0
             _adm_prob = float(estimated_prob) if _shrink >= 1.0 else 0.5 + _shrink * (float(estimated_prob) - 0.5)
             edge = _adm_prob - yes_price if action == "BUY_YES" else yes_price - _adm_prob
+            # 2026-08-16 ORDERING FIX (Codex GO) — SURVIVAL FLOOR for the early guard.
+            # This file ALREADY floors the edge for favorite-policy candidates at line ~3163
+            # ("est_prob describes the side the resolver wanted, not the one we are taking, so
+            # the model edge is ~0/negative BY CONSTRUCTION") — but the guard below `continue`d
+            # 659 lines earlier, so that floor was never reached. MEASURED 293 nonpositive_edge
+            # skips (9.1% of eth skips) in session test_20260815_223521. Same defect class as
+            # the BTC true-Kelly wrong-side prob fixed the same day.
+            # This is a SURVIVAL floor, NOT a replacement: `edge` is legitimately reassigned
+            # downstream at ~2825 (lane_repair), ~3050 (max with AI edge) and ~3156 (rsi_fade),
+            # and ~3163 stays the authoritative favorite-policy floor. `effective_min_edge` is
+            # deliberately NOT touched here — it is not in scope yet at this point.
+            # Byte-identical when side_policy is "resolver" (_side_policy_active False).
+            if (
+                _side_policy_active
+                and _side_policy_flat_edge > 0.0
+                and edge < _side_policy_flat_edge
+            ):
+                edge = _side_policy_flat_edge
             if edge <= 0:
                 _bump_skip("nonpositive_edge")
                 continue
@@ -3154,14 +3172,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                 effective_min_edge = 0.0
                 if edge < _rf_flat_edge:
                     edge = _rf_flat_edge
-            # 2026-08-13 SIDE-POLICY exemption (port of sol_macro; Codex q2 option (c)).
-            # When the MARKET picks the side, est_prob describes the side the resolver
-            # wanted, not the one we are taking, so the model edge is ~0/negative by
-            # construction and lane_min_edge + the conviction floors would reject nearly
-            # every favorite candidate. Size on the flat edge rather than fabricating a
-            # probability. Byte-identical under direction.side_policy: resolver.
+            # 2026-08-16 SIDE-POLICY ADMISSION FIX. Favorite policy may choose the side,
+            # but it must not bypass the lane/window admission bar. The 08-13 version set
+            # effective_min_edge=0 here; post-anchor evidence showed weak favorites
+            # entering below their own lane min_edge. Keep the flat-edge floor for sizing
+            # telemetry, but let lane_min_edge still decide admission.
             if _side_policy_active and _side_policy_flat_edge > 0.0:
-                effective_min_edge = 0.0
                 if edge < _side_policy_flat_edge:
                     edge = _side_policy_flat_edge
             # 2026-07-29 FEE-AWARE GATE (mirror of sol_macro): subtract the venue taker-fee
@@ -3509,7 +3525,21 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and not self.skip_on_degraded_correlation
             ):
                 raw_size *= self.degraded_correlation_size_multiplier
-            if lane_policy.size_multiplier > 0:
+            # 2026-08-15 MISSING FLAT-SIZING GUARD — the 2026-08-06 neutralization was applied to
+            # bitcoin.py:5249 and sol_macro.py:2088 but NEVER PORTED HERE. This is the exact hazard
+            # CLAUDE.md names ("ETH macro duplicates the scan loop — sol_macro changes need a
+            # separate ETH port"), and it silently halved ETH's book for nine days.
+            #
+            # Under flat sizing + the per-lane CEILING model the flat base must flow FULL to the
+            # adaptive sizer, whose lane_max_usd + realized climb is the single size authority.
+            # eth 5m up/down and 15m up all carry size_multiplier 0.25, so $20 base -> $5.00 —
+            # which is the dominant spike in the observed base-size distribution (537 of ~1.5k
+            # entries at exactly $5.00). min_live_notional then lifts it back to $11, so the whole
+            # ETH book collapsed onto the dust floor and every per-lane ceiling above it was
+            # unreachable. thesis_side/lane_mult stay COMPUTED (downstream + logging); only their
+            # APPLICATION to size is skipped. Reverts with flat_sizing_enabled:false.
+            _flat_sizing = bool((self.full_config.get("trading", {}) or {}).get("flat_sizing_enabled", False))
+            if lane_policy.size_multiplier > 0 and not _flat_sizing:
                 raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             # 2026-07-13 restart passenger (operator GO, Codex conditional-GO honored):
