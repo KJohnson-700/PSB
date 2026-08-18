@@ -203,8 +203,10 @@ def check_all():
     qe = _pgrep("ai_direction_engine.py")
     add("qwen_2model_engine", "SUPERSEDED" if not qe else "PROBATION",
         f"pid={qe or 'DEAD'} — benched on purpose 08-14 (3f02678); DEAD is correct here")
-    lag = _pgrep("cex_pm_lag_shadow.py")
-    add("cex_pm_lag_detector", "PROBATION" if lag else "BROKEN", f"pid={lag or 'DEAD'} (verdict pending; run cex_pm_lag_analyze.py)")
+    # 2026-08-18 RETIRED (loop de-junk list): S2 cex_pm_lag was REFUTED/CLOSED 08-15
+    # (all EV cells negative after 2c+fee; even with look-ahead favoring it). The old row
+    # reported BROKEN forever because the shadow was deliberately stopped — a dead gauge.
+    add("cex_pm_lag_detector", "SUPERSEDED", "S2 refuted+closed 08-15; shadow retired by design")
 
     # --- 2026-08-16 the two wrong-side-prob fixes, and the eth lanes they put on notice ---
     # Both are the SAME defect class: under side_policy "favorite" the market picks the side, so
