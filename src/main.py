@@ -121,6 +121,10 @@ _HOT_RELOAD_TRADING_KEYS = frozenset(
         "max_exposure_per_trade",
         "max_position_size",
         "min_hours_to_resolution",
+        # 2026-08-17: the no-dust floor is read via t.get() per admitted trade (the
+        # _apply_adaptive_realized_size site), so it is safe to hot-reload — added after
+        # the 12->5 change cost a restart because this allowlist didn't carry it.
+        "min_live_notional",
         # 2026-07-27: the slippage/depth guard reads self.config.get() per order, so it
         # is safe to hot-reload — add it here so depth_price_ceiling_cents / tolerance
         # tweaks apply on a file edit WITHOUT a restart (this knob just cost a restart).

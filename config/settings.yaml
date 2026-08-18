@@ -767,7 +767,15 @@ trading:
   # $11.26 against an $11.00 floor — i.e. nearly the whole book was landing ON the dust floor and
   # every per-lane ceiling ($12-$40) above it was unreachable. Raising the floor is the small half
   # of that fix; the eth flat-sizing guard (eth_macro.py) is the large half.
-  min_live_notional: 12.0
+  # 2026-08-17 12.0 -> 5.0 (operator GO, option 1 of 3). Measured on session
+  # test_20260817_152806: the $12 floor sat ABOVE almost every post-mult size (flat bases
+  # $8-$15 x mults 0.54-1.17), so the adaptive sizer's 2.2x intent spread delivered as
+  # 12.0-12.9 = 1.08x — de-sizes on losers were floored back UP (xrp|15m|NO asked $4.32,
+  # traded $12 = 2.8x its intent). $5 keeps the no-dust guarantee (no $1 trades) while
+  # letting data-driven de-sizes actually deliver. The Kelly restore (Step 3) will lift
+  # bases above $12 again, at which point this returns to being a pure dust guard.
+  # REVERT: 12.0 (backup settings.yaml.bak_pre_dustfloor5_*).
+  min_live_notional: 5.0
   # 2026-08-16 SKIP JOURNAL, config-driven so it SURVIVES RESTARTS. The 07-16 JOURNAL-SLIM
   # escape hatch was env-only (JOURNAL_LOG_ALL_EVENTS=1) and silently died on every restart.
   # SKIP is the ONLY record of why a signal never became an entry: with it off, a measured
