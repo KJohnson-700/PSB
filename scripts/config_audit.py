@@ -345,7 +345,21 @@ def check_lane_contradictions(cfg):
         add("WARN", "LANE_CONTRADICT",
             f"{len(paused)} lane(s) paused but no running bot to check entries against")
         return
-    cutoff = started.astimezone().isoformat()
+    # 2026-08-18 MIXED-CLOCK FIX: opened_at is tz-aware UTC ("+00:00") while the old
+    # cutoff string was LOCAL-tz ISO ("-07:00"); lexicographic comparison let UTC rows
+    # up to 7h BEFORE boot count as "after boot" (five pre-pause bnb 5m entries paged
+    # LANE_CONTRADICT for hours). Compare real datetimes, assume UTC for naive stamps.
+    cutoff_dt = started.astimezone(dt.timezone.utc)
+
+    def _after_boot(raw):
+        try:
+            d = dt.datetime.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            return False
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        return d >= cutoff_dt
+
     tpath = os.path.join(REPO, "data", "calibration", "trades.jsonl")
     offenders = defaultdict(int)
     try:
@@ -355,7 +369,7 @@ def check_lane_contradictions(cfg):
                     t = json.loads(line)
                 except ValueError:
                     continue
-                if str(t.get("opened_at") or "") < cutoff:
+                if not _after_boot(t.get("opened_at")):
                     continue
                 lane = (f"{t.get('strategy')}|{t.get('window')}|"
                         f"{'up' if t.get('action') == 'BUY_YES' else 'down'}")
