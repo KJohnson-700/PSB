@@ -486,6 +486,38 @@ def check_all():
     except Exception as e:
         add("entry_exit_split", "WARN", f"split check failed: {type(e).__name__}")
 
+    # 2026-08-17 EST_PROB CALIBRATION (Step 2 Phase A, operator GO). Graded on OUTPUT:
+    # the state file must be fresh (tooling daemon refits every settle tick, so >3h stale
+    # means the pipeline died — the exact launchd-agent failure mode this checklist exists
+    # to catch) and its own recorded coverage must hold. Consumer is SIZING ONLY; the
+    # graduation gate (Phase C) reads state["walkforward"], never the in-sample Brier.
+    try:
+        _ecal = os.path.join(CAL, "est_prob_calibration.json")
+        if not os.path.isfile(_ecal):
+            add("est_calibration", "BROKEN",
+                "est_prob_calibration.json MISSING — run scripts/est_calibration_report.py --write-state")
+        else:
+            _age_h = (time.time() - os.path.getmtime(_ecal)) / 3600.0
+            with open(_ecal) as _fh:
+                _st = json.load(_fh)
+            _cov = float(_st.get("coverage_pct") or 0.0)
+            _wf = _st.get("walkforward") or {}
+            _wf_txt = (f"walkforward n={_wf.get('n')} brier cal {_wf.get('calibrated')} "
+                       f"vs mkt {_wf.get('market')}" if _wf else "walkforward: pending")
+            if _age_h > 3.0:
+                add("est_calibration", "BROKEN",
+                    f"state {_age_h:.1f}h stale (daemon refits every settle tick) — "
+                    f"check psb_tooling_daemon EST-CAL lines")
+            elif _cov < 50.0:
+                add("est_calibration", "BROKEN",
+                    f"coverage {_cov:.0f}% <50% — fits untrustworthy; settle is behind")
+            else:
+                add("est_calibration", "PROBATION",
+                    f"state {_age_h:.1f}h old, coverage {_cov:.0f}%, "
+                    f"graded_n={_st.get('graded_n')}, {_wf_txt}")
+    except Exception as e:
+        add("est_calibration", "WARN", f"est-cal check failed: {type(e).__name__}")
+
     _audit = os.path.join(_REPO, "scripts/config_audit.py")
     if not os.path.isfile(_audit):
         add("config_audit", "BROKEN", "scripts/config_audit.py MISSING")

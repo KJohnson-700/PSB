@@ -146,6 +146,28 @@ while true; do
       log "SETTLER SKIP: venv python or script missing"
     fi
     LAST_SETTLE=$NOW
+
+    # ── bucket-A settle + est_prob calibration (Step 2 Phase A, operator GO) ──
+    # Same cadence as the settler. entry_exit_split OWNS exit_layer_settled.jsonl
+    # (one writer per file); est_calibration_report only READS it and refits
+    # data/calibration/est_prob_calibration.json. Consumer is SIZING ONLY — this
+    # cannot change bot behavior; it is the measurement layer for the Kelly flip.
+    if [ -x "$VENV_PY" ] && [ -f "$REPO/scripts/entry_exit_split.py" ]; then
+      SOUT=$(nice -n 19 "$VENV_PY" "$REPO/scripts/entry_exit_split.py" \
+                 --since 2026-08-16T22:57:15 --settle --limit 150 --min-n 999 2>&1 \
+                 | grep -E "settled|counterfactual" | tail -1)
+      log "SPLIT-SETTLE: ${SOUT:-no output}"
+    fi
+    if [ -x "$VENV_PY" ] && [ -f "$REPO/scripts/est_calibration_report.py" ]; then
+      nice -n 19 "$VENV_PY" "$REPO/scripts/est_calibration_report.py" \
+          --write-state --quiet
+      EC_RC=$?
+      if [ "$EC_RC" -eq 0 ]; then
+        log "EST-CAL: state refreshed"
+      else
+        log "EST-CAL: rc=$EC_RC (3 = coverage <50%, fits untrustworthy — settle is behind)"
+      fi
+    fi
   fi
 
   # ── release guards (cut-reopen + rsi-floor) ────────────────────────────────
