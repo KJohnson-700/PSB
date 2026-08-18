@@ -98,6 +98,15 @@ def resolve_entry_family(
     window = clean_lane_part(window_size, default="")
     side = clean_lane_part(lane_side, default="")
 
+    # 2026-08-18 FAVORITE FAMILY (operator option 2). Alt favorites fell through this
+    # whole ladder to "standard", so a favorite's lane_id was indistinguishable from a
+    # band trade's — which made the operator's band-trade pauses (hype|15m|up,
+    # xrp|1h|up) swallow favorite entries too, killing the favorite trial he ordered.
+    # First branch so it wins over every other mapping (bitcoin already returned
+    # source == "favorite_lane"; this just makes alts consistent).
+    if source == "favorite_lane":
+        return "favorite_lane"
+
     # Trigger-family keywords win over side-source taxonomy: drift/spike/
     # predict_window describe what fired the signal, which is more predictive
     # for posterior calibration than how the side was picked.
@@ -175,12 +184,23 @@ def build_lane_metadata(
 ) -> dict[str, str]:
     lane_side = resolve_lane_side(action=action, direction=direction, entry_leg=entry_leg)
     lane_window = _clean_part(window_size, default="unknown")
-    lane_regime = resolve_lane_regime(
-        htf_bias=htf_bias,
-        primary_htf_bias=primary_htf_bias,
-        alt_htf_bias=alt_htf_bias,
-        btc_1h_regime=btc_1h_regime,
-    )
+    # 2026-08-18 FAVORITE REGIME PIN (operator option 2). Favorites are price plays,
+    # side-agnostic of the bias stack, and the variable regime token sat MID-lane_id
+    # (strat|window|side|REGIME|family) — which made favorite lane_ids unmatchable by
+    # LaneManager's prefix rules (you cannot wildcard the middle of a prefix). Pinning
+    # regime to "favorite" makes every favorite lane_id stable and exactly targetable:
+    #   <strat>|<window>|<side>|favorite|favorite_lane
+    # so lane_management.states can pause band trades on a lane while a MORE-specific
+    # key re-admits its favorites (longest-prefix-wins matcher, lane_manager.py:49).
+    if clean_lane_part(side_source, default="") == "favorite_lane":
+        lane_regime = "favorite"
+    else:
+        lane_regime = resolve_lane_regime(
+            htf_bias=htf_bias,
+            primary_htf_bias=primary_htf_bias,
+            alt_htf_bias=alt_htf_bias,
+            btc_1h_regime=btc_1h_regime,
+        )
     entry_family = resolve_entry_family(
         strategy=strategy,
         window_size=window_size,

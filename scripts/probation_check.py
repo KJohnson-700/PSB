@@ -502,12 +502,19 @@ def check_all():
     # restart: SIT-OUT log lines stop / favorite entries reappear on the two lanes.
     try:
         _fl = (c.get("favorite_lane") or {})
+        _fl_states = ((c.get("lane_management") or {}).get("states") or {})
+        # operator option 2 (08-18): favorites bypass the band pauses on exactly the two
+        # trial lanes via more-specific state keys (favorite lane_ids are regime-pinned).
+        _fl_bypass = (str(_fl_states.get("xrp_macro|1h|up|favorite", "")).lower() == "paper"
+                      and str(_fl_states.get("hype_macro|15m|up|favorite", "")).lower() == "paper")
         _fl_ok = (_fl.get("respect_ai_direction") is False
-                  and _fl.get("allow_lanes") == ["xrp_macro|1h", "hype_macro|15m"])
+                  and _fl.get("allow_lanes") == ["xrp_macro|1h", "hype_macro|15m"]
+                  and _fl_bypass)
         add("favorite_lane_unstrangled",
             "PROBATION" if _fl_ok else "BROKEN",
-            f"respect_ai_direction={_fl.get('respect_ai_direction')} allow_lanes={_fl.get('allow_lanes')}"
-            + ("" if _fl_ok else " — EXPECTED false + the 2-lane allowlist"))
+            f"respect_ai_direction={_fl.get('respect_ai_direction')} allow_lanes={_fl.get('allow_lanes')} "
+            f"pause_bypass_keys={'ok' if _fl_bypass else 'MISSING'}"
+            + ("" if _fl_ok else " — EXPECTED false + 2-lane allowlist + |favorite paper keys"))
     except Exception as _e:
         add("favorite_lane_unstrangled", "WARN", f"unreadable: {type(_e).__name__}")
 

@@ -858,6 +858,14 @@ lane_management:
     # ONLY producing lane (13-28 entries/session at its 0.05 bar); pausing it = 36h asset blackout.
     # On the cut-watchlist: if it bleeds under the restored exits, re-pause with clean data.
     "xrp_macro|1h|up": paused      # -$34 / 0% WR n=5 — Codex-flagged + data-confirmed
+    # 2026-08-18 OPERATOR OPTION 2 — favorite trial bypasses the band-trade pauses on
+    # EXACTLY its two allowlisted lanes. Favorite lane_ids are now pinned to
+    # <strat>|<window>|<side>|favorite|favorite_lane (lane_identity.py), and these keys
+    # are LONGER than the band pauses above, so the longest-prefix matcher re-admits
+    # favorites while band trades on the same lanes stay paused. Scope guard: the
+    # favorite generator itself is allowlisted to these two lanes (favorite_lane.allow_lanes).
+    "xrp_macro|1h|up|favorite": paper
+    "hype_macro|15m|up|favorite": paper
     "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
     "eth_macro|15m|down": paused   # 2026-08-16 live triage: current session n=5, 20% WR, -$45.66; temporary pause while fixed-TP trial runs.
     "xrp_macro|5m|down": paused    # 2026-08-16 live triage: current session n=3, 0% WR, -$37.72; temporary pause, not permanent data-backed cut.
