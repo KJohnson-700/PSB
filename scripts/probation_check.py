@@ -383,6 +383,65 @@ def check_all():
             f"watching {_g_reasons_live} live blocked rows; last write "
             f"{'never' if _g_age_min is None else f'{_g_age_min:.0f}m ago'} — FLAG-only, never writes config")
 
+    # 2026-08-18 ASSET STARVATION (operator: "btc hasnt traded all night how is this not a
+    # red flag"). CLAUDE.md defines a 24h+ zero-trade window on any asset as a red flag —
+    # yet nothing paged when BTC went ~36h dark (last entry 08-17 10:03 UTC; the 08-18
+    # systems check verified process/config/feeds and never counted per-asset entries).
+    # This row closes that hole: any ENABLED strategy with zero ENTRY rows across the
+    # trailing 24h of session journals goes BROKEN and pages. An asset whose every lane is
+    # deliberately paused in lane_management.states is skipped (a chosen pause is not
+    # starvation — see feedback_baseline_restore_never_revert_deliberate_lane_disables).
+    try:
+        _now = datetime.datetime.now(datetime.timezone.utc)
+        _lane_states = ((c.get("lane_management") or {}).get("states") or {})
+        _last_entry = {}
+        _sess_paths = sorted(glob.glob(os.path.join(_REPO, "data/paper_trades/test_*/entries.jsonl")))[-8:]
+        for _sp in _sess_paths:
+            with open(_sp, errors="ignore") as fh:
+                for _ln in fh:
+                    if '"ENTRY"' not in _ln:
+                        continue
+                    try:
+                        _r = json.loads(_ln)
+                    except Exception:
+                        continue
+                    if _r.get("event") != "ENTRY":
+                        continue
+                    _st = _r.get("strategy")
+                    _ts = _r.get("timestamp") or ""
+                    if _st and _ts > _last_entry.get(_st, ""):
+                        _last_entry[_st] = _ts
+        _starved = []
+        for _name, _scfg in (strat or {}).items():
+            if not isinstance(_scfg, dict) or _scfg.get("enabled") is False:
+                continue
+            # Skip only when the asset is FULLY paused — all 6 window|side lanes explicitly
+            # paused. A partial pause is NOT exempt: that is exactly how BTC starved for 36h
+            # unnoticed (bitcoin|5m|up paused 08-12 = the only lane that ever produced volume,
+            # while 15m/1h stayed "enabled" behind unreachable min-edge bars).
+            _all_lanes = [f"{_name}|{_w}|{_s}" for _w in ("5m", "15m", "1h") for _s in ("up", "down")]
+            if all(str(_lane_states.get(_k, "")).lower() == "paused" for _k in _all_lanes):
+                continue  # whole asset deliberately paused
+            _ts = _last_entry.get(_name)
+            if not _ts:
+                _starved.append(f"{_name}=NEVER(in last {len(_sess_paths)} sessions)")
+                continue
+            try:
+                _age_h = (_now - datetime.datetime.fromisoformat(_ts)).total_seconds() / 3600.0
+            except Exception:
+                continue
+            if _age_h >= 24:
+                _starved.append(f"{_name}={_age_h:.0f}h")
+        if _starved:
+            add("asset_starvation_24h", "BROKEN",
+                "ZERO entries >24h (CLAUDE.md red flag, NOT 'working as designed'): "
+                + ", ".join(_starved))
+        else:
+            add("asset_starvation_24h", "PROVEN",
+                f"all enabled assets entered within 24h (checked {len(_sess_paths)} sessions)")
+    except Exception as _e:
+        add("asset_starvation_24h", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused
