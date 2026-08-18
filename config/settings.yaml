@@ -15,6 +15,14 @@ polymarket:
   rederive_credentials_on_start: true
   signature_type: 3
   funder_address: '0x7d81246BbE1e91f84f5A791D56fb1865545D78A9'
+  # 2026-08-18 PHASE 2 ARMED STANDBY (task #22, operator GO). live_standby: arm the live
+  # CLOB credentials at boot even in paper — every order path branches on dry_run PER CALL,
+  # so no live order is possible; this removes the boot-frozen cred gap for the Phase 3
+  # paper->live flip. preflight_at_boot: run the read-only live-readiness check at boot
+  # (creds fresh + wallet balance readable), OPS_JSON event live_preflight; re-run any time
+  # by touching data/live_preflight.request. Both RESTART-class. REVERT: false / false.
+  live_standby: true
+  preflight_at_boot: true
 hyperliquid:
   request_timeout_sec: 8
   range_request_timeout_sec: 12
@@ -531,6 +539,16 @@ trading:
     hold_mfe_conditional_stop_enabled: true   # 2026-08-17 ENABLED (operator: "stop building things I need and leaving them disabled"). Restores the Olympus loss geometry: 07-22 +$561 session cut 89% of losses before -60% (avg depth -32%); since early_stop_windows:[] on 08-16 the bot had ZERO active loss caps — 70 straight full-forfeit losses at avg -97% of stake, b collapsed 1.62->0.43. Never-green (peak MFE<8%) cut at -34%; ever-green rides (90% WR held), so the 08-16 sol-1h bad-stop class cannot recur. Was: false. 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
     hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
+    # 2026-08-18 PER-WINDOW never-green TRIGGER (loop fix-order #3, operator GO on the fix order).
+    # Evidence (resolutions-era, n=12 never-green cuts + 2 giveback floors, CLOB-history-verified):
+    # the -34% TRIGGER DELIVERED -39..-82% of stake (avg ~-45%) through 5m gap-through — outside
+    # the winning-era invariant of losses cut -27..-42 DELIVERED. Trigger must sit shallower than
+    # the target depth on the gappy window. 5m 0.24 targets delivered ~-33; 15m/1h stay on the
+    # global 0.34 (no delivered-depth evidence of their own — per-window discipline, same as
+    # tp_giveback_retrace_pct_by_window). Also caps the ever-green give-back floor's max cut on
+    # 5m (one "deepest cut per window" semantic). RESTART-CLASS (live_testing.__init__).
+    hold_never_green_stop_pct_by_window:
+      5m: 0.24
     # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO: "G=40, floor -34%, 5m/15m only, not 1h").
     # Live post-restore data killed the blanket ever-green ride on fast windows: 5/5 riders (all 5m,
     # peak MFE +13.7..+32.4%) resolved -103% full forfeit, -$49.76, ZERO rider wins — the "riders
@@ -824,6 +842,8 @@ lane_management:
     "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
     "eth_macro|15m|down": paused   # 2026-08-16 live triage: current session n=5, 20% WR, -$45.66; temporary pause while fixed-TP trial runs.
     "xrp_macro|5m|down": paused    # 2026-08-16 live triage: current session n=3, 0% WR, -$37.72; temporary pause, not permanent data-backed cut.
+    "bnb_macro|5m|up": paused      # 2026-08-18 operator cut ("cut the bnb now"): post-restore 1-3, -$16.60 — both bnb 5m sides red. Re-evaluate on post-268ec8a (giveback-floor) closes.
+    "bnb_macro|5m|down": paused    # 2026-08-18 operator cut, same call: post-restore 0-3, -$16.05. bnb|15m|down (5-0 +$16.50) NOT touched.
   state_meta: {}
   recommendations:
     min_live_trades: 15

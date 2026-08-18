@@ -922,6 +922,13 @@ class PolyBot:
         self._rollover_request_path = os.path.join(_repo_root, "data", "session_rollover.request")
         self._rollover_draining: bool = False
         self._rolled_from: Optional[str] = None
+        # 2026-08-18 PHASE 2 ARMED STANDBY + PRE-FLIGHT (task #22). State for the
+        # live-readiness checker: boot preflight (config-gated) + on-demand via
+        # data/live_preflight.request. Read-only — proves live execution WOULD work.
+        self._live_standby_armed: bool = False
+        self._live_preflight: Optional[Dict[str, Any]] = None
+        self._live_preflight_boot_done: bool = False
+        self._live_preflight_request_path = os.path.join(_repo_root, "data", "live_preflight.request")
         # Strong refs to fire-and-forget background tasks: without this the event
         # loop only weakly references tasks and may GC them mid-flight (silently
         # killing e.g. the price websocket). See _spawn_bg.
@@ -2252,6 +2259,64 @@ class PolyBot:
             self._ops_rollover_event("failed", reason=f"{type(e).__name__}: {e}")
             logging.exception("[ROLLOVER] failed — old journal remains active")
 
+    # ── 2026-08-18 PHASE 2: LIVE PRE-FLIGHT (task #22) ────────────────────────────
+    # Read-only proof that live execution WOULD work: standby creds armed, sig/funder
+    # config complete, L2 creds fresh (create_or_derive roundtrip = a real authenticated
+    # API call), wallet balance readable. Never places an order; never blocks paper —
+    # every failure just records status=fail. Runs once at boot (config-gated) and
+    # on demand when data/live_preflight.request appears (file is consumed).
+
+    def _maybe_live_preflight(self) -> None:
+        pm_cfg = self.config.get("polymarket", {}) or {}
+        trigger = None
+        if os.path.isfile(self._live_preflight_request_path):
+            trigger = "request_file"
+            try:
+                os.remove(self._live_preflight_request_path)
+            except OSError:
+                pass
+        elif not self._live_preflight_boot_done and bool(pm_cfg.get("preflight_at_boot", False)):
+            trigger = "boot"
+        if trigger is None:
+            return
+        self._live_preflight_boot_done = True
+        self._spawn_bg(self._run_live_preflight(trigger), name="live_preflight")
+
+    async def _run_live_preflight(self, trigger: str) -> None:
+        checks: Dict[str, Any] = {}
+        status = "fail"
+        try:
+            cc = self.clob_client
+            checks["standby_armed"] = bool(self._live_standby_armed)
+            checks["signature_type"] = getattr(cc, "_signature_type", None)
+            checks["funder_set"] = bool(getattr(cc, "_funder_address", None))
+            checks["client_constructed"] = cc.client is not None
+            if cc.client is not None:
+                checks["l2_creds_fresh"] = bool(await cc.ensure_fresh_credentials())
+                bal = await cc.get_cash_balance()
+                checks["balance_read"] = bal is not None
+                if bal is not None:
+                    checks["wallet_usdc"] = round(float(bal), 2)
+            else:
+                checks["l2_creds_fresh"] = False
+                checks["balance_read"] = False
+            hard = ("standby_armed", "funder_set", "client_constructed",
+                    "l2_creds_fresh", "balance_read")
+            if all(checks.get(k) for k in hard) and checks.get("signature_type") is not None:
+                status = "pass"
+        except Exception as e:
+            checks["error"] = f"{type(e).__name__}: {e}"
+        self._live_preflight = {
+            "status": status,
+            "trigger": trigger,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "checks": checks,
+        }
+        logging.warning(
+            "OPS_JSON %s",
+            json.dumps({"event": "live_preflight", **self._live_preflight}, default=str),
+        )
+
     def _maybe_hot_reload_config_file(self) -> None:
         """Apply runtime-safe settings.yaml edits without restarting the bot."""
         path = getattr(self, "config_path", None)
@@ -2664,11 +2729,38 @@ class PolyBot:
             )
             return
         if dry_run:
-            logging.info(
-                "dry_run=true — skipping live CLOB credential init (paper mode "
-                "uses key-less read-only book access; set polymarket.signature_type "
-                "+ funder_address before going live on CLOB V2)."
-            )
+            # 2026-08-18 PHASE 2 ARMED STANDBY (task #22, operator GO). With
+            # polymarket.live_standby true, initialize the live CLOB credentials in
+            # paper too. Every order path branches on the dry_run argument PER CALL,
+            # so armed creds cannot place a live order — this only removes the
+            # boot-frozen cred gap so the Phase 3 paper->live flip needs no restart.
+            # Fail-safe: any arming error leaves paper exactly as before (key-less L0).
+            _standby = bool(self.config.get("polymarket", {}).get("live_standby", False))
+            if _standby and polymarket_key:
+                try:
+                    self.clob_client.set_credentials(
+                        private_key=polymarket_key,
+                        api_key=api_keys.get("POLYMARKET_API_KEY"),
+                        api_secret=api_keys.get("POLYMARKET_API_SECRET"),
+                        api_passphrase=api_keys.get("POLYMARKET_API_PASSPHRASE"),
+                    )
+                    self._live_standby_armed = True
+                    logging.info(
+                        "[STANDBY] dry_run=true + polymarket.live_standby — live CLOB "
+                        "credentials ARMED (no live orders possible: dry_run gates every "
+                        "order path per-call)."
+                    )
+                except Exception:
+                    self._live_standby_armed = False
+                    logging.exception(
+                        "[STANDBY] credential arming failed — paper continues key-less"
+                    )
+            else:
+                logging.info(
+                    "dry_run=true — skipping live CLOB credential init (paper mode "
+                    "uses key-less read-only book access; set polymarket.signature_type "
+                    "+ funder_address before going live on CLOB V2)."
+                )
         elif polymarket_key:
             self.clob_client.set_credentials(
                 private_key=polymarket_key,
@@ -3839,7 +3931,8 @@ class PolyBot:
                         _p = float(d.get("pnl"))
                         _w = bool(d.get("win")) if d.get("win") is not None else (_p > 0)
                         kelly.record_outcome(
-                            d.get("strategy"), _w, d.get("window") or d.get("window_size")
+                            d.get("strategy"), _w, d.get("window") or d.get("window_size"),
+                            side=d.get("side") or d.get("action"),  # task #26: lane streaks
                         )
                     except Exception:
                         continue
@@ -4161,7 +4254,9 @@ class PolyBot:
                         window_size=window,
                         side=s.get("action", ""),  # BUY_YES/BUY_NO → up/down lane
                     )
-                self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
+                self.kelly_sizer.record_outcome(
+                    strat, s["pnl"] > 0, window, side=s.get("action", "")  # task #26
+                )
                 try:
                     # Resolution exits carry no excursion; a resolved winner reached
                     # favorable (price -> 1.0), a loser never did -> green from pnl sign.
@@ -5562,7 +5657,10 @@ class PolyBot:
                             window_size=window,
                             side=(getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",
                         )
-                    self.kelly_sizer.record_outcome(strat, exit_pnl > 0, window)
+                    self.kelly_sizer.record_outcome(
+                        strat, exit_pnl > 0, window,
+                        side=(getattr(pos, "action", "") or getattr(pos, "outcome", "")) if pos else "",  # task #26
+                    )
                     try:
                         from src.analysis import lane_breaker
                         # Codex HIGH: Position has no .action and stores outcome as YES/NO — use the
@@ -5723,6 +5821,7 @@ class PolyBot:
         )
         self._maybe_hot_reload_config_file()
         self._maybe_session_rollover()
+        self._maybe_live_preflight()
 
         from src.ops_pulse import _scan_skip_digest, _side_selection_digest, log_ops_pulse
 

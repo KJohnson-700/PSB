@@ -6,7 +6,7 @@ Per-asset Kelly with streak-adjusted auto-correlation sizing.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,12 @@ class KellySizer:
 
         self._recent_outcomes: Dict[str, list] = {s: [] for s in self._defaults}
         self._recent_outcomes_by_window: Dict[tuple, list] = {}
+        # 2026-08-18 SIDE DIMENSION (task #26, Codex's named restart-drift target).
+        # (strategy, window, side) buffers so a lane like xrp|15m|down winning 5-0
+        # while xrp|15m|up loses no longer collapses into one streak — at hydrate
+        # AND live. Additive: existing combined/window consumers are unchanged;
+        # this state must be correct BEFORE the Kelly flip consumes it.
+        self._recent_outcomes_by_lane: Dict[tuple, list] = {}
         self._root_config = config
 
     def reload_from_config(self, config: Dict) -> None:
@@ -144,8 +150,22 @@ class KellySizer:
     def _window_key(self, strategy: str, window: str) -> tuple:
         return (strategy, window)
 
+    @staticmethod
+    def _norm_side(side: Any) -> Optional[str]:
+        """Normalize the many side spellings (BUY_YES/YES/up/LONG …) to up/down."""
+        s = str(side or "").strip().upper()
+        if s in ("BUY_YES", "YES", "UP", "LONG"):
+            return "up"
+        if s in ("BUY_NO", "NO", "DOWN", "SHORT"):
+            return "down"
+        return None
+
     def record_outcome(
-        self, strategy: str, outcome: bool, window: Optional[str] = None
+        self,
+        strategy: str,
+        outcome: bool,
+        window: Optional[str] = None,
+        side: Optional[str] = None,
     ) -> None:
         """Record trade outcome for streak tracking. outcome=True = win.
 
@@ -153,6 +173,8 @@ class KellySizer:
             strategy: strategy key (bitcoin, sol_macro, etc.)
             outcome: True = win, False = loss
             window: "5m" or "15m". Auto-detected from market_question if not provided.
+            side: any spelling of up/down (BUY_YES, NO, LONG …) — populates the
+                per-lane (strategy, window, side) buffer (task #26). Optional.
         """
         if strategy not in self._recent_outcomes:
             self._recent_outcomes[strategy] = []
@@ -167,14 +189,31 @@ class KellySizer:
             self._recent_outcomes_by_window[wk].append(outcome)
             if len(self._recent_outcomes_by_window[wk]) > 20:
                 self._recent_outcomes_by_window[wk].pop(0)
+            _sd = self._norm_side(side)
+            if _sd is not None:
+                lk = (strategy, window, _sd)
+                buf = self._recent_outcomes_by_lane.setdefault(lk, [])
+                buf.append(outcome)
+                if len(buf) > 20:
+                    buf.pop(0)
 
-    def get_current_streak(self, strategy: str, window: Optional[str] = None) -> int:
+    def get_current_streak(
+        self,
+        strategy: str,
+        window: Optional[str] = None,
+        side: Optional[str] = None,
+    ) -> int:
         """Return current consecutive win streak.
 
         If window is None: combined streak across all windows (for sizing).
         If window is set: streak for that specific window (for display).
+        If window AND side are set: streak for that exact lane (task #26).
         """
-        if window is not None:
+        if window is not None and self._norm_side(side) is not None:
+            outcomes = self._recent_outcomes_by_lane.get(
+                (strategy, window, self._norm_side(side)), []
+            )
+        elif window is not None:
             outcomes = self._recent_outcomes_by_window.get(
                 self._window_key(strategy, window), []
             )

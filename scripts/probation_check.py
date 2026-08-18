@@ -623,6 +623,27 @@ def check_all():
     except Exception as e:
         add("session_rollover", "WARN", f"rollover check failed: {type(e).__name__}")
 
+    # 2026-08-18 PHASE 2 ARMED STANDBY + PRE-FLIGHT (task #22). live_preflight OPS_JSON
+    # events prove live execution WOULD work (read-only). BROKEN = last preflight failed.
+    try:
+        _pf_logs = sorted(glob.glob(os.path.join(_REPO, "data/logs/polybot_*.log")))
+        _pf_last = None
+        if _pf_logs:
+            with open(_pf_logs[-1], errors="ignore") as _fh_:
+                for _ln_ in _fh_:
+                    if '"event": "live_preflight"' in _ln_:
+                        _pf_last = _ln_.strip()
+        if _pf_last is None:
+            add("live_standby_preflight", "PROBATION",
+                "unexercised (restart-class — arms at next restart; on-demand: "
+                "touch data/live_preflight.request)")
+        elif '"status": "pass"' in _pf_last:
+            add("live_standby_preflight", "PROBATION", f"last preflight PASS: ...{_pf_last[-140:]}")
+        else:
+            add("live_standby_preflight", "BROKEN", f"last preflight FAILED: ...{_pf_last[-160:]}")
+    except Exception as e:
+        add("live_standby_preflight", "WARN", f"preflight check failed: {type(e).__name__}")
+
     _audit = os.path.join(_REPO, "scripts/config_audit.py")
     if not os.path.isfile(_audit):
         add("config_audit", "BROKEN", "scripts/config_audit.py MISSING")

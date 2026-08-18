@@ -537,6 +537,10 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "session_id": getattr(bot.journal, "session_id", None),
         "rolled_from": getattr(bot, "_rolled_from", None),   # 2026-08-18 hot session rollover marker
         "rollover_draining": bool(getattr(bot, "_rollover_draining", False)),
+        # 2026-08-18 Phase 2 armed standby: live-readiness at a glance (full detail in
+        # the live_preflight OPS_JSON event).
+        "live_standby_armed": bool(getattr(bot, "_live_standby_armed", False)),
+        "live_preflight": (getattr(bot, "_live_preflight", None) or {}).get("status"),
         "journal_dir": session_dir,
         "dry_run": bool(trading.get("dry_run", True)),
         "kill_switch": bool(bot._kill_switch_active()) if hasattr(bot, "_kill_switch_active") else False,
