@@ -314,6 +314,18 @@ class PositionExitManager:
         self._mfe_cond_stop_enabled = bool(exit_cfg.get("hold_mfe_conditional_stop_enabled", True))
         self._hold_never_green_mfe_arm = float(exit_cfg.get("hold_never_green_mfe_arm", 0.08) or 0.0)
         self._hold_never_green_stop_pct = float(exit_cfg.get("hold_never_green_stop_pct", 0.34) or 0.0)
+        # 2026-08-18 PER-WINDOW never-green trigger (loop finding F3 / fix-order #3). The -34%
+        # TRIGGER delivered -39..-82% of stake on 5m gap-through (12 era cuts; CLOB history
+        # confirmed the gaps are real tape, not eval lag). The winning-era invariant is losses
+        # cut -27..-42 DELIVERED, so the fast-window trigger must sit shallower than the target
+        # depth. Absent => global hold_never_green_stop_pct (15m/1h unchanged without their own
+        # evidence — same per-window discipline as tp_giveback_retrace_pct_by_window above).
+        # RESTART-CLASS (cached here).
+        _ngw = exit_cfg.get("hold_never_green_stop_pct_by_window") or {}
+        self._hold_never_green_by_window = (
+            {str(k).lower(): float(v) for k, v in _ngw.items()}
+            if isinstance(_ngw, dict) else {}
+        )
         # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO). Live post-restore data
         # killed the blanket ever-green exemption on fast windows: 5/5 ever-green riders (all 5m,
         # peak MFE +13.7..+32.4%) resolved to a -103% full forfeit, -$49.76, zero rider wins. The
@@ -587,6 +599,30 @@ class PositionExitManager:
                     return True
         return False
 
+    def _hold_never_green_pct_for(self, pos) -> float:
+        """Never-green cut trigger for THIS position's window. Global default unless the
+        window has an explicit override (hold_never_green_stop_pct_by_window).
+
+        2026-08-18 (loop fix-order #3). Same shape and same discipline as _tpgb_retrace_for:
+        per-window, evidence-gated, fallback to the global knob. The 5m override exists
+        because the global -34% trigger DELIVERED -45% avg (-39..-82%) through 5m gaps,
+        outside the winning-era -27..-42 band; 15m/1h keep the global value until they
+        have their own delivered-depth evidence."""
+        base = float(getattr(self, "_hold_never_green_stop_pct", 0.0) or 0.0)
+        by_win = getattr(self, "_hold_never_green_by_window", None)
+        if not by_win:
+            return base
+        try:
+            label = str(infer_updown_window_size(
+                getattr(pos, "window_size", "") or "",
+                opened_at=getattr(pos, "opened_at", None),
+                end_date=getattr(pos, "end_date", None),
+            )).lower()
+            val = by_win.get(label)
+            return float(val) if val is not None else base
+        except Exception:
+            return base
+
     def _tpgb_retrace_for(self, pos) -> float:
         """Give-back retrace for THIS position's window. Global default unless the window
         has an explicit override.
@@ -651,7 +687,7 @@ class PositionExitManager:
         _fav_min = float(getattr(self, "_fav_derisk_min_entry", 0.82) or 0.82)
         _is_fav = float(getattr(pos, "entry_price", 0.0) or 0.0) >= _fav_min
         if not _is_fav and not self._hold_ever_green(pos, peak_pnl_pct):
-            ng = float(getattr(self, "_hold_never_green_stop_pct", 0.0) or 0.0)
+            ng = float(self._hold_never_green_pct_for(pos) or 0.0)
             if ng > 0.0:
                 # shallow cut; never deeper than the configured catastrophic backstop
                 return min(ng, base) if base > 0.0 else ng
@@ -678,7 +714,10 @@ class PositionExitManager:
             )).lower()
             if _gb_label in getattr(self, "_hold_evergreen_giveback_windows", set()):
                 _gb = self._hold_evergreen_giveback_points - float(peak_pnl_pct or 0.0)
-                _gb_cap = float(getattr(self, "_hold_never_green_stop_pct", 0.34) or 0.34)
+                # 2026-08-18: cap follows the WINDOW's never-green depth (per-window map),
+                # so 5m's shallower max-cut applies to the floor too — one "deepest cut
+                # for this window" semantic across both never-green and give-back paths.
+                _gb_cap = float(self._hold_never_green_pct_for(pos) or 0.34)
                 if base > 0.0:
                     _gb_cap = min(_gb_cap, base)
                 _gb = max(0.0, min(_gb, _gb_cap))
