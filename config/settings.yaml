@@ -851,13 +851,19 @@ lane_management:
   execution_enforcement_enabled: true   # 2026-08-11 ALLOWLIST LIVE: pause the triple-confirmed structural bleeders (Codex list + 8-sess lane_review + 12-sess audit). Blocks BOTH paper+live (can_execute paused-check ignores dry_run). Hot-reloadable (lane_management in _HOT_RELOAD_TOP_LEVEL_KEYS; apply_config_updates rebuilds LaneManager). Set false to disable. Refine states from scripts/lane_review.py on CLEAN baseline data.
   default_state: paper
   states:
-    "bitcoin|5m|up": paused        # -$40 / 11% WR n=9 — never-green longs, structural (tape-independent)
+    # 2026-08-18 OPERATOR GO — bitcoin|5m|up UN-PAUSED. The 08-12 pause verdict ("-$40 / 11% WR
+    # n=9 never-green longs") was broken-exit-era evidence: no fixed TP, no never-green cut. The
+    # restored stack cuts 5m at -24% — exactly the protection those longs lacked. This was BTC's
+    # ONLY producing lane (13-28 entries/session at its 0.05 bar); pausing it = 36h asset blackout.
+    # On the cut-watchlist: if it bleeds under the restored exits, re-pause with clean data.
     "xrp_macro|1h|up": paused      # -$34 / 0% WR n=5 — Codex-flagged + data-confirmed
     "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
     "eth_macro|15m|down": paused   # 2026-08-16 live triage: current session n=5, 20% WR, -$45.66; temporary pause while fixed-TP trial runs.
     "xrp_macro|5m|down": paused    # 2026-08-16 live triage: current session n=3, 0% WR, -$37.72; temporary pause, not permanent data-backed cut.
     "bnb_macro|5m|up": paused      # 2026-08-18 operator cut ("cut the bnb now"): post-restore 1-3, -$16.60 — both bnb 5m sides red. Re-evaluate on post-268ec8a (giveback-floor) closes.
     "bnb_macro|5m|down": paused    # 2026-08-18 operator cut, same call: post-restore 0-3, -$16.05. bnb|15m|down (5-0 +$16.50) NOT touched.
+    "bnb_macro|1h|up": paused      # 2026-08-18 operator directive "cut lanes that consistently lose in winning sessions": lost in 5 of 7 winning sessions since 07-01, -$75.99 total, 31% WR n=16; recent-era (08-10+) confirms -$40.35, 2/3 losing. Worst consistency+materiality on the board; also the old VPS chronic-bleeder list's bnb 1h BUY_YES. LIVE REALIZED evidence, not ghosts.
+    "sol_macro|1h|down": paused    # 2026-08-18 same directive: lost in 3 of 4 winning sessions, -$9.36 (n=6), recent -$11.40. Small dollars, high consistency. sol|1h|up (12 winning sessions, +$52.97) untouched — side-isolated.
   state_meta: {}
   recommendations:
     min_live_trades: 15
@@ -1062,14 +1068,16 @@ strategies:
             entry_window_max: 5.5
         15m:
           up:
-            min_edge: 0.09
+            min_edge: 0.05   # 2026-08-18 OPERATOR GO — 15m PROBE 0.09->0.05 at half size: the 0.09 bar was STRUCTURALLY unreachable (est_prob_up lives 0.47-0.57 vs ~0.505 prices; bot edge p90 0.012, max 0.078 in 3,894 rejects/day — zero possible passes; same bar in both winning baselines, so this lane NEVER produced). Ghost-deduped nominate: blocked 15m would-win 59.4% (n=32/day) vs ~51% fee breakeven. Calibration-first probe; live realized validates.
+            size_multiplier: 0.5   # probe at half size until live WR proves the lane
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 90.0  # 2026-08-12 ENTRY-TIMING FIX (was 19): entry_window_max = MAX minutes-to-expiry allowed at entry. 19 let the bot enter a 15m market 19min (~0.3h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 OPERATOR ORDER: max 90min. The 15.0 came from 0d66874 while still marked "awaiting call" — never authorised. The winning +$159.90/69%WR/n=100 config ran 1h at 360 and 15m at 120-150; 90 is the operator ceiling. Hard cap raised in lockstep or it silently clamps 90 back to 15/60.
           down:
-            min_edge: 0.08
+            min_edge: 0.05   # 2026-08-18 OPERATOR GO — same 15m probe as `up` (0.08->0.05, half size); see the up-side comment for the data.
+            size_multiplier: 0.5   # probe at half size until live WR proves the lane
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
