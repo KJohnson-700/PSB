@@ -28,9 +28,15 @@
 # script it calls is atomic (mv + O_CREAT recreate) and defers its own heavy
 # settled-archive step while a bot is trading.
 #
-# It also does NOT resurrect ghost settlement. `ghost_calibration.auto_settle_enabled`
-# is false by deliberate 07-13 severance and ghost data is not a decision input.
-# rejected_candidates_settled.jsonl being static is CORRECT, not stale.
+# GHOST SETTLEMENT: 2026-08-18 operator GO ("go on the ghost cadence") — a periodic
+# out-of-process ghost-settle tick now runs settle_rejected_candidates.py --once
+# every GHOST_SETTLE_EVERY_SEC. This deliberately REVISES the 07-13 severance in
+# SCOPE ONLY: the in-bot auto_settle stays false (nothing touches the hot path),
+# and ghost data is STILL not a decision input — the cadence exists so Phase C
+# TRAINING data (ghosts nominate, LIVE REALIZED validates) stays current instead
+# of refreezing after the loop's 08-18 backlog pass (249k rows). The settler is
+# checkpoint-indexed and idempotent; incremental passes are minutes, not the 4.2h
+# backlog. A pgrep guard skips the tick if a pass is still running.
 #
 # USAGE
 #   nohup scripts/psb_tooling_daemon.sh > /dev/null 2>&1 < /dev/null & disown
@@ -46,9 +52,11 @@ VENV_PY="$REPO/.venv/bin/python"
 ROTATE_SH="$REPO/scripts/rotate_ghost_logs.sh"
 SETTLER="$REPO/scripts/settle_stopped_trades.py"
 BAND_GUARD="$REPO/scripts/blocked_band_guard.py"
+GHOST_SETTLER="$REPO/scripts/settle_rejected_candidates.py"
 
 SETTLE_EVERY_SEC=1800      # 30 min — the settler is idempotent and cheap
 GUARD_EVERY_SEC=3600       # 60 min — the release guards hit the GAMMA API, don't spam it
+GHOST_SETTLE_EVERY_SEC=14400  # 4h — checkpointed incremental ghost settle (operator GO 08-18)
 ROTATE_AT_HOUR=4           # 04:15 local, matching the schedule the dead agent had
 ROTATE_AT_MIN=15
 TICK_SEC=60
@@ -128,6 +136,7 @@ log "TCC PROBE: ok — can write data/calibration"
 
 LAST_SETTLE=0
 LAST_GUARD=0
+LAST_GHOST_SETTLE=0
 LAST_ROTATE_DAY=""
 
 while true; do
@@ -191,6 +200,21 @@ while true; do
       log "GUARD SKIP: venv python or blocked_band_guard.py missing"
     fi
     LAST_GUARD=$NOW
+  fi
+
+  # ── ghost settle cadence (operator GO 2026-08-18) ──────────────────────────
+  # Keeps rejected_candidates_settled.jsonl current for Phase C training + S3
+  # probe graduation. Checkpointed + idempotent; skipped if a pass is running.
+  if [ $((NOW - LAST_GHOST_SETTLE)) -ge "$GHOST_SETTLE_EVERY_SEC" ]; then
+    if pgrep -f "settle_rejected_candidates.py" >/dev/null 2>&1; then
+      log "GHOST-SETTLE SKIP: a pass is already running"
+    elif [ -x "$VENV_PY" ] && [ -f "$GHOST_SETTLER" ]; then
+      GSOUT=$(nice -n 19 "$VENV_PY" "$GHOST_SETTLER" --once --throttle 0.05 2>&1 | tail -2)
+      log "GHOST-SETTLE: $(echo "${GSOUT:-no output}" | tr '\n' ' | ')"
+    else
+      log "GHOST-SETTLE SKIP: venv python or script missing"
+    fi
+    LAST_GHOST_SETTLE=$NOW
   fi
 
   # ── ghost log rotation, once per day at ROTATE_AT ──────────────────────────
