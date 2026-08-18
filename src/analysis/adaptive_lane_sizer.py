@@ -61,6 +61,11 @@ STATE_PATH = ROOT / "data" / "calibration" / "adaptive_sizer_state.json"
 SHADOW_LOG = ROOT / "data" / "calibration" / "adaptive_sizer_shadow.jsonl"
 
 # ── defaults (mirrored into config block trading.adaptive_sizer) ──────────────
+# 2026-08-17 exit-geometry-restore boundary (commit 4e7e925, first post-restore session).
+# Trades before this ran a DIFFERENT exit machine (no loss caps, allowlisted TP) — their
+# ROI poisons the mult ranking. Bump this anchor whenever the exit geometry changes class.
+ERA_ANCHOR_SESSION = "test_20260817_152806"
+
 DEFAULTS = {
     "enabled": True,
     "mode": "shadow",          # shadow | live  (live is Phase 2, operator-gated)
@@ -247,6 +252,15 @@ def _recent(rows: List[Dict[str, Any]], lookback_sessions: int) -> Tuple[List[Di
         if sid not in newest_ts or t > newest_ts[sid]:
             newest_ts[sid] = t
     ordered = sorted(newest_ts, key=lambda s: newest_ts[s])  # oldest -> newest
+    # 2026-08-17 ERA ANCHOR (operator GO). The lookback spanned the broken-exit era, so
+    # the sizer rated lanes on full-forfeit losses the OLD exit config caused: after the
+    # geometry restore, xrp|15m|BUY_NO ran 5-0 while sized $5.11 at mult 0.54 (its losses
+    # were the dead-exit era's, not the lane's), and the mult ranking anti-correlated
+    # with live results. Sessions before the exit-geometry-restore boundary are a
+    # DIFFERENT exit machine; ROI measured under it does not describe the current one.
+    # Same era-poisoning class as Kelly's 96/4 blend. Anchor is compared lexically
+    # against session ids (test_YYYYMMDD_HHMMSS sorts chronologically).
+    ordered = [s for s in ordered if s >= ERA_ANCHOR_SESSION]
     recent = ordered[-lookback_sessions:] if lookback_sessions > 0 else ordered
     keep = set(recent)
     return [r for r in rows if r.get("session_id") in keep], list(recent)
