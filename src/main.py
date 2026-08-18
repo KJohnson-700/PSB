@@ -2292,7 +2292,13 @@ class PolyBot:
             checks["funder_set"] = bool(getattr(cc, "_funder_address", None))
             checks["client_constructed"] = cc.client is not None
             if cc.client is not None:
-                checks["l2_creds_fresh"] = bool(await cc.ensure_fresh_credentials())
+                # force_rederive: the tracked cred age only says when we LOADED the
+                # .env creds, not when they were derived — the first boot preflight
+                # hit a 401 on stale static creds while the clock said "fresh". A
+                # forced derive is the real L1-signed auth roundtrip and self-heals.
+                checks["l2_creds_fresh"] = bool(
+                    await cc.ensure_fresh_credentials(force_rederive=True)
+                )
                 bal = await cc.get_cash_balance()
                 checks["balance_read"] = bal is not None
                 if bal is not None:
