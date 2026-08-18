@@ -531,6 +531,19 @@ trading:
     hold_mfe_conditional_stop_enabled: true   # 2026-08-17 ENABLED (operator: "stop building things I need and leaving them disabled"). Restores the Olympus loss geometry: 07-22 +$561 session cut 89% of losses before -60% (avg depth -32%); since early_stop_windows:[] on 08-16 the bot had ZERO active loss caps — 70 straight full-forfeit losses at avg -97% of stake, b collapsed 1.62->0.43. Never-green (peak MFE<8%) cut at -34%; ever-green rides (90% WR held), so the 08-16 sol-1h bad-stop class cannot recur. Was: false. 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
     hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
     hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
+    # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO: "G=40, floor -34%, 5m/15m only, not 1h").
+    # Live post-restore data killed the blanket ever-green ride on fast windows: 5/5 riders (all 5m,
+    # peak MFE +13.7..+32.4%) resolved -103% full forfeit, -$49.76, ZERO rider wins — the "riders
+    # recover 90-99%" ghost split was measured inside the broken-era exit stack. Once peak MFE >= the
+    # +8% arm, exit when pnl gives back `points` from the peak: peaked +15% -> exits ~-25%; peaked
+    # +31% -> exits ~-9%; trigger clamped to [breakeven .. -34%] (never deeper than the never-green
+    # cut). 1h EXEMPT (sol-1h peak+45.7% cut -55.4% would-have-won class). Exit reason stays
+    # hold_catastrophic_stop (graders' reason lists rot); telemetry label = evergreen_giveback_stop.
+    # CODE is restart-class (live_testing not in _HOT_RELOAD_CODE_MODULES); these keys hot-reload
+    # once the code is in. REVERT: hold_evergreen_giveback_enabled: false.
+    hold_evergreen_giveback_enabled: true
+    hold_evergreen_giveback_points: 0.40
+    hold_evergreen_giveback_windows: ["5m", "15m"]
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
     tp_giveback_enabled: false   # 2026-08-13 DISABLED (operator GO). MEASURED against its own

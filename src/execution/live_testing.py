@@ -314,6 +314,17 @@ class PositionExitManager:
         self._mfe_cond_stop_enabled = bool(exit_cfg.get("hold_mfe_conditional_stop_enabled", True))
         self._hold_never_green_mfe_arm = float(exit_cfg.get("hold_never_green_mfe_arm", 0.08) or 0.0)
         self._hold_never_green_stop_pct = float(exit_cfg.get("hold_never_green_stop_pct", 0.34) or 0.0)
+        # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO). Live post-restore data
+        # killed the blanket ever-green exemption on fast windows: 5/5 ever-green riders (all 5m,
+        # peak MFE +13.7..+32.4%) resolved to a -103% full forfeit, -$49.76, zero rider wins. The
+        # "riders recover 99%" claim below was measured inside the broken-era exit stack. On the
+        # configured windows, once peak MFE >= the never-green arm, cut when pnl gives back
+        # `giveback_points` from the peak (floor clamped to [breakeven .. never-green -34%]).
+        # 1h stays exempt (the sol-1h peak+45.7%-cut-at--55.4% would-have-won class). RESTART-CLASS.
+        self._hold_evergreen_giveback_enabled = bool(exit_cfg.get("hold_evergreen_giveback_enabled", False))
+        self._hold_evergreen_giveback_points = float(exit_cfg.get("hold_evergreen_giveback_points", 0.40) or 0.40)
+        _gbw = exit_cfg.get("hold_evergreen_giveback_windows", ["5m", "15m"])
+        self._hold_evergreen_giveback_windows = {str(w).lower() for w in (_gbw or [])}
         # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
         # updown_hold_winners_to_resolution=True, which DISABLES the regular take_profit (_tp_mark_ready
         # requires `not hold_winners`) — so a winner that peaks then reverses has NO way to bank and rides
@@ -653,8 +664,26 @@ class PositionExitManager:
         # flat cut chopped the fresh-session eth-5m / xrp-15m trades (peak +15% -> cut -57%)
         # right before they'd have recovered. The never-green shallow cut above is the ONLY
         # intended change vs the window axis; ever-green defers to the window axis unchanged.
+        # 2026-08-17 SUPERSEDED on the give-back windows: live post-restore riders went 0/5
+        # (-$49.76, every one a -103% forfeit) — see __init__ giveback block. NOT a flat cut:
+        # the floor is peak-relative (peak +31% -> exit -9%), so a still-climbing runner or a
+        # shallow dip is untouched; only a full round-trip through `giveback_points` exits.
         if _is_fav:
             return base if base > 0.0 else None
+        if getattr(self, "_hold_evergreen_giveback_enabled", False):
+            _gb_label = str(infer_updown_window_size(
+                getattr(pos, "window_size", "") or "",
+                opened_at=getattr(pos, "opened_at", None),
+                end_date=getattr(pos, "end_date", None),
+            )).lower()
+            if _gb_label in getattr(self, "_hold_evergreen_giveback_windows", set()):
+                _gb = self._hold_evergreen_giveback_points - float(peak_pnl_pct or 0.0)
+                _gb_cap = float(getattr(self, "_hold_never_green_stop_pct", 0.34) or 0.34)
+                if base > 0.0:
+                    _gb_cap = min(_gb_cap, base)
+                _gb = max(0.0, min(_gb, _gb_cap))
+                setattr(pos, "_hold_giveback_floor", _gb)
+                return _gb
         return base if (base > 0.0 and self._window_keeps_early_stop(pos)) else None
 
     def _preopen_lag_secs(self, pos) -> float:
@@ -1707,10 +1736,19 @@ class PositionExitManager:
                     and pnl_pct <= -_eff_cat
                 ):
                     _shallow = _eff_cat < _cat - 1e-9
+                    _gbf = getattr(pos, "_hold_giveback_floor", None)
+                    _is_gb = _gbf is not None and abs(_eff_cat - _gbf) < 1e-9
                     setattr(pos, "_hold_policy_applied",
-                            "never_green_stop" if _shallow else "catastrophic_stop")
+                            "evergreen_giveback_stop" if _is_gb
+                            else ("never_green_stop" if _shallow else "catastrophic_stop"))
                     reason = "hold_catastrophic_stop"
-                    if _shallow:
+                    if _is_gb:
+                        logger.info(
+                            "HOLD EVER-GREEN GIVE-BACK: %s peaked +%.1f%% then gave back — cutting at "
+                            "-%.0f%% (pnl=%.1f%%) instead of riding to resolution",
+                            pos.market_id, peak_pnl_pct * 100.0, _eff_cat * 100.0, pnl_pct * 100.0,
+                        )
+                    elif _shallow:
                         logger.info(
                             "HOLD NEVER-GREEN STOP: %s never went green (peak=%.1f%%) — cutting at "
                             "-%.0f%% (pnl=%.1f%%) instead of riding to -%.0f%% catastrophic",
@@ -1744,13 +1782,17 @@ class PositionExitManager:
                 _eff_cat_ind = self._hold_stop_pct_for(pos, _cat_ind, peak_pnl_pct)
                 if _cat_ind > 0.0 and _eff_cat_ind is not None and pnl_pct <= -_eff_cat_ind:
                     _shallow = _eff_cat_ind < _cat_ind - 1e-9
+                    _gbf = getattr(pos, "_hold_giveback_floor", None)
+                    _is_gb = _gbf is not None and abs(_eff_cat_ind - _gbf) < 1e-9
                     setattr(pos, "_hold_policy_applied",
-                            "never_green_stop" if _shallow else "catastrophic_stop")
+                            "evergreen_giveback_stop" if _is_gb
+                            else ("never_green_stop" if _shallow else "catastrophic_stop"))
                     reason = "hold_catastrophic_stop"
                     logger.info(
                         "HOLD %s (independent, hold_all): %s pnl=%.1f%% <= -%.0f%% peak=%.1f%% "
                         "— cutting loser (was riding to -100%%)",
-                        "NEVER-GREEN STOP" if _shallow else "CATASTROPHIC-STOP",
+                        "EVER-GREEN GIVE-BACK" if _is_gb
+                        else ("NEVER-GREEN STOP" if _shallow else "CATASTROPHIC-STOP"),
                         pos.market_id, pnl_pct * 100.0, _eff_cat_ind * 100.0, peak_pnl_pct * 100.0,
                     )
 

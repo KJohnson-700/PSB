@@ -9,6 +9,7 @@ run separately, decides promotion). Add a row here the moment you ship anything.
 
 Usage: .venv/bin/python scripts/probation_check.py   (add --json for machine output)
 """
+import glob
 import json
 import os
 import re
@@ -550,6 +551,50 @@ def check_all():
         except Exception as e:
             add("fingerprint_contract", "WARN",
                 f"contract check failed: {type(e).__name__}")
+
+    # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO). Riders (peak MFE>=8%)
+    # on 5m/15m went 0/5 to -103% forfeits post-restore; the giveback floor cuts them at
+    # peak-40pts instead. BROKEN = a 5m/15m updown_expired FULL-FORFEIT (pnl<=-95% of
+    # stake) with peak MFE >= 8% AFTER the code ships (means the floor is not delivering).
+    # Until the first evergreen_giveback_stop label appears, the row reads PROBATION.
+    _GB_SHIP_TS = "2026-08-18T05:50:00"
+    try:
+        _gb_bad = 0
+        _gb_fired = 0
+        for _f_ in sorted(glob.glob(os.path.join(_REPO, "data/paper_trades/test_*/entries.jsonl")))[-2:]:
+            with open(_f_, errors="ignore") as _fh_:
+                for _ln_ in _fh_:
+                    try:
+                        _d_ = json.loads(_ln_)
+                    except Exception:
+                        continue
+                    if _d_.get("event") != "EXIT" or str(_d_.get("timestamp", "")) < _GB_SHIP_TS:
+                        continue
+                    _x_ = _d_.get("extra") or {}
+                    if str(_x_.get("hold_policy_applied") or "") == "evergreen_giveback_stop":
+                        _gb_fired += 1
+                    if "expired" not in (_d_.get("reason") or ""):
+                        continue
+                    if str(_x_.get("lane_window") or "") not in ("5m", "15m"):
+                        continue
+                    try:
+                        _mfe_ = float(_x_.get("mfe_pct") or 0.0)
+                        _nt_ = float(_d_["size"]) * float(_d_["entry_price"])
+                        _dep_ = float(_d_["pnl"]) / _nt_ if _nt_ > 0 else 0.0
+                    except Exception:
+                        continue
+                    if _mfe_ >= 0.08 and _dep_ <= -0.95:
+                        _gb_bad += 1
+        if _gb_bad > 0:
+            add("evergreen_giveback", "BROKEN",
+                f"{_gb_bad} ever-green 5m/15m rider(s) STILL full-forfeited after ship "
+                f"— giveback floor not delivering (restart missing or branch dead)")
+        else:
+            add("evergreen_giveback", "PROBATION",
+                f"no rider forfeits since ship; giveback fired {_gb_fired}x "
+                f"(restart-class — inert until next restart)")
+    except Exception as e:
+        add("evergreen_giveback", "WARN", f"giveback check failed: {type(e).__name__}")
 
     _audit = os.path.join(_REPO, "scripts/config_audit.py")
     if not os.path.isfile(_audit):
