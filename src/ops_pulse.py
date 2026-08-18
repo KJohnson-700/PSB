@@ -535,6 +535,8 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "ts": datetime.now(timezone.utc).isoformat(),
         "loop": loop,
         "session_id": getattr(bot.journal, "session_id", None),
+        "rolled_from": getattr(bot, "_rolled_from", None),   # 2026-08-18 hot session rollover marker
+        "rollover_draining": bool(getattr(bot, "_rollover_draining", False)),
         "journal_dir": session_dir,
         "dry_run": bool(trading.get("dry_run", True)),
         "kill_switch": bool(bot._kill_switch_active()) if hasattr(bot, "_kill_switch_active") else False,

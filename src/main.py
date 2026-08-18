@@ -915,6 +915,13 @@ class PolyBot:
         self._code_reload_flag_path = os.path.join(_repo_root, "data", "reload_code.flag")
         self._code_reload_flag_seen_mtime_ns: Optional[int] = self._code_reload_flag_mtime_ns()
         self._code_reload_broken: bool = False
+        # 2026-08-18 PHASE 1 HOT SESSION ROLLOVER (operator GO; Codex GO, 6 conditions).
+        # Guarded request file: write the CURRENT session id (or "now") into
+        # data/session_rollover.request to drain entries and roll the journal to a
+        # fresh session WITHOUT killing the process. See _maybe_session_rollover.
+        self._rollover_request_path = os.path.join(_repo_root, "data", "session_rollover.request")
+        self._rollover_draining: bool = False
+        self._rolled_from: Optional[str] = None
         # Strong refs to fire-and-forget background tasks: without this the event
         # loop only weakly references tasks and may GC them mid-flight (silently
         # killing e.g. the price websocket). See _spawn_bg.
@@ -2120,6 +2127,130 @@ class PolyBot:
         logging.info(
             "CODE_RELOAD ok modules=%d strategies=7 dur_ms=%.0f", len(reloaded), (_t.monotonic() - t0) * 1000.0
         )
+
+    # ── 2026-08-18 PHASE 1: HOT SESSION ROLLOVER (paper→paper, no restart) ────────
+    # Operator GO; Codex GO with 6 mandatory conditions (task #21):
+    #   1. drain flag blocks NEW entries (checked first in _check_lane_execution);
+    #   2. the swap is one synchronous block — no awaits — so asyncio guarantees it
+    #      serializes against every other coroutine's journal/accounting writes;
+    #   3. gate on zero journal positions AND zero risk-manager positions AND zero
+    #      venue pending orders, re-checked every cycle while draining;
+    #   4. request-file consume + summary finalization atomic/idempotent (request
+    #      removed BEFORE the swap so a crash cannot re-roll; summary writes via
+    #      atomic os.replace inside _save_summary);
+    #   5. explicit OPS_JSON events: requested / refused / draining / executed / failed;
+    #   6. session_id + rolled_from surfaced in the ops pulse (dashboard-visible).
+    # DELIBERATELY WARM (Codex: rollover is an ACCOUNTING boundary, not a behavioral
+    # reset): exposure daily-loss counters, risk halt flags, the dup-trade cache
+    # (_session_traded_market_ids), rate limits, lane adapters, Kelly streak memory.
+    # Fresh bankroll + warm Kelly streaks is a documented hybrid state (paper-paper OK).
+
+    def _ops_rollover_event(self, status: str, **fields: Any) -> None:
+        payload: Dict[str, Any] = {
+            "event": "session_rollover",
+            "status": status,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_id": getattr(self.journal, "session_id", None),
+            "rolled_from": self._rolled_from,
+        }
+        payload.update(fields)
+        logging.warning("OPS_JSON %s", json.dumps(payload, default=str))
+
+    def _maybe_session_rollover(self) -> None:
+        """Per-cycle check of data/session_rollover.request. Sync on purpose — no awaits."""
+        path = self._rollover_request_path
+        if not os.path.isfile(path):
+            if self._rollover_draining:
+                # Operator withdrew the request mid-drain: resume normal trading.
+                self._rollover_draining = False
+                self._ops_rollover_event("refused", reason="request_file_removed_mid_drain")
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                content = f.read().strip()
+        except OSError as e:
+            self._ops_rollover_event("failed", reason=f"request_unreadable:{type(e).__name__}")
+            return
+        current_id = str(getattr(self.journal, "session_id", "") or "")
+        if content not in (current_id, "now"):
+            # Guard: a stale request naming an older session must not roll a new boot.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self._rollover_draining = False
+            self._ops_rollover_event(
+                "refused",
+                reason="stale_or_bad_request_content",
+                content=content[:60],
+                expected=current_id,
+            )
+            return
+        if not self._is_dry_run_mode():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self._rollover_draining = False
+            self._ops_rollover_event("refused", reason="live_mode_phase1_is_paper_only")
+            return
+        if not self._rollover_draining:
+            self._rollover_draining = True
+            self._ops_rollover_event("requested", request_content=content[:60])
+        open_journal = len(self.journal.get_open_positions())
+        open_risk = len(getattr(self.risk_manager, "active_positions", {}) or {})
+        pending = len(getattr(getattr(self, "clob_client", None), "pending_orders", {}) or {})
+        if open_journal or open_risk or pending:
+            self._ops_rollover_event(
+                "draining",
+                open_positions=open_journal,
+                risk_positions=open_risk,
+                pending_orders=pending,
+            )
+            return
+        # Flat book — execute the swap in one sync block (condition 2).
+        old_id = current_id
+        try:
+            os.remove(path)  # consume FIRST: a crash below must not re-roll (condition 4)
+        except OSError:
+            pass
+        try:
+            self.journal._save_positions()
+            self.journal._save_summary()  # atomic os.replace inside
+            new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
+            if new_id == old_id:
+                new_id = f"{new_id}b"
+            new_journal = TradeJournal(session_id=new_id, resume_latest=False)
+            # Durable rolled_from marker (condition 6). NOT a journal ANNOTATION —
+            # those are dropped by the journal-slim keep-events filter by default.
+            _meta_path = str(new_journal.session_dir / "session_meta.json")
+            _meta_tmp = _meta_path + ".tmp"
+            with open(_meta_tmp, "w", encoding="utf-8") as _mf:
+                json.dump(
+                    {
+                        "rolled_from": old_id,
+                        "created_by": "hot_session_rollover",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    },
+                    _mf, indent=2,
+                )
+            os.replace(_meta_tmp, _meta_path)
+            self.journal = new_journal
+            self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
+            self.bankroll_source = "rollover_fresh"
+            self._rolled_from = old_id
+            self._fresh_session_created = True
+            self._rollover_draining = False
+            self._ops_rollover_event("executed", rolled_from=old_id, bankroll=self.bankroll)
+            logging.warning(
+                "[ROLLOVER] session %s -> %s (hot, no restart; bankroll reset to %.2f; "
+                "exposure/risk/dup-cache state deliberately WARM)",
+                old_id, new_id, self.bankroll,
+            )
+        except Exception as e:
+            self._rollover_draining = False
+            self._ops_rollover_event("failed", reason=f"{type(e).__name__}: {e}")
+            logging.exception("[ROLLOVER] failed — old journal remains active")
 
     def _maybe_hot_reload_config_file(self) -> None:
         """Apply runtime-safe settings.yaml edits without restarting the bot."""
@@ -5591,6 +5722,7 @@ class PolyBot:
             },
         )
         self._maybe_hot_reload_config_file()
+        self._maybe_session_rollover()
 
         from src.ops_pulse import _scan_skip_digest, _side_selection_digest, log_ops_pulse
 
@@ -6765,6 +6897,14 @@ class PolyBot:
         # this can't attribute to the wrong lane. Skip placing the order if this exact
         # lane (window|side) is loss-paused. Per-lane not per-asset. Live-only (inert in
         # paper unless exposure.loss_kill_apply_in_paper).
+        # 2026-08-18 ROLLOVER DRAIN (condition 1): while a session rollover is draining,
+        # no NEW entries — every entry impl routes through this choke.
+        if getattr(self, "_rollover_draining", False):
+            logging.info(
+                "[ROLLOVER] draining — blocking new entry %s %s|%s",
+                strategy, lane_meta.get("lane_window"), lane_meta.get("lane_side"),
+            )
+            return False
         _km = self._get_exposure_manager_for(strategy)
         if _km is not None:
             try:

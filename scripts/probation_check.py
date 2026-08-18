@@ -596,6 +596,33 @@ def check_all():
     except Exception as e:
         add("evergreen_giveback", "WARN", f"giveback check failed: {type(e).__name__}")
 
+    # 2026-08-18 PHASE 1 HOT SESSION ROLLOVER (operator GO, Codex 6 conditions).
+    # data/session_rollover.request drains + rolls the journal without a restart.
+    # BROKEN = a "failed" rollover event in the newest bot log. Otherwise PROBATION,
+    # reporting the last executed rollover if any. RESTART-class until first loaded.
+    try:
+        _rl_logs = sorted(glob.glob(os.path.join(_REPO, "data/logs/polybot_*.log")))
+        _rl_fail = _rl_exec = None
+        if _rl_logs:
+            with open(_rl_logs[-1], errors="ignore") as _fh_:
+                for _ln_ in _fh_:
+                    if '"event": "session_rollover"' not in _ln_:
+                        continue
+                    if '"status": "failed"' in _ln_:
+                        _rl_fail = _ln_.strip()[-220:]
+                    elif '"status": "executed"' in _ln_:
+                        _rl_exec = _ln_.strip()[-220:]
+        if _rl_fail:
+            add("session_rollover", "BROKEN", f"rollover FAILED: ...{_rl_fail[-160:]}")
+        elif _rl_exec:
+            add("session_rollover", "PROBATION", f"last executed: ...{_rl_exec[-160:]}")
+        else:
+            add("session_rollover", "PROBATION",
+                "shipped, unexercised (restart-class — loads at next restart; "
+                "trigger: write current session id or 'now' to data/session_rollover.request)")
+    except Exception as e:
+        add("session_rollover", "WARN", f"rollover check failed: {type(e).__name__}")
+
     _audit = os.path.join(_REPO, "scripts/config_audit.py")
     if not os.path.isfile(_audit):
         add("config_audit", "BROKEN", "scripts/config_audit.py MISSING")
