@@ -518,6 +518,39 @@ def check_all():
     except Exception as e:
         add("est_calibration", "WARN", f"est-cal check failed: {type(e).__name__}")
 
+    # 2026-08-17 FINGERPRINT CONTRACT (operator GO). The 102-session forensic showed every
+    # big winner satisfied six geometry invariants and every Aug losing era violated at
+    # least one — each dismantling step was locally justified and invisible until the
+    # bleed. This row pages the moment the rolling exit-shape breaks the winning
+    # fingerprint, which is the level at which "behavior shifts after restart" actually
+    # matters. VIOLATION => BROKEN (rc=4 from the script). ACCRUING (< 25 closes since
+    # the geometry-restore anchor) is not a violation.
+    _fp = os.path.join(_REPO, "scripts/fingerprint_contract.py")
+    if not os.path.isfile(_fp):
+        add("fingerprint_contract", "BROKEN", "scripts/fingerprint_contract.py MISSING")
+    else:
+        try:
+            _p = subprocess.run(
+                [os.path.join(_REPO, ".venv/bin/python"), _fp, "--json"],
+                capture_output=True, text=True, timeout=120,
+            )
+            _j = json.loads((_p.stdout or "").strip().splitlines()[-1])
+            _mtx = (f"n={_j.get('n')} b={_j.get('b')} stop={_j.get('stop_share')} "
+                    f"tp={_j.get('tp_share')} res={_j.get('res_share')} "
+                    f"lossD={_j.get('loss_depth')} avgE={_j.get('avg_entry')}")
+            if _j.get("verdict") == "VIOLATION":
+                add("fingerprint_contract", "BROKEN",
+                    f"WINNING SHAPE BROKEN: {'; '.join(_j.get('violations', []))} [{_mtx}]")
+            elif _j.get("verdict") == "ACCRUING":
+                add("fingerprint_contract", "PROBATION",
+                    f"accruing {_j.get('n')}/25 closes since restore anchor [{_mtx}]")
+            else:
+                add("fingerprint_contract", "PROBATION",
+                    f"shape OK [{_mtx}]")
+        except Exception as e:
+            add("fingerprint_contract", "WARN",
+                f"contract check failed: {type(e).__name__}")
+
     _audit = os.path.join(_REPO, "scripts/config_audit.py")
     if not os.path.isfile(_audit):
         add("config_audit", "BROKEN", "scripts/config_audit.py MISSING")
