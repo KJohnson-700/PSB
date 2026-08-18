@@ -136,7 +136,15 @@ trading:
     take_profit_pct: 0.3
     hold_fixed_take_profit:
       enabled: true
-      threshold_pct: 0.40
+      threshold_pct: 0.55   # 2026-08-18 0.40 -> 0.55 (operator "fix it now"; the win-size lever).
+      # 137 post-restore closes: avgW +4.15 vs the winners' +7.2-9.1 — the ONLY invariant
+      # still broken. All 67 wins were +40% banks; 15/67 had ALREADY passed +55% at bank
+      # time (tail +59..+85) — the bar was beheading June-sized wins on every trade. June's
+      # effective banking ran ~55-65%. SAFE NOW because the ever-green give-back floor
+      # (all windows) sits underneath: a +45%-peaker that reverses exits ~flat, not -103%.
+      # Marginal peakers (+40-54) are ~EV-neutral at resolution odds; the >=55 tail is pure
+      # gain. REVERT: 0.40 (hot-reloadable). Watch: avgW must move toward +7 within ~40
+      # closes or revert; fingerprint contract pages any shape break.
       # 2026-08-17 ALL-LANES (operator GO, Codex GO). The per-lane allowlist was
       # rearview whack-a-mole: it was built from the 08-16 session's giveback losers,
       # and the NEXT session's giveback came from 4 lanes NOT on it (eth|5m|up peaked
@@ -561,7 +569,13 @@ trading:
     # once the code is in. REVERT: hold_evergreen_giveback_enabled: false.
     hold_evergreen_giveback_enabled: true
     hold_evergreen_giveback_points: 0.40
-    hold_evergreen_giveback_windows: ["5m", "15m"]
+    # 2026-08-18 "1h" ADDED (operator "fix my bot"; Codex retro-review queued in #28 —
+    # its "not 1h yet" was pre-data caution, and the data arrived: eth|1h|up rider peaked
+    # +19.4% then full-forfeited -103% (-$15.68 = 75% of the session deficit), the exact
+    # class the floor closes. The sol-1h counter-case (peak +45.7%, cat-stopped -55.4%,
+    # would-have-won) is handled BETTER by the peak-relative floor: peak>=40pts => trigger
+    # clamps to breakeven, so it exits ~flat instead of -55%. REVERT: drop "1h" (hot).
+    hold_evergreen_giveback_windows: ["5m", "15m", "1h"]
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
     tp_giveback_enabled: false   # 2026-08-13 DISABLED (operator GO). MEASURED against its own
@@ -3049,9 +3063,19 @@ risk:
                                 # rolling REALIZED $/trade over the RECENT era and self-flips:
                                 # sits an hour out while it bleeds, restores it when it recovers.
     enabled: true
-    lookback_sessions: 40       # recent-era window. 40 chosen by sweep: 10 gave n<15 in nearly
-                                # every hour (fail-open, gated nothing); 40 yields ~890 closes and a
-                                # STABLE outlier set (01/05/22 PT reproduce at 60 too).
+    lookback_sessions: 6        # 2026-08-18 ERA ANCHOR (operator GO — "get the bot back trading").
+                                # WAS 40, which pooled the hold-all / fixed-TP-allowlist / favorite
+                                # eras: the -103% forfeits of the BROKEN EXIT MACHINE, distributed
+                                # across the clock, branded hours {2,4,6,13} as bleeders — including
+                                # the historically BEST 5-7am PT window. It sat the 7-1 xrp|15m|down
+                                # winner out for a whole hour on 08-18 while only eth 5m traded.
+                                # 6 = post-geometry-restore sessions only (test_20260817_152806+).
+                                # Below min_samples the gate FAILS OPEN by design, so no hour blocks
+                                # until the restored machine accrues clean per-hour data, then it
+                                # relearns honestly. Same era-anchor pattern as the adaptive sizer
+                                # (a2278e9). The old "40 chosen by sweep" rationale measured sample
+                                # STABILITY, not era validity — pooling eras was the exact poison.
+                                # REVERT: 40 (hot-reloadable, ~15min TTL).
     min_samples: 25             # closes needed in an hour before it may be gated (else fail-open)
     sit_out_delta: -1.50        # hour avg $/trade THIS FAR BELOW the same-era baseline => sit out
     recover_delta: -0.50        # ...stays out until it climbs back above this (hysteresis)
