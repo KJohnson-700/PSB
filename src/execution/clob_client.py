@@ -204,6 +204,14 @@ class CLOBClient:
         self._paper_entry_fresh_fill = bool(
             _trading_config.get("paper_entry_fresh_fill", False)
         )
+        # 2026-08-18 OBSERVE-ONLY book snapshot (#29, operator order). paper_entry_fresh_fill
+        # shipped FALSE in its own ship commit (e921345) so entry_paper_fill_quality was null
+        # on 100% of entries — the book-at-fill data loop never closed. This flag records the
+        # SAME book snapshot + hypothetical walk WITHOUT touching the fill: price, size, and
+        # no-fill behavior are byte-identical to observe=off. Default ON (telemetry only).
+        self._paper_entry_book_observe = bool(
+            _trading_config.get("paper_entry_book_observe", True)
+        )
         self._paper_entry_fresh_fill_slip_tol = float(
             _trading_config.get(
                 "paper_entry_fresh_fill_slippage_tol",
@@ -1461,6 +1469,67 @@ class CLOBClient:
             _eff_price = price
             _eff_size = size
             _paper_fill_quality = None  # PAPER CALIB Phase 2.5 executability proof
+            if (
+                not self._paper_entry_fresh_fill
+                and self._paper_entry_book_observe
+                and str(side).upper() == "BUY"
+            ):
+                # OBSERVE-ONLY (#29): record the book + a hypothetical walk; never alters
+                # _eff_price/_eff_size and never no-fills. Fail-open on any error.
+                try:
+                    _obs_book = await self.fetch_order_book_snapshot(token_id)
+                    if isinstance(_obs_book, dict):
+                        _obs_asks = sorted(
+                            (
+                                (float(lv.get("price")), float(lv.get("size")))
+                                for lv in (_obs_book.get("asks") or [])
+                                if lv.get("price") is not None and lv.get("size") is not None
+                            ),
+                            key=lambda x: x[0],
+                        )
+                        _obs_bids = sorted(
+                            (
+                                float(lv.get("price"))
+                                for lv in (_obs_book.get("bids") or [])
+                                if lv.get("price") is not None and float(lv.get("size") or 0) > 0
+                            ),
+                            reverse=True,
+                        )
+                        if _obs_asks:
+                            _obs_limit = price + self._paper_entry_fresh_fill_slip_tol
+                            try:
+                                _obs_px, _obs_filled = simulate_book_fill(
+                                    "BUY", size, _obs_asks, marketable=False,
+                                    limit_price=_obs_limit, pad_remainder_at_worst=False,
+                                )
+                            except Exception:
+                                _obs_px, _obs_filled = None, None
+                            _obs_ask = _obs_asks[0][0]
+                            _obs_bid = _obs_bids[0] if _obs_bids else None
+                            _paper_fill_quality = {
+                                "paper_fill_model": "observe_only",
+                                "requested_price": round(float(price), 4),
+                                "sim_fill_price": (round(float(_obs_px), 4) if _obs_px else None),
+                                "sim_filled_size": (round(float(_obs_filled), 4) if _obs_filled else None),
+                                "sim_fill_ratio": (
+                                    round(float(_obs_filled) / float(size), 4)
+                                    if _obs_filled and size else None
+                                ),
+                                "entry_best_ask": round(float(_obs_ask), 4),
+                                "entry_best_bid": (round(float(_obs_bid), 4) if _obs_bid is not None else None),
+                                "entry_spread": (
+                                    round(float(_obs_ask - _obs_bid), 4) if _obs_bid is not None else None
+                                ),
+                                "entry_depth_at_limit": round(
+                                    float(sum(sz for px, sz in _obs_asks if px <= _obs_limit)), 4
+                                ),
+                                "fee_usdc": round(
+                                    float(polymarket_taker_fee_usdc(size, price, self._paper_entry_fee_rate)), 4
+                                ),
+                            }
+                except Exception as _obs_exc:
+                    logger.debug("paper entry book-observe failed (fill unaffected): %s", _obs_exc)
+                    _paper_fill_quality = None
             if self._paper_entry_fresh_fill and str(side).upper() == "BUY":
                 try:
                     _book = await self.fetch_order_book_snapshot(token_id)

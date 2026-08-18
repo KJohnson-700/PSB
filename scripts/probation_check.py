@@ -442,6 +442,75 @@ def check_all():
     except Exception as _e:
         add("asset_starvation_24h", "WARN", f"unreadable: {type(_e).__name__}")
 
+    # 2026-08-18 EST-CAL SIZING CONSUMER (#27). Phase A's state refit on cadence but had
+    # ZERO consumers in src/ — "sizing-only" was a state file nothing read. The consumer
+    # (src/analysis/est_cal.py, wired at all three true-Kelly sites) self-arms on the
+    # pre-registered walkforward gate (>=150 OOS, cal beats raw AND market). BROKEN =
+    # the wiring vanished; PROBATION = wired (gated or armed, both are correct states).
+    try:
+        _ec_src = open(os.path.join(_REPO, "src/analysis/est_cal.py")).read()
+        _ec_wired = all("from src.analysis.est_cal import sized_win_prob" in
+                        open(os.path.join(_REPO, f"src/strategies/{f}.py")).read()
+                        for f in ("sol_macro", "eth_macro", "bitcoin"))
+        sys.path.insert(0, _REPO)
+        from src.analysis.est_cal import gate_status as _ec_gate
+        _ec_g = _ec_gate()
+        add("est_cal_sizing_consumer",
+            "PROBATION" if _ec_wired else "BROKEN",
+            (f"wired 3/3 sites; {'ARMED' if _ec_g.get('armed') else 'gated'} — {_ec_g.get('why')}")
+            if _ec_wired else "consumer import MISSING from a strategy — sizing hook reverted")
+    except Exception as _e:
+        add("est_cal_sizing_consumer", "WARN", f"unreadable: {type(_e).__name__}")
+
+    # 2026-08-18 ENTRY BOOK OBSERVE (#29). paper_entry_fresh_fill shipped FALSE in its own
+    # ship commit -> entry_paper_fill_quality null on 100% of entries. Observe-only mode
+    # records the book with zero fill change. Verify from OUTPUT once restarted: recent
+    # ENTRY rows must carry a populated paper_fill_quality. Until the restart the row
+    # reads PROBATION (staged, restart-class).
+    try:
+        _obs_flag = bool((trad.get("paper_entry_book_observe", False)))
+        _obs_pop = 0
+        _obs_tot = 0
+        for _sp in sorted(glob.glob(os.path.join(_REPO, "data/paper_trades/test_*/entries.jsonl")))[-1:]:
+            for _ln in open(_sp, errors="ignore"):
+                if '"ENTRY"' not in _ln:
+                    continue
+                try:
+                    _r = json.loads(_ln)
+                except Exception:
+                    continue
+                if _r.get("event") != "ENTRY":
+                    continue
+                _obs_tot += 1
+                if ((_r.get("extra") or {}).get("paper_fill_quality")):
+                    _obs_pop += 1
+        if not _obs_flag:
+            add("entry_book_observe", "BROKEN", "paper_entry_book_observe flipped OFF")
+        elif _obs_pop > 0:
+            add("entry_book_observe", "PROVEN",
+                f"{_obs_pop}/{_obs_tot} current-session entries carry book data")
+        else:
+            add("entry_book_observe", "PROBATION",
+                f"flag ON, staged (restart-class); current session {_obs_pop}/{_obs_tot} populated")
+    except Exception as _e:
+        add("entry_book_observe", "WARN", f"unreadable: {type(_e).__name__}")
+
+    # 2026-08-18 FAVORITE LANE UN-STRANGLED. respect_ai_direction required the BENCHED
+    # direction engine to name a side => 100% of favorite candidates sat out since
+    # 08-14T01:45 and the operator's 08-13 xrp|1h+hype|15m trial never ran. false = the
+    # configuration the 95-100% WR record was built under. Verify from OUTPUT after
+    # restart: SIT-OUT log lines stop / favorite entries reappear on the two lanes.
+    try:
+        _fl = (c.get("favorite_lane") or {})
+        _fl_ok = (_fl.get("respect_ai_direction") is False
+                  and _fl.get("allow_lanes") == ["xrp_macro|1h", "hype_macro|15m"])
+        add("favorite_lane_unstrangled",
+            "PROBATION" if _fl_ok else "BROKEN",
+            f"respect_ai_direction={_fl.get('respect_ai_direction')} allow_lanes={_fl.get('allow_lanes')}"
+            + ("" if _fl_ok else " — EXPECTED false + the 2-lane allowlist"))
+    except Exception as _e:
+        add("favorite_lane_unstrangled", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused

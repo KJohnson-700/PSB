@@ -209,8 +209,16 @@ while true; do
     if pgrep -f "settle_rejected_candidates.py" >/dev/null 2>&1; then
       log "GHOST-SETTLE SKIP: a pass is already running"
     elif [ -x "$VENV_PY" ] && [ -f "$GHOST_SETTLER" ]; then
-      GSOUT=$(nice -n 19 "$VENV_PY" "$GHOST_SETTLER" --once --throttle 0.05 2>&1 | tail -2)
-      log "GHOST-SETTLE: $(echo "${GSOUT:-no output}" | tr '\n' ' | ')"
+      # 2026-08-18 BACKGROUNDED: the first (backlog) pass ran 1h40m+ in the foreground and
+      # BLOCKED this sequential loop — the 30-min settler tick went 104m silent and the
+      # probation tooling_daemon row went red (daemon up but not producing). The pgrep
+      # guard above already prevents overlapping passes, so backgrounding is safe; the
+      # pass logs its own completion line.
+      (
+        GSOUT=$(nice -n 19 "$VENV_PY" "$GHOST_SETTLER" --once --throttle 0.05 2>&1 | tail -2)
+        log "GHOST-SETTLE (bg): $(echo "${GSOUT:-no output}" | tr '\n' ' | ')"
+      ) &
+      log "GHOST-SETTLE: pass launched in background (loop not blocked)"
     else
       log "GHOST-SETTLE SKIP: venv python or script missing"
     fi

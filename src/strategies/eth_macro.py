@@ -3496,6 +3496,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                         _win_prob = _cwp(_win_prob, _cal_key)
                     except Exception:
                         pass
+                # 2026-08-18 est-cal SIZING consumer — ETH port of the sol_macro hook (eth
+                # duplicates the scan loop). Self-arming on the pooled walkforward gate
+                # (>=150 OOS, cal beats raw AND market); raw prob untouched until then.
+                # SIZING ONLY. Opt-out: est_cal_sizing_apply: false.
+                if is_updown and bool(self.config.get("est_cal_sizing_apply", True)):
+                    try:
+                        from src.analysis.est_cal import sized_win_prob as _ecal
+                        _win_prob, _ecal_status = _ecal(
+                            _win_prob, _our_price, self._signal_strategy_name, _updown_tf, action
+                        )
+                    except Exception:
+                        pass
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name, bankroll, _win_prob, _our_price, **_kf_kw

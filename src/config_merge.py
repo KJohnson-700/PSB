@@ -21,6 +21,10 @@ ALLOWED_TOP_KEYS = frozenset(
         # in the running bot while disk said ['1h','15m'] (operator-directed 15m AI routing).
         "direction",
         "lane_management",
+        # 2026-08-18: favorite_lane was restart-class, so respect_ai_direction edits sat
+        # dormant on disk while the lane was 100% strangled by the benched AI driver —
+        # the same silent-key class as the 08-12 validator-sync bug two lines up.
+        "favorite_lane",
     }
 )
 

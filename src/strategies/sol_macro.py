@@ -7327,6 +7327,20 @@ class SolMacroStrategy:
                         _win_prob = _cwp(_win_prob, _cal_key)
                     except Exception:
                         pass
+                # 2026-08-18 est-cal SIZING consumer (the hook Phase A never had): shrinks
+                # win_prob toward the market price by the walkforward-graduated per-family k
+                # from data/calibration/est_prob_calibration.json. SELF-ARMING — returns the
+                # raw prob untouched until the pooled walkforward record beats raw AND market
+                # on >=150 out-of-sample trades (pre-registered gate C). SIZING ONLY: admission
+                # edge already passed above on the raw claim. Opt-out: est_cal_sizing_apply: false.
+                if is_updown and bool(self.config.get("est_cal_sizing_apply", True)):
+                    try:
+                        from src.analysis.est_cal import sized_win_prob as _ecal
+                        _win_prob, _ecal_status = _ecal(
+                            _win_prob, _our_price, self._signal_strategy_name, _updown_tf, action
+                        )
+                    except Exception:
+                        pass
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name, bankroll, _win_prob, _our_price, **_kf_kw

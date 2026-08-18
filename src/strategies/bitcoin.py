@@ -5419,6 +5419,23 @@ class BitcoinStrategy:
                     win_probability = max(
                         0.02, min(0.98, float(entry_price) + _side_policy_flat_edge)
                     )
+                # 2026-08-18 est-cal SIZING consumer — BTC port of the sol_macro hook.
+                # Self-arming on the pooled walkforward gate (>=150 OOS, cal beats raw AND
+                # market); raw prob untouched until then. SIZING ONLY — admission already
+                # passed on the raw claim. Skipped when a policy flat-edge reconstructed the
+                # prob above (that prob is sizing policy, not a model claim to calibrate).
+                # Opt-out: est_cal_sizing_apply: false.
+                if not (_side_policy_active and _side_policy_flat_edge > 0.0) and bool(
+                    self.config.get("est_cal_sizing_apply", True)
+                ):
+                    try:
+                        from src.analysis.est_cal import sized_win_prob as _ecal
+                        win_probability, _ecal_status = _ecal(
+                            win_probability, entry_price, self._signal_strategy_name,
+                            _updown_tf, action,
+                        )
+                    except Exception:
+                        pass
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name,
