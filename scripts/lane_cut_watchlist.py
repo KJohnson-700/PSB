@@ -197,11 +197,40 @@ def load(anchor_ts):
 def evaluate():
     anchor_ts = _anchor()
     pre, post = load(anchor_ts)
+    # 2026-08-18: a lane the operator already PAUSED must not keep paging "CUT NOW" —
+    # the eth|5m|BUY_YES row stayed red for an hour after the cut was made. Map the
+    # watchlist's strategy|window|SIDE keys onto lane_management.states (up/down form)
+    # and mark satisfied conditions CUT-DONE.
+    _paused = set()
+    try:
+        import yaml as _yaml
+        _cfg = _yaml.safe_load(open(os.path.join(_REPO, "config/settings.yaml")))
+        for _k, _v in (((_cfg.get("lane_management") or {}).get("states")) or {}).items():
+            if str(_v).lower() == "paused":
+                _paused.add(str(_k))
+    except Exception:
+        _paused = set()
+
+    def _is_paused(lane_key):
+        try:
+            strat, window, side = lane_key.split("|")
+            ud = "up" if side.upper() == "BUY_YES" else "down"
+            return f"{strat}|{window}|{ud}" in _paused
+        except ValueError:
+            return False
+
     out = []
     for lane, spec in WATCH.items():
         s = _stats(post.get(lane, []))
         p = _stats(pre.get(lane, []))
         n = s["n"] if s else 0
+        if _is_paused(lane):
+            state = "CUT-DONE"
+            note = "lane is PAUSED in lane_management.states — condition acted on"
+            out.append({"lane": lane, "state": state, "note": note, "verdict": spec["verdict"],
+                        "rule": spec["rule"], "cut_n": spec["cut_n"], "why": spec["why"],
+                        "baseline": spec["baseline"], "post": s, "pre": p})
+            continue
         if not s:
             state, note = "NO DATA YET", "0 post-fix trades"
         elif n < spec["cut_n"]:

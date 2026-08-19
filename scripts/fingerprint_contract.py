@@ -68,15 +68,32 @@ def classify(reason):
 
 
 def load_window(since, window_n):
+    """(band_rows[-window_n:], fav_rows[-window_n:]).
+
+    2026-08-18 BAND-ONLY SPLIT: the contract's invariants (entries 0.42-0.49,
+    res<=0.10, b) describe the BAND book. When the favorite lane was revived,
+    favorites (entries ~0.90, hold-to-resolution BY DESIGN) polluted the mixed
+    window and faked a VIOLATION (mixed b 0.72 / avgE 0.605 / res 0.38 while
+    band-only read b 1.57 / avgE 0.463 — every invariant passing). The contract
+    now grades band closes only; favorites are reported separately, never graded
+    against band invariants.
+    """
     rows = []
+    fav_rows = []
     for f in sorted(glob.glob(TRADES_GLOB)):
+        fav_ids = set()
         with open(f, errors="ignore") as fh:
             for ln in fh:
                 try:
                     d = json.loads(ln)
                 except Exception:
                     continue
-                if d.get("event") != "EXIT":
+                ev = d.get("event")
+                if ev == "ENTRY":
+                    if ((d.get("extra") or {}).get("side_source")) == "favorite_lane":
+                        fav_ids.add(d.get("trade_id"))
+                    continue
+                if ev != "EXIT":
                     continue
                 ts = str(d.get("timestamp") or "")
                 if ts < since:
@@ -87,9 +104,11 @@ def load_window(since, window_n):
                     nt = float(d["size"]) * e
                 except Exception:
                     continue
-                rows.append((ts, e, pnl, nt, classify(d.get("reason"))))
+                row = (ts, e, pnl, nt, classify(d.get("reason")))
+                (fav_rows if d.get("trade_id") in fav_ids else rows).append(row)
     rows.sort()
-    return rows[-window_n:]
+    fav_rows.sort()
+    return rows[-window_n:], fav_rows[-window_n:]
 
 
 def measure(rows):
@@ -145,14 +164,18 @@ def main():
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    rows = load_window(args.since, args.window)
+    rows, fav_rows = load_window(args.since, args.window)
     m = measure(rows)
     verdict, violations = evaluate(m)
+    fm = measure(fav_rows) if fav_rows else None
 
     if args.json:
-        print(json.dumps({"verdict": verdict, "violations": violations, **m}))
+        out = {"verdict": verdict, "violations": violations, "book": "band", **m}
+        if fm:
+            out["favorites"] = fm
+        print(json.dumps(out))
     else:
-        print(f"=== FINGERPRINT CONTRACT (last {m['n']} closes since {args.since}) ===")
+        print(f"=== FINGERPRINT CONTRACT — BAND BOOK (last {m['n']} closes since {args.since}) ===")
         print(f"  net {m['net']}  WR {m['wr']}  b {m['b']}")
         print(f"  stop {m['stop_share']}  tp {m['tp_share']}  res {m['res_share']}  "
               f"lossDepth {m['loss_depth']}  avgE {m['avg_entry']}")
@@ -161,6 +184,9 @@ def main():
             print(f"    ⛔ {x}")
         if verdict == "ACCRUING":
             print(f"    ({m['n']}/{MIN_N} closes — contract arms at {MIN_N})")
+        if fm:
+            print(f"  favorites (INFO, not graded — different book by design): "
+                  f"n {fm['n']}  WR {fm['wr']}  net {fm['net']}  res {fm['res_share']}  avgE {fm['avg_entry']}")
     return 4 if verdict == "VIOLATION" else 0
 
 
