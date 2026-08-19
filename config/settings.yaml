@@ -872,6 +872,7 @@ lane_management:
     "doge_macro|5m|up": paused     # 2026-08-18 operator "cut them": 0-3 -$22.48 in the TP0.55 era AND negative in winning sessions historically (-$5.60, 2/5 lost). One of the 3 lanes = -$39.70 of the era's -$40.50 band loss.
     "eth_macro|1h|up": paused      # 2026-08-18 operator "cut them": 0-4 -$5.27 this era; lost 3 of 4 winning sessions historically. Exit leak was fixed by the 1h giveback (peak +19.4 forfeit class) but the ENTRIES keep losing.
     "eth_macro|5m|down": paused    # 2026-08-18 operator "cut them" — EXPLICIT operator override of the eth-5m-collection-lane rule for the DOWN side only (eth|5m|up stays ON and collecting): chronic entry-defect lane (08-17 split: BEAT -9.0, entries wrong, exits help), lost 4/8 winning sessions -$30.50, recent era -$41.57, this era 38% WR -$11.95.
+    "eth_macro|5m|up": paused      # 2026-08-18 operator "eth 5min 5 loss in a row cut": 5 straight losses this session (verified) AND the lane_cut_watchlist condition formally MET (n=33>=30, $/trade<0, BEAT<+1.0 — the operator's own 08-16 rule). Full eth 5m book now dark = SECOND explicit operator override of the collection-lane rule. Revisit when est-cal arms (walkforward >=150) — entry quality is the named fix.
   state_meta: {}
   recommendations:
     min_live_trades: 15
