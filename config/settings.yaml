@@ -73,8 +73,8 @@ trading:
   # ENTRY slippage gap with zero real money. Exits are hold-to-resolution (settle $1/$0, no book sale)
   # so entry is the only slippage exposure. Expect: worse entry prices + some no-fills => lower freq,
   # tighter per-trade edge = the honest live picture. RESTART-CLASS (clob_client __init__). false => off (fill at quote).
-  paper_entry_fresh_fill: false
-  paper_entry_book_observe: true   # 2026-08-18 OBSERVE-ONLY book snapshot (#29, operator order). fresh_fill above shipped FALSE in its own ship commit => entry_paper_fill_quality was null on 100% of entries and the book-at-fill loop NEVER closed. This records the same snapshot + hypothetical walk (model "observe_only") with ZERO fill change — price/size/no-fill identical to off. RESTART-CLASS (clob_client __init__).
+  paper_entry_fresh_fill: true   # 2026-08-19 OPERATOR GO — strict fresh-fill ON: paper entries now walk the REAL ask book and NO-FILL when it cannot cross (the 08-18 $12.51 entry into a 9c-spread/zero-depth book that lost -$2.79 becomes a no-trade). Was false since its own ship commit (e921345). Expect: slightly fewer entries, honest fills.
+  paper_entry_book_observe: true   # 2026-08-18 OBSERVE-ONLY book snapshot (#29, operator order). Inert while fresh_fill above is true (fresh-fill records the same fields); the fallback collector if fresh_fill is ever turned off again. RESTART-CLASS (clob_client __init__).
   paper_entry_fresh_fill_slippage_tol: 0.02   # how far past the signal price it will sweep before NO-FILL (2c)
   slippage_guard:
     enabled: true
@@ -573,6 +573,7 @@ trading:
     # would-have-won) is handled BETTER by the peak-relative floor: peak>=40pts => trigger
     # clamps to breakeven, so it exits ~flat instead of -55%. REVERT: drop "1h" (hot).
     hold_evergreen_giveback_windows: ["5m", "15m", "1h"]
+    updown_expiry_grace_mins: 10   # 2026-08-19 OPERATOR GO — expiry settle defer: past-expiry positions HOLD this many minutes so ResolutionTracker (60s poll) settles them binary (Polymarket auto-resolves via Chainlink seconds after close). Past grace => mark-close under the honest label updown_expired_mark_fallback (excluded from resolution grading). Fixes the 08-18 fake settles (exit_price 0.49 on binary markets, 10 in one night); in LIVE this branch would have SOLD held positions at the mid instead of collecting resolution. RESTART-CLASS (live_testing __init__/reload).
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
     tp_giveback_enabled: false   # 2026-08-13 DISABLED (operator GO). MEASURED against its own
@@ -3332,3 +3333,14 @@ monitoring:
     critical_repage_sec: 300
     page_enabled: true
     page_target: "Oracle 2"    # operator moved ops alerts off the Hermes DM
+
+rtds:
+  # 2026-08-19 OPERATOR GO — Polymarket RTDS multi-source oracle (vault psb-new-research-2026-08).
+  # One ws (ws-live-data.polymarket.com) carries Binance + Chainlink; Chainlink IS the
+  # resolution oracle for crypto up/down. OBSERVE-ONLY: background task, fail-open, nothing
+  # reads it for decisions; snapshots to data/calibration/rtds_snapshots.jsonl every 60s.
+  # Future consumers (each its own operator gate): expiry binary settle from the resolution
+  # print · entry price-freshness cross-check · a4385-style manipulation fade (binance vs
+  # chainlink divergence >0.5% near window close).
+  enabled: true
+  max_age_ms: 15000

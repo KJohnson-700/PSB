@@ -3520,6 +3520,19 @@ class PolyBot:
         # Fire-and-forget: narrate the previous session into the new session dir.
         # Off the trading hot path; never awaited.
         self._spawn_bg(self._run_startup_narrators())
+        # 2026-08-19 RTDS multi-source oracle (operator GO; vault psb-new-research-2026-08).
+        # Polymarket's own ws publishes Binance + Chainlink — Chainlink IS the resolution
+        # oracle for crypto up/down. OBSERVE-ONLY: background task, fail-open on any error,
+        # nothing reads it for decisions yet; snapshots to data/calibration/rtds_snapshots.jsonl
+        # so the probation row verifies it from OUTPUT.
+        try:
+            from src.market.rtds_oracle import start as _rtds_start
+            _rtds = _rtds_start(self.config)
+            if _rtds is not None:
+                self._spawn_bg(_rtds.run(), name="rtds_oracle")
+                logging.info("[rtds] oracle task spawned (observe-only)")
+        except Exception as _rtds_exc:  # never block boot on telemetry
+            logging.warning("[rtds] oracle start skipped: %s", _rtds_exc)
         # Ghost-settle reads the full (~GB) rejected/settled calibration logs.
         # Never await it on startup or scan cycles.
         self._schedule_ghost_calibration_refresh(force=True)

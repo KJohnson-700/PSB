@@ -335,6 +335,14 @@ class PositionExitManager:
         # 1h stays exempt (the sol-1h peak+45.7%-cut-at--55.4% would-have-won class). RESTART-CLASS.
         self._hold_evergreen_giveback_enabled = bool(exit_cfg.get("hold_evergreen_giveback_enabled", False))
         self._hold_evergreen_giveback_points = float(exit_cfg.get("hold_evergreen_giveback_points", 0.40) or 0.40)
+        # 2026-08-19 EXPIRY SETTLE DEFER (operator GO). The past-expiry branch used to SELL AT
+        # THE LAST MARK the instant a market expired ("updown_expired" at exit_price 0.49 —
+        # impossible for a binary settle), beating the ResolutionTracker's 60s poll to the
+        # position and recording fiction (10 fake settles on 08-18 alone; in live it would
+        # GIVE AWAY held positions at the mid). Hold through this grace so the tracker settles
+        # binary; past grace, mark-close under the HONEST label updown_expired_mark_fallback
+        # (endswith check keeps it OUT of the resolution-graded family).
+        self._updown_expiry_grace_mins = float(exit_cfg.get("updown_expiry_grace_mins", 10.0) or 10.0)
         _gbw = exit_cfg.get("hold_evergreen_giveback_windows", ["5m", "15m"])
         self._hold_evergreen_giveback_windows = {str(w).lower() for w in (_gbw or [])}
         # 2026-08-06 GIVE-BACK TRAILING TP (the missing banking mechanism under hold_all). hold_all sets
@@ -1570,8 +1578,16 @@ class PositionExitManager:
                         )
 
                     if mins_remaining is not None and mins_remaining < 0:
-                        # Market already past expiry but still open — exit immediately.
-                        reason = "updown_expired"
+                        # Past expiry: DEFER to the ResolutionTracker's binary settle for the
+                        # grace window (it polls every 60s; Polymarket auto-resolves via
+                        # Chainlink seconds after expiry). Mark-closing here recorded fake
+                        # settles at the mid (exit_price 0.49 on a binary market) and in live
+                        # would give the position away instead of collecting the resolution.
+                        _grace = float(getattr(self, "_updown_expiry_grace_mins", 10.0) or 10.0)
+                        if -mins_remaining >= _grace:
+                            # No resolution after the full grace — close at mark under an
+                            # HONEST label (never counted as a resolution by graders).
+                            reason = "updown_expired_mark_fallback"
                     elif mins_remaining is not None and mins_remaining <= effective_exit_window:
                         adverse = adverse_for_updown_cents_time_stop(
                             entry_leg=entry_leg,
@@ -1969,6 +1985,7 @@ class PositionExitManager:
                     # won't fill; mirrors the stop/time-stop marketable behavior.
                     "updown_flatten_pre_resolution",
                     "updown_expired",
+                    "updown_expired_mark_fallback",  # 2026-08-19 grace-expired mark-close must cross NOW
                     "updown_time_stop",
                     # 2026-07-29 (live evidence, session 180002): a regular take_profit was
                     # placed marketable=False -> resting GTC that sat ~20s unfilled then

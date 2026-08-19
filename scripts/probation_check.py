@@ -538,6 +538,61 @@ def check_all():
     except Exception as _e:
         add("blanket_shrink_killed", "WARN", f"unreadable: {type(_e).__name__}")
 
+    # 2026-08-19 EXPIRY SETTLE DEFER + FRESH-FILL STRICT + RTDS ORACLE (operator GO bundle).
+    # All three verify from OUTPUT: (1) no NEW updown_expired rows with a non-binary
+    # exit_price (the 08-18 fake-settle signature — 10 in one night); (2) fresh-fill flag ON;
+    # (3) the RTDS snapshot file advancing (a dead ws = stale file, not an error anywhere).
+    try:
+        _fake_new = 0
+        _seen_any = False
+        with open(os.path.join(_REPO, "data/calibration/trades.jsonl"), errors="ignore") as fh:
+            for _ln in fh:
+                if '"updown_expired"' not in _ln:
+                    continue
+                try:
+                    _r = json.loads(_ln)
+                except Exception:
+                    continue
+                if str(_r.get("opened_at") or "") < "2026-08-19T07:30":
+                    continue
+                if _r.get("exit_reason") != "updown_expired":
+                    continue
+                _seen_any = True
+                _xp = _r.get("exit_price")
+                if _xp is not None and 0.02 < float(_xp) < 0.98:
+                    _fake_new += 1
+        if _fake_new:
+            add("expiry_settle_defer", "BROKEN",
+                f"{_fake_new} NEW fake settle(s) post-ship (updown_expired at non-binary exit_price) "
+                "— the defer branch reverted or the grace is too short")
+        else:
+            add("expiry_settle_defer", "PROBATION",
+                f"0 fake settles post-ship ({'binary settles observed' if _seen_any else 'no expiries graded yet'}); "
+                "grace=exit_rules.updown_expiry_grace_mins")
+    except Exception as _e:
+        add("expiry_settle_defer", "WARN", f"unreadable: {type(_e).__name__}")
+
+    add("paper_fresh_fill_strict",
+        "PROBATION" if bool(trad.get("paper_entry_fresh_fill")) else "BROKEN",
+        f"paper_entry_fresh_fill={trad.get('paper_entry_fresh_fill')} "
+        + ("(book-walk fills + no-fill on uncrossable books)" if trad.get("paper_entry_fresh_fill")
+           else "— flipped back OFF (shipped-dark trap, e921345 class)"))
+
+    try:
+        _rt = os.path.join(_REPO, "data/calibration/rtds_snapshots.jsonl")
+        _rt_age = (time.time() - os.stat(_rt).st_mtime) / 60.0 if os.path.isfile(_rt) else None
+        if not bool((c.get("rtds") or {}).get("enabled")):
+            add("rtds_oracle", "BROKEN", "rtds.enabled flipped OFF")
+        elif _rt_age is None:
+            add("rtds_oracle", "PROBATION", "staged — no snapshot file yet (restart-class; verify after boot)")
+        elif _rt_age > 10:
+            add("rtds_oracle", "BROKEN",
+                f"snapshot file STALE {_rt_age:.0f}m — ws down or task dead (check OUTPUT not flag)")
+        else:
+            add("rtds_oracle", "PROBATION", f"snapshots advancing (last {_rt_age:.1f}m ago)")
+    except Exception as _e:
+        add("rtds_oracle", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused
