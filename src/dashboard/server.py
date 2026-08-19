@@ -508,7 +508,25 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     # kind="favorite" so the card reflects the ACTUAL open/closed state, not just the normal-scan gate.
     _fav_cfg = dict(cfg.get("favorite_lane") or {})
     _fav_on = bool(_fav_cfg.get("enabled", False))
+    # 2026-08-13 SCOPING + 2026-08-18: BOTH switches gate favorites (risk.favorite_lane_enabled
+    # wins at sol_macro.py), and allow_lanes scopes which lanes fire — without honoring these the
+    # overlay painted "favorite" on every closed cell of every asset while only 2 lanes trade.
+    _fav_on = _fav_on and bool((cfg.get("risk") or {}).get("favorite_lane_enabled", True))
+    _fav_allow = set(str(x) for x in (_fav_cfg.get("allow_lanes") or []))
     _fav_windows = set(str(w) for w in (_fav_cfg.get("windows", ["15m", "1h"]) or []))
+    # 2026-08-18 (operator: "make sure the dash lane gate area reflects what lanes are off —
+    # you always forget"): the card was BLIND to lane_management.states — it read only the
+    # disable_* flags, so all 10 execution-enforced pauses showed OPEN. Overlay the enforced
+    # pause state; it takes precedence over the flag-derived cells because it is what the
+    # execution choke actually enforces (main._check_lane_execution -> LaneManager.can_execute).
+    _lm = None
+    try:
+        from src.analysis.lane_manager import LaneManager
+        _lm_candidate = LaneManager(cfg)
+        if _lm_candidate.enabled and _lm_candidate.execution_enforcement_enabled:
+            _lm = _lm_candidate
+    except Exception:
+        _lm = None
     out: Dict[str, Any] = {"updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z", "strategies": []}
     for strategy_id, label in _LANE_GATE_STRATEGIES:
         strategy_cfg = dict(strategies_cfg.get(strategy_id) or {})
@@ -531,9 +549,26 @@ def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                     side: _resolve_lane_gate(strategy_cfg, window, side, strategy_id)
                     for side in _LANE_GATE_SIDES
                 }
+                # lane_management pause overlay (see note above): enforced pause = CLOSED,
+                # whatever the disable_* flags say.
+                if _lm is not None:
+                    for side in _LANE_GATE_SIDES:
+                        _ud = "up" if side == "BUY_YES" else "down"
+                        _state, _mk = _lm.get_lane_state(f"{strategy_id}|{window}|{_ud}")
+                        if _state == "paused":
+                            cells[side] = {
+                                "open": False,
+                                "kind": "paused",
+                                "flag": _mk,
+                                "note": "lane_management pause (execution-enforced)",
+                            }
                 # Favorite-lane overlay: a gate-closed lane in a favorite window STILL trades
                 # favorites (side-agnostic), so surface it as "favorite" — the ACTUAL open state.
-                if _fav_covered and window in _fav_windows:
+                # Scoped by allow_lanes (empty = all); a paused allowlisted lane is also shown
+                # favorite: the |favorite state keys bypass the pause at the choke (option 2).
+                if _fav_covered and window in _fav_windows and (
+                    not _fav_allow or f"{strategy_id}|{window}" in _fav_allow
+                ):
                     for side in _LANE_GATE_SIDES:
                         c = cells[side]
                         if not c.get("open"):

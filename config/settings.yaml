@@ -985,7 +985,7 @@ strategies:
         min_edge: 0.09
         entry_window_min: 1.0
         entry_window_max: 90.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 59->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.  # 2026-08-13 OPERATOR ORDER: max 90min. The 15.0 came from 0d66874 while still marked "awaiting call" — never authorised. The winning +$159.90/69%WR/n=100 config ran 1h at 360 and 15m at 120-150; 90 is the operator ceiling. Hard cap raised in lockstep or it silently clamps 90 back to 15/60.
-    min_edge_15m_neutral: 0.12
+    min_edge_15m_neutral: 0.06   # 2026-08-18 OPERATOR GO (A): was 0.12 — the 15m probe (entry_policy 0.05@half) only HALF-landed: this separate NEUTRAL-bias bump still rejected 719 candidates at 0.12/0.14 post-probe while only 10 even reached the 0.05 bar. 0.06 keeps a small neutral premium over the probe bar instead of a 2.4x wall.
     neutral_15m_min_quant_confidence: 0.0
     neutral_15m_requires_shadow_portfolio: true
     neutral_15m_min_composite_score: 0.68
@@ -1899,7 +1899,8 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 90  # 2026-08-13 OPERATOR ORDER: 15 -> 90. Written WITHOUT a decimal, so the first pass (which matched "15.0") skipped these and the 15m lanes stayed clamped while 1h correctly moved to 90.
           down:
-            min_edge: 0.05
+            min_edge: 0.03   # 2026-08-18 OPERATOR GO (A): was 0.05 — UNREACHABLE (live edge max 0.045, p90 0.036, 363 rejects at the bar). Half-size probe.
+            size_multiplier: 0.5   # probe at half size until live WR proves the bar
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1915,7 +1916,7 @@ strategies:
             entry_window_max: 90.0  # 2026-08-12 OPERATOR GO — 1h TIGHTENED 60->15: my earlier cap of 60 was set by market-duration logic, NOT outcome data. All-history: 1h mid(5-15m to expiry) 67%WR +1.02/t vs 1h early(>15m) 42%WR -0.46/t (n=1371, -$631). The 60 cap still admitted the entire losing bucket.  # 2026-08-13 OPERATOR ORDER: max 90min. The 15.0 came from 0d66874 while still marked "awaiting call" — never authorised. The winning +$159.90/69%WR/n=100 config ran 1h at 360 and 15m at 120-150; 90 is the operator ceiling. Hard cap raised in lockstep or it silently clamps 90 back to 15/60.
             size_multiplier: 0.15
           down:
-            min_edge: 0.06
+            min_edge: 0.03   # 2026-08-18 OPERATOR GO (A): was 0.06 — UNREACHABLE (live edge max 0.0486, p90 0.026, 48 rejects at the bar). Existing 0.15 size_multiplier already caps the probe.
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -2226,7 +2227,8 @@ strategies:
             entry_window_max: 90  # 2026-08-13 OPERATOR ORDER: 15 -> 90. Written WITHOUT a decimal, so the first pass (which matched "15.0") skipped these and the 15m lanes stayed clamped while 1h correctly moved to 90.
           down:
             entry_price_min: 0.53
-            min_edge: 0.1
+            min_edge: 0.05   # 2026-08-18 OPERATOR GO (A): was 0.1 — UNREACHABLE vs live edges (best candidate all day 0.0996, p90 0.082). Same bar in both winning baselines, but today's edge production is smaller — this is the 81%-WR winning-session lane (xrp|15m|down +$129 across 9 winning sessions, zero losing) STARVING at n=5 closes/era. Half-size probe; live realized validates.
+            size_multiplier: 0.5   # probe at half size until live WR proves the bar
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 90.0  # 2026-08-12 ENTRY-TIMING FIX (was 135): entry_window_max = MAX minutes-to-expiry allowed at entry. 135 let the bot enter a 15m market 135min (~2.2h) early on indicator readings meaningless by resolution. All-history 5,800 trades: 15m late(<=5m) 73%WR +1.31/t vs early(>15m) 38%WR -0.78/t; today EARLY bucket = 84% of session loss. Capped to the market's own duration.  # 2026-08-13 OPERATOR ORDER: max 90min. The 15.0 came from 0d66874 while still marked "awaiting call" — never authorised. The winning +$159.90/69%WR/n=100 config ran 1h at 360 and 15m at 120-150; 90 is the operator ceiling. Hard cap raised in lockstep or it silently clamps 90 back to 15/60.
