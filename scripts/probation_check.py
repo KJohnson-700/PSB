@@ -619,6 +619,19 @@ def check_all():
     except Exception as _e:
         add("bundle_arb_shadow", "WARN", f"unreadable: {type(_e).__name__}")
 
+    # 2026-08-19 PORTFOLIO HALT LADDER (research adoption #1). BROKEN if the config rungs
+    # vanish or the choke code loses the check (backup-restore/regression traps).
+    try:
+        _ph = ((c.get("risk") or {}).get("portfolio_halts") or {})
+        _ph_code = "_portfolio_halt_reason" in open(os.path.join(_REPO, "src/main.py")).read()
+        _ph_ok = bool(_ph.get("enabled")) and float(_ph.get("session_loss_halt_pct", 0) or 0) > 0 and _ph_code
+        add("portfolio_halt_ladder",
+            "PROBATION" if _ph_ok else "BROKEN",
+            f"enabled={_ph.get('enabled')} soft={_ph.get('session_loss_halt_pct')}% "
+            f"hard={_ph.get('hard_halt_pct')}% code={'wired' if _ph_code else 'MISSING'}")
+    except Exception as _e:
+        add("portfolio_halt_ladder", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused

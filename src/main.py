@@ -7023,6 +7023,25 @@ class PolyBot:
                 strategy, lane_meta.get("lane_window"), lane_meta.get("lane_side"),
             )
             return False
+        # 2026-08-19 PORTFOLIO HALT LADDER (operator GO — research adoption #1, the
+        # MrFadiAi 4-layer pattern mapped to our session unit). REALIZED session loss
+        # beyond the rung blocks NEW entries only — exits/settles keep running, so open
+        # positions still resolve and the loss caps still fire. Thresholds are % of
+        # backtest.initial_bankroll and hot-tunable (risk is a hot-reload key). Fail-open:
+        # any read error means no halt. This is risk management, not a signal gate.
+        _halt = self._portfolio_halt_reason()
+        if _halt:
+            now_mono = time.monotonic()
+            if now_mono - getattr(self, "_pf_halt_last_log", 0.0) > 300.0:
+                self._pf_halt_last_log = now_mono
+                logging.warning("[PORTFOLIO-HALT] %s — blocking new entries (exits unaffected)", _halt)
+                try:
+                    logging.info("OPS_JSON %s", json.dumps(
+                        {"event": "portfolio_halt", "reason": _halt,
+                         "ts": datetime.now(timezone.utc).isoformat()}))
+                except Exception:
+                    pass
+            return False
         _km = self._get_exposure_manager_for(strategy)
         if _km is not None:
             try:
@@ -7085,6 +7104,38 @@ class PolyBot:
             matched_key or "<default>",
         )
         return False
+
+    def _portfolio_halt_reason(self) -> str:
+        """Non-empty reason string while a portfolio-level halt rung is tripped.
+
+        Reads REALIZED session pnl from the journal summary (never cash bankroll —
+        open stakes reduce cash and would fake a loss). Config, all hot-tunable:
+            risk.portfolio_halts.enabled (default true)
+            risk.portfolio_halts.session_loss_halt_pct (default 6.0; 0 disables rung)
+            risk.portfolio_halts.hard_halt_pct (default 12.0; 0 disables rung)
+        Fail-open on any error — this must never be the reason the bot starves.
+        """
+        try:
+            cfg = (self.config.get("risk", {}) or {}).get("portfolio_halts", {}) or {}
+            if not bool(cfg.get("enabled", True)):
+                return ""
+            summary = self.journal.get_summary() or {}
+            realized = float(summary.get("realized_pnl") or 0.0)
+            initial = float(
+                (self.config.get("backtest", {}) or {}).get("initial_bankroll", 500) or 500
+            )
+            if initial <= 0 or realized >= 0:
+                return ""
+            loss_pct = 100.0 * (-realized) / initial
+            hard = float(cfg.get("hard_halt_pct", 12.0) or 0.0)
+            soft = float(cfg.get("session_loss_halt_pct", 6.0) or 0.0)
+            if hard > 0 and loss_pct >= hard:
+                return f"HARD halt: session realized {realized:+.2f} = -{loss_pct:.1f}% >= {hard:.0f}%"
+            if soft > 0 and loss_pct >= soft:
+                return f"session-loss halt: realized {realized:+.2f} = -{loss_pct:.1f}% >= {soft:.0f}%"
+            return ""
+        except Exception:
+            return ""
 
     def _mark_exposure_resume_window_green(self, strategy: str) -> None:
         """Keep pause/resume state permissive now that regime gates are purged."""

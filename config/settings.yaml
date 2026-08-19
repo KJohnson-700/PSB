@@ -3076,6 +3076,10 @@ risk:
   blocked_pt_hours: []          # MANUAL pin list (unioned with the adaptive set). Emptied
                                 # 2026-08-12 now that hour_adapter measures this from realized
                                 # pnl — keep [] unless you want to force an hour by hand.
+  portfolio_halts:              # 2026-08-19 OPERATOR GO — research adoption #1 (MrFadiAi 4-layer halts mapped to our session unit). REALIZED session loss beyond a rung blocks NEW entries; exits/settles/loss-caps keep running. Enforced at the single entry choke (main._check_lane_execution); thresholds hot-tunable; fail-open. Not a signal gate — pure bleed-day protection.
+    enabled: true
+    session_loss_halt_pct: 6.0   # -6% of initial bankroll realized => no new entries this session
+    hard_halt_pct: 12.0          # -12% => same block, logged CRITICAL-loud
   hour_adapter:                 # 2026-08-12 ADAPTIVE per-hour sit-out (operator: "no set
                                 # trading times — must be ADAPTIVE"). Scores each entry-hour on
                                 # rolling REALIZED $/trade over the RECENT era and self-flips:
