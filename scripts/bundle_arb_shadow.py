@@ -30,7 +30,13 @@ OUT = os.path.join(ROOT, "data", "calibration", "bundle_arb_shadow.jsonl")
 GAMMA = "https://gamma-api.polymarket.com/markets"
 BOOK = "https://clob.polymarket.com/book"
 
-CLAIMED_RESOLUTION_FEE = 0.0156   # V2 research claim — UNVERIFIED, recorded not trusted
+# 2026-08-19 FEE MODEL VERIFIED against the live Gamma feeSchedule for crypto up/down
+# (feeType crypto_fees_v2: rate 0.07, exponent 1, takerOnly, maker 0). The research's
+# "1.56% resolution fee" claim is REFUTED for this class — the real bundle cost is the
+# taker fee on BOTH legs at purchase: 0.07 * (p_yes*(1-p_yes) + p_no*(1-p_no)) per share
+# (~3.5% near 50/50, tiny at the extremes).
+TAKER_RATE = 0.07
+CLAIMED_RESOLUTION_FEE = 0.0156   # kept for historical rows only; net math uses TAKER_RATE
 LOG_BELOW = 1.005                 # log near-misses too; a hit is net_edge_claimed > 0
 THROTTLE_S = 0.25
 MAX_MARKETS = 120
@@ -92,7 +98,8 @@ def scan():
         if best_seen is None or combined < best_seen:
             best_seen = combined
         if combined < LOG_BELOW and yes[0] > 0.02 and no[0] > 0.02:
-            net_claimed = 1.0 - combined - CLAIMED_RESOLUTION_FEE
+            fee = TAKER_RATE * (yes[0] * (1 - yes[0]) + no[0] * (1 - no[0]))
+            net = 1.0 - combined - fee
             fillable = min(yes[1], no[1])
             hits += 1
             _append({
@@ -103,8 +110,9 @@ def scan():
                 "yes_ask": yes[0], "no_ask": no[0], "combined": round(combined, 4),
                 "yes_size": yes[1], "no_size": no[1], "fillable": fillable,
                 "gross_edge": round(1.0 - combined, 4),
-                "net_edge_claimed_fee": round(net_claimed, 4),
-                "expected_profit_claimed": round(fillable * net_claimed, 2),
+                "taker_fee_both_legs": round(fee, 4),
+                "net_edge": round(net, 4),
+                "expected_profit": round(fillable * net, 2),
             })
     _append({"ts": now, "kind": "scan_summary", "scanned": scanned, "hits": hits,
              "best_combined": round(best_seen, 4) if best_seen else None})
