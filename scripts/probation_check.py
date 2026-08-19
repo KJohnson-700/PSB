@@ -593,6 +593,32 @@ def check_all():
     except Exception as _e:
         add("rtds_oracle", "WARN", f"unreadable: {type(_e).__name__}")
 
+    # 2026-08-19 BUNDLE-ARB SHADOW (candidate #1, stage-1 of shadow->probe->graduate).
+    # Observe-only daemon tick; verify from OUTPUT (scan summaries advancing). BROKEN only
+    # when the file goes stale >2h with the daemon up — a dead shadow is lost evidence.
+    try:
+        _ba = os.path.join(_REPO, "data/calibration/bundle_arb_shadow.jsonl")
+        _ba_age = (time.time() - os.stat(_ba).st_mtime) / 60.0 if os.path.isfile(_ba) else None
+        if _ba_age is None:
+            add("bundle_arb_shadow", "PROBATION", "no scans logged yet (first daemon tick pending)")
+        elif _ba_age > 120:
+            add("bundle_arb_shadow", "BROKEN", f"shadow file STALE {_ba_age:.0f}m — daemon tick dead")
+        else:
+            _ba_hits = 0
+            _ba_scans = 0
+            with open(_ba, errors="ignore") as fh:
+                for _ln in fh:
+                    if '"scan_summary"' in _ln:
+                        _ba_scans += 1
+                        try:
+                            _ba_hits += int(json.loads(_ln).get("hits") or 0)
+                        except Exception:
+                            pass
+            add("bundle_arb_shadow", "PROBATION",
+                f"{_ba_scans} scans, {_ba_hits} sub-1.005 observations (last write {_ba_age:.0f}m ago)")
+    except Exception as _e:
+        add("bundle_arb_shadow", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused

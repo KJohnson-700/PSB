@@ -55,6 +55,7 @@ BAND_GUARD="$REPO/scripts/blocked_band_guard.py"
 GHOST_SETTLER="$REPO/scripts/settle_rejected_candidates.py"
 
 SETTLE_EVERY_SEC=1800      # 30 min — the settler is idempotent and cheap
+BUNDLE_ARB_EVERY_SEC=900   # 15 min — bundle-arb SHADOW scan (observe-only, public APIs; operator GO 08-19)
 GUARD_EVERY_SEC=3600       # 60 min — the release guards hit the GAMMA API, don't spam it
 GHOST_SETTLE_EVERY_SEC=14400  # 4h — checkpointed incremental ghost settle (operator GO 08-18)
 ROTATE_AT_HOUR=4           # 04:15 local, matching the schedule the dead agent had
@@ -137,6 +138,7 @@ log "TCC PROBE: ok — can write data/calibration"
 LAST_SETTLE=0
 LAST_GUARD=0
 LAST_GHOST_SETTLE=0
+LAST_BUNDLE_ARB=0
 LAST_ROTATE_DAY=""
 
 while true; do
@@ -200,6 +202,21 @@ while true; do
       log "GUARD SKIP: venv python or blocked_band_guard.py missing"
     fi
     LAST_GUARD=$NOW
+  fi
+
+  # ── bundle-arb shadow scan (operator GO 2026-08-19) — observe-only stage-1 ──
+  # Backgrounded (the scan is throttle-paced ~2-3 min); pgrep guard stops overlap.
+  if [ $((NOW - LAST_BUNDLE_ARB)) -ge "$BUNDLE_ARB_EVERY_SEC" ]; then
+    if pgrep -f "bundle_arb_shadow.py" >/dev/null 2>&1; then
+      log "BUNDLE-ARB SKIP: a scan is already running"
+    elif [ -x "$VENV_PY" ] && [ -f "$REPO/scripts/bundle_arb_shadow.py" ]; then
+      (
+        BAOUT=$(nice -n 19 "$VENV_PY" "$REPO/scripts/bundle_arb_shadow.py" 2>&1 | tail -1)
+        log "BUNDLE-ARB (bg): ${BAOUT:-no output}"
+      ) &
+      log "BUNDLE-ARB: scan launched in background"
+    fi
+    LAST_BUNDLE_ARB=$NOW
   fi
 
   # ── ghost settle cadence (operator GO 2026-08-18) ──────────────────────────
