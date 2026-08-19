@@ -151,15 +151,16 @@ class RtdsOracle:
         while True:
             try:
                 async with websockets.connect(RTDS_URI, ping_interval=None) as ws:
-                    for _code, (b_sym, c_sym) in SYMBOLS.items():
-                        await ws.send(json.dumps({
-                            "action": "subscribe", "topic": "crypto_prices",
-                            "filter": f"symbol={b_sym}",
-                        }))
-                        await ws.send(json.dumps({
-                            "action": "subscribe", "topic": "crypto_prices_chainlink",
-                            "filter": f"symbol={c_sym}",
-                        }))
+                    # PROBED LIVE 2026-08-19: the research doc's per-topic "filter" form
+                    # returns "Invalid request body", and FILTERED subscriptions deliver
+                    # only the subscribe-snapshot then go silent. UNFILTERED subscriptions
+                    # stream per-second updates for every symbol ("omit filters to receive
+                    # every event") — so subscribe to the firehose and filter client-side
+                    # in _ingest via SYMBOLS.
+                    await ws.send(json.dumps({"action": "subscribe", "subscriptions": [
+                        {"topic": "crypto_prices", "type": "update"},
+                        {"topic": "crypto_prices_chainlink", "type": "update"},
+                    ]}))
                     self._connected = True
                     backoff = 2.0
                     logger.info("[rtds] connected — %d assets x 2 sources subscribed", len(SYMBOLS))
@@ -180,7 +181,21 @@ class RtdsOracle:
                                 continue
                             topic = str(data.get("topic") or "")
                             if topic.startswith("crypto_prices"):
-                                self._ingest(topic, data.get("payload") or {})
+                                _pl = data.get("payload") or {}
+                                if data.get("type") == "subscribe":
+                                    # subscribe-snapshot: {"data": [{timestamp, value}...]}
+                                    # carries no symbol per point — ingest only when the
+                                    # payload names one; otherwise skip (updates follow).
+                                    _pts = _pl.get("data") or []
+                                    if _pl.get("symbol") and _pts:
+                                        _last = _pts[-1]
+                                        self._ingest(topic, {
+                                            "symbol": _pl["symbol"],
+                                            "value": _last.get("value"),
+                                            "timestamp": _last.get("timestamp"),
+                                        })
+                                else:
+                                    self._ingest(topic, _pl)
                                 self._maybe_snapshot()
                     finally:
                         hb.cancel()
