@@ -518,6 +518,26 @@ def check_all():
     except Exception as _e:
         add("favorite_lane_unstrangled", "WARN", f"unreadable: {type(_e).__name__}")
 
+    # 2026-08-18 BLANKET SHRINK KILLED (49563e7). entry_admission_calibration_shrink 0.28
+    # was the mid-June regression: shipped per-lane 06-23, flattened to strategy-level by
+    # the 07-13/07-21 deploys, deleting 72% of model deviation on 5 assets (June median
+    # |est-price| 0.08-0.09 -> 0.005-0.015). BROKEN = a 0.28 strategy-level key reappeared
+    # (the backup-restore trap). Revert bar + procedure: vault note
+    # 2026-08-18-SHIP-blanket-shrink-killed-revert-bar.md — revert is PER-LANE scope only,
+    # never the blanket.
+    try:
+        _shrunk = [s for s in ("bitcoin", "sol_macro", "eth_macro", "hype_macro",
+                               "xrp_macro", "doge_macro", "bnb_macro")
+                   if float((strat.get(s) or {}).get("entry_admission_calibration_shrink", 1.0) or 1.0) < 1.0]
+        add("blanket_shrink_killed",
+            "PROBATION" if not _shrunk else "BROKEN",
+            "all strategy-level shrink keys at 1.0 — est-cal is the only calibration layer"
+            if not _shrunk else
+            f"STRATEGY-LEVEL SHRINK REAPPEARED on {_shrunk} — the June regression is back; "
+            "see vault 2026-08-18-SHIP-blanket-shrink-killed-revert-bar.md")
+    except Exception as _e:
+        add("blanket_shrink_killed", "WARN", f"unreadable: {type(_e).__name__}")
+
     # 2026-08-17 CONFIG AUDIT (architecture item 4). Read-only. Catches the classes that
     # have each already cost a wrong conclusion: same-mapping duplicate keys (bnb had one
     # at HEAD), keys nothing reads, restart-class keys edited under a running bot, paused
