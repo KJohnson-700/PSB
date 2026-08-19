@@ -552,8 +552,7 @@ trading:
     # global 0.34 (no delivered-depth evidence of their own — per-window discipline, same as
     # tp_giveback_retrace_pct_by_window). Also caps the ever-green give-back floor's max cut on
     # 5m (one "deepest cut per window" semantic). RESTART-CLASS (live_testing.__init__).
-    hold_never_green_stop_pct_by_window:
-      5m: 0.24
+    hold_never_green_stop_pct_by_window: {}   # 2026-08-19 OPERATOR GO — DEPTH RESTORE: the 5m 0.24 override REMOVED (back to the uniform -34). Overnight audit, all 59 stops graded vs REAL resolutions: 49 were SHALLOW cuts (>-25%) and 39% of those resolved GREEN after we cut them (-$183.68 actual). The winning-forensic invariant cuts at -27..-42 (June avg -38); ghost split shows dips past -34 recover 0/14. Shallow cuts amputate LIVE trades; -34 amputates corpses. Was: {5m: 0.24}.
     # 2026-08-17 EVER-GREEN GIVE-BACK FLOOR (operator GO, Codex GO: "G=40, floor -34%, 5m/15m only, not 1h").
     # Live post-restore data killed the blanket ever-green ride on fast windows: 5/5 riders (all 5m,
     # peak MFE +13.7..+32.4%) resolved -103% full forfeit, -$49.76, ZERO rider wins — the "riders
@@ -565,7 +564,7 @@ trading:
     # CODE is restart-class (live_testing not in _HOT_RELOAD_CODE_MODULES); these keys hot-reload
     # once the code is in. REVERT: hold_evergreen_giveback_enabled: false.
     hold_evergreen_giveback_enabled: true
-    hold_evergreen_giveback_points: 0.40
+    hold_evergreen_giveback_points: 0.55   # 2026-08-19 OPERATOR GO — DEPTH RESTORE (was 0.40): a +20% peaker now cuts ~-35 instead of ~-20. The 0.40 setting generated the shallow-cut whipsaw class: mid-peakers cut at -16..-25, and 39-50% of those resolved GREEN (1h shallow cuts worst: 4/8 recovered). Winning invariant = cuts land -27..-42. Clamp [breakeven..-34] unchanged — peakers >=55 still exit at/above breakeven.
     # 2026-08-18 "1h" ADDED (operator "fix my bot"; Codex retro-review queued in #28 —
     # its "not 1h yet" was pre-data caution, and the data arrived: eth|1h|up rider peaked
     # +19.4% then full-forfeited -103% (-$15.68 = 75% of the session deficit), the exact
