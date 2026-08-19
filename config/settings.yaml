@@ -853,7 +853,6 @@ lane_management:
     # restored stack cuts 5m at -24% — exactly the protection those longs lacked. This was BTC's
     # ONLY producing lane (13-28 entries/session at its 0.05 bar); pausing it = 36h asset blackout.
     # On the cut-watchlist: if it bleeds under the restored exits, re-pause with clean data.
-    "xrp_macro|1h|up": paused      # -$34 / 0% WR n=5 — Codex-flagged + data-confirmed
     # 2026-08-18 OPERATOR OPTION 2 — favorite trial bypasses the band-trade pauses on
     # EXACTLY its two allowlisted lanes. Favorite lane_ids are now pinned to
     # <strat>|<window>|<side>|favorite|favorite_lane (lane_identity.py), and these keys
@@ -862,8 +861,6 @@ lane_management:
     # favorite generator itself is allowlisted to these two lanes (favorite_lane.allow_lanes).
     "xrp_macro|1h|up|favorite": paper
     "hype_macro|15m|up|favorite": paper
-    "hype_macro|15m|up": paused    # -$27 n=7 (and -$140 over 12 sessions) — worst historical bleeder
-    "eth_macro|15m|down": paused   # 2026-08-16 live triage: current session n=5, 20% WR, -$45.66; temporary pause while fixed-TP trial runs.
     "xrp_macro|5m|down": paused    # 2026-08-16 live triage: current session n=3, 0% WR, -$37.72; temporary pause, not permanent data-backed cut.
     "bnb_macro|5m|up": paused      # 2026-08-18 operator cut ("cut the bnb now"): post-restore 1-3, -$16.60 — both bnb 5m sides red. Re-evaluate on post-268ec8a (giveback-floor) closes.
     "bnb_macro|5m|down": paused    # 2026-08-18 operator cut, same call: post-restore 0-3, -$16.05. bnb|15m|down (5-0 +$16.50) NOT touched.
@@ -1120,7 +1117,7 @@ strategies:
     disable_buy_no_15m_when_bearish: true   # 2026-08-12 CUT: clean baseline since 20260811_2059 had BTC 15m BUY_NO net -$30.57; drift subset 0/3, -$38.85 despite huge MFE round-trips. Block bearish 15m shorts until a separate exit/banking retest proves it.
     window_delta_confirm_enabled: true
     window_delta_flip_margin: 0.05
-    entry_admission_calibration_shrink: 0.28
+    entry_admission_calibration_shrink: 1.0  # 2026-08-18 OPERATOR GO — BLANKET SHRINK KILLED (was 0.28): shipped 06-23 as PER-LANE with 'winners exempt', flattened to strategy-level by the 07-13/07-21 deploys. Deleted 72% of model deviation on every lane (June winning-era median dev 0.08-0.09 -> 0.005-0.015 now) = the starvation AND coin-flip band WR at once, and double-shrunk under est-cal (k fit on post-shrink claims). est-cal (walkforward-gated, per-family) is the ONLY calibration layer now.
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -1218,7 +1215,7 @@ strategies:
     window_delta_est_weight_15m: 0.5
     buy_yes_5m_skip_mins_lo: 3.75
     buy_yes_5m_skip_mins_hi: 5.01
-    entry_admission_calibration_shrink: 0.28
+    entry_admission_calibration_shrink: 1.0  # 2026-08-18 OPERATOR GO — BLANKET SHRINK KILLED (was 0.28): shipped 06-23 as PER-LANE with 'winners exempt', flattened to strategy-level by the 07-13/07-21 deploys. Deleted 72% of model deviation on every lane (June winning-era median dev 0.08-0.09 -> 0.005-0.015 now) = the starvation AND coin-flip band WR at once, and double-shrunk under est-cal (k fit on post-shrink claims). est-cal (walkforward-gated, per-family) is the ONLY calibration layer now.
     min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
     fade_regime_windows: []
@@ -1721,7 +1718,7 @@ strategies:
     ai_updown_observe_only: true
     oracle_stale_spot_is_settlement: true
     oracle_stale_spot_settlement_max_basis_bps: 500.0
-    entry_admission_calibration_shrink: 0.28
+    entry_admission_calibration_shrink: 1.0  # 2026-08-18 OPERATOR GO — BLANKET SHRINK KILLED (was 0.28): shipped 06-23 as PER-LANE with 'winners exempt', flattened to strategy-level by the 07-13/07-21 deploys. Deleted 72% of model deviation on every lane (June winning-era median dev 0.08-0.09 -> 0.005-0.015 now) = the starvation AND coin-flip band WR at once, and double-shrunk under est-cal (k fit on post-shrink claims). est-cal (walkforward-gated, per-family) is the ONLY calibration layer now.
     min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
     fade_regime_windows: []
@@ -2278,7 +2275,7 @@ strategies:
     tape_veto_60s_bps: 20
     window_delta_flip_to_long_enabled: false
     ai_updown_observe_only: true
-    entry_admission_calibration_shrink: 0.28
+    entry_admission_calibration_shrink: 1.0  # 2026-08-18 OPERATOR GO — BLANKET SHRINK KILLED (was 0.28): shipped 06-23 as PER-LANE with 'winners exempt', flattened to strategy-level by the 07-13/07-21 deploys. Deleted 72% of model deviation on every lane (June winning-era median dev 0.08-0.09 -> 0.005-0.015 now) = the starvation AND coin-flip band WR at once, and double-shrunk under est-cal (k fit on post-shrink claims). est-cal (walkforward-gated, per-family) is the ONLY calibration layer now.
     min_est_prob_conviction_buy_yes: 0
     fade_regime: false
     fade_regime_windows:
@@ -2499,7 +2496,7 @@ strategies:
     tape_veto_60s_enabled: true
     tape_veto_60s_bps: 20
     ai_updown_observe_only: true
-    entry_admission_calibration_shrink: 0.28
+    entry_admission_calibration_shrink: 1.0  # 2026-08-18 OPERATOR GO — BLANKET SHRINK KILLED (was 0.28): shipped 06-23 as PER-LANE with 'winners exempt', flattened to strategy-level by the 07-13/07-21 deploys. Deleted 72% of model deviation on every lane (June winning-era median dev 0.08-0.09 -> 0.005-0.015 now) = the starvation AND coin-flip band WR at once, and double-shrunk under est-cal (k fit on post-shrink claims). est-cal (walkforward-gated, per-family) is the ONLY calibration layer now.
     min_est_prob_conviction_buy_yes: 0.52
     fade_regime: true
     fade_regime_windows: []
