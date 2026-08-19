@@ -3486,16 +3486,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             if bool(self.config.get("use_true_kelly_sizing", True)):
                 _our_price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
                 _win_prob = min(0.99, max(0.01, float(_our_price) + float(edge)))
-                # 2026-07-22 calibration-correction apply hook (flag-gated, default OFF).
-                # ETH port of the sol_macro hook — eth|15m|up is the primary corrected lane.
-                # Sizing-only; matches the shadow that earned the apply-gate. Fail-safe.
-                if is_updown and bool(self.config.get("apply_calibration_correction", False)):
-                    try:
-                        from src.analysis.calibration_apply import corrected_win_prob as _cwp
-                        _cal_key = f"{str(self._signal_strategy_name).replace('_macro', '')}|{_updown_tf}|{'up' if action == 'BUY_YES' else 'down'}"
-                        _win_prob = _cwp(_win_prob, _cal_key)
-                    except Exception:
-                        pass
+                # 2026-08-18 DE-JUNK (#30, operator GO): the 07-22 calibration_apply hook was
+                # REMOVED here (flag absent, map frozen Jul 27 — backup-restore trap). The
+                # est-cal consumer below is its maintained replacement.
                 # 2026-08-18 est-cal SIZING consumer — ETH port of the sol_macro hook (eth
                 # duplicates the scan loop). Self-arming on the pooled walkforward gate
                 # (>=150 OOS, cal beats raw AND market); raw prob untouched until then.

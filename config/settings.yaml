@@ -1,7 +1,5 @@
 polymarket:
   api_endpoint: https://clob.polymarket.com
-  graphql_endpoint: https://graphql.polymarket.com/matic
-  ws_endpoint: wss://ws-subscriptions-clob.polymarket.com/ws
   network: polygon
   chain_id: 137
   min_liquidity: 10000
@@ -40,7 +38,6 @@ final_window_topup:
   sampler_enabled: true
   sampler_window_mins: 1.5
 trading:
-  persistent_session: false
   cycle_interval_sec: 30   # 2026-08-11 60->30 (the built-in floor is max(30,...) at main.py:1199): 2x scan frequency so assets don't go quiet / pre-window entries aren't missed. SAFE now because the window-boundary slug cache means the extra cycles REUSE the 5m/15m lists instead of re-fetching gamma, and HYPE-alt has its own ~55s throttle below so its fragile fetch load does NOT increase. Revert to 60 to restore.
   hype_alt_fetch_min_interval_sec: 55   # 2026-08-11 decouple HYPE-alt's fragile fetch from loop speed: fetch at most every ~55s regardless of cycle_interval, reuse cache between. 0 => fetch every cycle (legacy). Requires scanner_slug_cache_enabled.
   exit_check_interval_sec: 3
@@ -179,7 +176,6 @@ trading:
     updown_hold_winners_to_resolution: false
     stop_use_executable_price: true
     stop_dual_confirm_midpoint: true
-    stop_spread_guard_max: 0.1
     realistic_paper_fills: false
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.3
@@ -929,7 +925,6 @@ lane_calibration:
     enabled: false
 lane_exit_policy:
   enabled: true
-  alert_discord: false
   recompute_min_new_settles: 25
   min_lane_n: 5
 entry_policy:
@@ -1524,7 +1519,6 @@ strategies:
     buy_yes_ltf_override_min_btc_5m_pct: 0.0
     buy_no_4h_hist_override_enabled: true
     buy_yes_4h_hist_override_enabled: true
-    direction_source: btc
     btc_htf_bias_dry_run_override: null
     signal_15m_long_threshold: 0.55
     signal_15m_short_threshold: 0.45
@@ -2772,7 +2766,10 @@ direction:
   #   * scripts/ai_direction_exact_join.py, 31,142 calls / 7,147 markets: providers
   #     carry NO information beyond the quote. Roadmap logs this REFUTED/CLOSED.
   #
-  # AND ITS SIDE IS DISCARDED ANYWAY. With side_policy: favorite below, sol_macro.py
+  # AND ITS SIDE IS DISCARDED ANYWAY. [2026-08-18 comment fixed: side_policy is `resolver`
+  # below since 29ad83e — the "favorite" wording here was written under the 08-13 favorite
+  # port and survived the revert; this stale comment faked out an audit once.] When
+  # side_policy is favorite, sol_macro.py
   # :3729 (and the eth/bitcoin twins) overwrite the override's side with the market
   # favorite two statements after reading it. The override's only surviving effect is
   # ADMISSION: it turns a NEUTRAL sit-out into a trade at the favorite's side, i.e.
@@ -3151,8 +3148,6 @@ exposure:
   high_volume_ratio: 1.3
   low_volume_ratio: 0.7
 backtest:
-  data_source: polymarketdata
-  exit_strategy: time_and_target
   max_hold_hours: 72
   take_profit_pct: 0.2
   stop_loss_pct: 0.15
@@ -3161,12 +3156,9 @@ backtest:
   lane_calibration:
     posteriors_path: data/calibration/lane_posteriors_backtest.json
     seed_from_live: false
-  polymarket_marks:
     enabled: false
     cache_dir: data/backtest/polymarket_marks
   slippage:
-    default_bps: 25
-    use_spread_when_available: true
   fee_bps: 0
   min_edge_btc_15m: 0.09
   min_edge_btc_5m: 0.08
@@ -3256,8 +3248,6 @@ self_healing:
     max_notify_per_run: 3
 logging:
   level: INFO
-  max_file_size: 10
-  backup_count: 5
   console: true
   file: true
   ops_pulse: true
@@ -3266,8 +3256,6 @@ dashboard:
   enabled: true
   host: 127.0.0.1
   dashboard_port: 8082
-  auto_sol5_backtest_on_startup: false
-  auto_sol5_backtest_on_reset: false
 lane_direction_fsm_active: false
 lane_direction_t_enter: 0.3
 lane_direction_t_exit: 0.1

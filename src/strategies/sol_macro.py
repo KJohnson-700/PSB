@@ -3706,8 +3706,9 @@ class SolMacroStrategy:
             # -0.0215), so on non-exempt lanes the MARKET picks the side and the resolver's
             # output becomes diagnostic only. Applied EARLY and made STICKY: applying it
             # late would admit on one side's edge and execute the other. Exempt lanes
-            # (direction.side_policy_resolver_lanes, currently bnb_macro|1h — the one lane
-            # where the resolver is +EV) and side_policy:resolver are byte-identical.
+            # (direction.side_policy_resolver_lanes — [] as of 2026-08-18; the earlier
+            # "currently bnb_macro|1h" wording went stale and lied to an audit) and
+            # side_policy:resolver are byte-identical.
             _sp = resolve_side_policy(
                 self.full_config,
                 lane_key=f"{self._signal_strategy_name or asset}|{_updown_tf}",
@@ -3788,9 +3789,9 @@ class SolMacroStrategy:
                     bias_15m,
                     bias_5m,
                 )
-                # 2026-08-12 GHOST-LOG THE BIGGEST GATE IN THE BOT. neutral_bias is 41.6% of ALL
-                # strategy evaluations (13,901 of 33,388 in one 3.5h session; doge 62.8%, sol 54.0%,
-                # xrp 53.3%, bnb 49.5%, eth 46.4%, hype 31.0%) and had NEVER written a single ghost
+                # 2026-08-12 GHOST-LOG THE BIGGEST GATE IN THE BOT. neutral_bias measured 41.6% of
+                # ALL strategy evaluations IN ONE 3.5h SESSION THAT DAY (13,901/33,388 — a stale
+                # point-in-time measurement, re-measure before citing) and had NEVER written a ghost
                 # row — so there was no evidence for OR against loosening it, and every frequency
                 # audit missed it. The code's own note at ~1914 already measured the damage: the
                 # lane "sat out ~9850x today (7240 under a DECIDED BULLISH 1h)".
@@ -7314,19 +7315,12 @@ class SolMacroStrategy:
             if bool(self.config.get("use_true_kelly_sizing", True)):
                 _our_price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
                 _win_prob = min(0.99, max(0.01, float(_our_price) + float(edge)))
-                # 2026-07-22 calibration-correction apply hook (flag-gated, default OFF).
-                # Shrinks an over-confident lane's win_prob before sizing, matching the
-                # shadow (scripts/calibration_correction.py) that earned the apply-gate:
-                # SIZING-ONLY (never re-gates admission — edge already passed above).
-                # Lane key == the entries.jsonl 'strategy' field (_signal_strategy_name)
-                # stripped of _macro, same as the map's source. Fail-safe: delta=0 on any miss.
-                if is_updown and bool(self.config.get("apply_calibration_correction", False)):
-                    try:
-                        from src.analysis.calibration_apply import corrected_win_prob as _cwp
-                        _cal_key = f"{str(self._signal_strategy_name).replace('_macro', '')}|{_updown_tf}|{'up' if action == 'BUY_YES' else 'down'}"
-                        _win_prob = _cwp(_win_prob, _cal_key)
-                    except Exception:
-                        pass
+                # 2026-08-18 DE-JUNK (#30, operator GO): the 07-22 calibration_apply hook was
+                # REMOVED here. Flag `apply_calibration_correction` was absent from config and
+                # its map (est_prob_correction_map.json) froze on Jul 27 — a config-regression
+                # trap where an old backup restore could flip the flag onto 3-week-old deltas.
+                # The est-cal consumer below is its maintained replacement (state refits on the
+                # daemon tick, walkforward-gated).
                 # 2026-08-18 est-cal SIZING consumer (the hook Phase A never had): shrinks
                 # win_prob toward the market price by the walkforward-graduated per-family k
                 # from data/calibration/est_prob_calibration.json. SELF-ARMING — returns the
