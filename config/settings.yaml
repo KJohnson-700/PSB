@@ -873,6 +873,9 @@ lane_management:
     "bnb_macro|5m|down": paused    # 2026-08-18 operator cut, same call: post-restore 0-3, -$16.05. bnb|15m|down (5-0 +$16.50) NOT touched.
     "bnb_macro|1h|up": paused      # 2026-08-18 operator directive "cut lanes that consistently lose in winning sessions": lost in 5 of 7 winning sessions since 07-01, -$75.99 total, 31% WR n=16; recent-era (08-10+) confirms -$40.35, 2/3 losing. Worst consistency+materiality on the board; also the old VPS chronic-bleeder list's bnb 1h BUY_YES. LIVE REALIZED evidence, not ghosts.
     "sol_macro|1h|down": paused    # 2026-08-18 same directive: lost in 3 of 4 winning sessions, -$9.36 (n=6), recent -$11.40. Small dollars, high consistency. sol|1h|up (12 winning sessions, +$52.97) untouched — side-isolated.
+    "doge_macro|5m|up": paused     # 2026-08-18 operator "cut them": 0-3 -$22.48 in the TP0.55 era AND negative in winning sessions historically (-$5.60, 2/5 lost). One of the 3 lanes = -$39.70 of the era's -$40.50 band loss.
+    "eth_macro|1h|up": paused      # 2026-08-18 operator "cut them": 0-4 -$5.27 this era; lost 3 of 4 winning sessions historically. Exit leak was fixed by the 1h giveback (peak +19.4 forfeit class) but the ENTRIES keep losing.
+    "eth_macro|5m|down": paused    # 2026-08-18 operator "cut them" — EXPLICIT operator override of the eth-5m-collection-lane rule for the DOWN side only (eth|5m|up stays ON and collecting): chronic entry-defect lane (08-17 split: BEAT -9.0, entries wrong, exits help), lost 4/8 winning sessions -$30.50, recent era -$41.57, this era 38% WR -$11.95.
   state_meta: {}
   recommendations:
     min_live_trades: 15
