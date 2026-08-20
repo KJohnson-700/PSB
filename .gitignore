@@ -43,3 +43,7 @@ data/
 evan-backtest/
 .DS_Store
 _bak_archive_20260818/
+
+# Staged-but-unapplied config snapshots — audit artifacts, never the live config
+config/settings.yaml.STAGED_*
+config/settings.yaml.bak_*
