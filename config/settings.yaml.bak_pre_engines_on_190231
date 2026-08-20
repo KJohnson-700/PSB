@@ -33,7 +33,7 @@ final_window_topup:
   sampler_window_mins: 1.5
 trading:
   persistent_session: false
-  cycle_interval_sec: 30
+  cycle_interval_sec: 60
   exit_check_interval_sec: 3
   ws_candle_feed:
     enabled: true
@@ -431,7 +431,7 @@ trading:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
-    updown_flatten_before_resolution_sec: 210
+    updown_flatten_before_resolution_sec: 60
     updown_time_stop_respect_hold_lanes: []
     updown_time_stop_hold_severe_pct: 0.5
     updown_time_stop_hold_min_excursion: 0.04
@@ -527,8 +527,7 @@ trading:
   exit_maker_wait_sec: 6
   flat_sizing_enabled: true
   flat_base_usd: 15.0
-  min_live_notional: 5.0
-  max_directional_exposure: 0.45
+  min_live_notional: 5.0   # 2026-08-19 kept from ec5ee29 post-revert: $11 floor flattens the adaptive sizer's de-sizes (PROVEN 08-18, mults 0.54-1.41 delivering at $5)
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -547,7 +546,7 @@ olympus:
     true_max_usd: 25
 lane_management:
   enabled: true
-  execution_enforcement_enabled: true
+  execution_enforcement_enabled: false
   default_state: paper
   states:
     xrp_macro|1h|up|favorite: paper
@@ -2318,13 +2317,6 @@ direction:
   max_age_sec: 900
   override_when_quant_neutral: true
   min_conf: 0.0
-  side_policy: favorite
-  side_policy_price_band:
-  - 0.45
-  - 0.55
-  side_policy_flat_edge: 0.02
-  side_policy_deadband: 0.0
-  side_policy_resolver_lanes: []
 lane_tape_adapter:
   mode: 'off'
   admission_mode: live
@@ -2337,7 +2329,7 @@ lane_tape_adapter:
   admission_tighten_max: 0.05
   admission_loosen_max: 0.02
 favorite_lane:
-  enabled: true
+  enabled: false
   floor: 0.85
   price_max: 0.93
   size_usd: 70.0
@@ -2350,9 +2342,6 @@ favorite_lane:
   hard_stop_price: 0.7
   tape_sit_out_delta: 0.02
   respect_ai_direction: false
-  early_stop_windows:
-  - 15m
-  - 1h
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
@@ -2477,11 +2466,6 @@ risk:
   paper_max_trades_per_day: 2000
   check_interval: 60
   emergency_stop_loss: 0.25
-  favorite_lane_enabled: true
-  portfolio_halts:
-    enabled: true
-    session_loss_halt_pct: 6.0
-    hard_halt_pct: 12.0
 term_risk:
   caps:
     SHORT_TERM: 0.7

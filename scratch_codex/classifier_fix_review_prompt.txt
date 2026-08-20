@@ -1,0 +1,13 @@
+Review a core direction-classifier fix in a trading bot (all 7 assets depend on it). Analysis only, no edits. Output GO / NO-GO.
+
+PROBLEM: src/analysis/tape_map.py labeled a high-volatility REVERSAL as "FLAT", which a downstream gate (require_tape_direction) uses to block ALL entries. Root: direction = majority vote of MACD+EMA+trend (dscore -3..3), UP if >=2 / DOWN if <=-2 / else FLAT. A LAGGING MACD cancels the fresh EMA/trend votes so a real move lands at dscore=+/-1 => FLAT, and the volatility it computes was ignored (computed AFTER the direction decision).
+
+THE FIX (git diff HEAD -- src/analysis/tape_map.py): (1) moved the vol_pctile computation BEFORE the direction decision; (2) added a branch: if dscore is +/-1 (a lean) AND vol_pctile >= 0.70 (genuinely moving), set direction to UP/DOWN following the lean, instead of FLAT. dscore 0 or low-vol +/-1 still => FLAT. Gated by module constant _VOL_PROMOTE_ENABLED (revert = False). Adds vol_promoted to the output dict.
+
+Review specifically:
+1. CORRECTNESS: is the promotion logic right? Confirm dscore=0 never promotes (no lean), |dscore|>=2 path unchanged, low-vol +/-1 stays FLAT, and _VOL_PROMOTE_ENABLED=False is byte-identical to the old behavior.
+2. OVER-PROMOTION / WHIPSAW: at vol_pctile>=0.70, a tape flipping dscore +1/-1 between snapshots would flip UP/DOWN. Is that a problem, or do downstream gates (momentum-confirm, realized tape-adapter, min_edge) still filter side/quality? Is promoting a +/-1 lean too aggressive — should it also require a confirming signal (e.g. RSI, or dscore sign agreeing with trend label)?
+3. CONSUMERS: `direction`/`vol_promoted` from tape_map feed the require_tape_direction gate and possibly others (grep latest_tape_state / tape_map consumers). Does emitting more UP/DOWN (fewer FLAT) adversely affect any consumer that assumed FLAT-heavy output? Confirm the new vol_promoted key doesn't break any strict-schema reader.
+4. Any case where this makes direction WRONG (e.g. promoting a lean opposite to the true move)?
+
+Give a clear GO / NO-GO and any concrete bug or a recommended extra guard (e.g. require RSI/trend confirmation on the promoted lean).

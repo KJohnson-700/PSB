@@ -1,0 +1,3079 @@
+Reading additional input from stdin...
+2026-08-11T23:48:23.823415Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 94 column 5
+OpenAI Codex v0.142.5
+--------
+workdir: /Users/mainfolder/Documents/psb-main 1
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019ff33a-2fc0-73b1-91e6-fad97838eac9
+--------
+user
+Review a change to a live trading bot's market scanner for correctness and safety. Analysis only, no edits. Output a GO / NO-GO with specific risks.
+
+CHANGE: Added a window-boundary slug cache to src/market/scanner.py for the 5m and 15m Polymarket up/down market LISTS. Previously both were re-fetched from the gamma API every ~60s cycle (the dominant non-analysis cost + source of slug-fetch timeouts). Now the list is cached per window bucket and only re-fetched when the bucket advances (a new 5m/15m window opens) or a max-age backstop trips. Prices are NOT cached (they flow on a separate WS/midpoint path). It mirrors the pre-existing `_updown_1h_cache` pattern.
+
+Review these specifically (see `git diff HEAD -- src/market/scanner.py config/settings.yaml`):
+1. CORRECTNESS: `_window_bucket` = int(time.time()) // (step*60); `_should_refresh_updown_window` refreshes on cold/boundary-advance/max-age/disabled. Is the boundary math right — could it ever fail to refresh when a new window opens (serving an EXPIRED market), or refresh so often the cache is pointless?
+2. STARVATION RISK: could the cache ever go permanently stale and starve the bot of markets (no trades)? Trace the failure/empty paths. Note the "advance bucket only on NON-EMPTY result" guard and the failure-fallback-to-cache.
+3. MISSED MARKETS: within a window, could a newly-listed market be missed? (Note: slug look-ahead already pre-fetches upcoming windows; slugs are deterministic timestamps.)
+4. THREAD-SAFETY: cache attrs are read/written only inside `_sync_network_phase`, which runs on `_sync_driver_pool` (max_workers=1) and the caller skips overlapping phases (scanner.py ~2224). Confirm no race.
+5. REVERT: `trading.scanner_slug_cache_enabled: false` should be byte-identical to the old behavior. Confirm the flag fully bypasses the cache.
+
+Give a clear GO or NO-GO and any concrete bug or edge case that would starve trading or serve stale/expired markets.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll inspect the scanner/config diff and the surrounding execution path only. Since this is a review request, I’ll keep it analysis-only and lead with concrete correctness/safety findings.
+exec
+/bin/zsh -lc 'git diff HEAD -- src/market/scanner.py config/settings.yaml' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+diff --git a/config/settings.yaml b/config/settings.yaml
+index 86920ec3..89fa3646 100644
+--- a/config/settings.yaml
++++ b/config/settings.yaml
+@@ -51,7 +51,24 @@ trading:
+   microstructure_trade_flow_window_sec: 300
+   crypto_hourly_scan_every_n_cycles: 1
+   overrun_recovery_sleep_sec: 5
++  # 2026-08-11 WINDOW-BOUNDARY SLUG CACHE: reuse the 5m/15m updown market LIST within a
++  # window instead of re-fetching from gamma every ~60s cycle (the dominant non-analysis
++  # cost + source of slug-fetch timeouts). Re-fetch only when the window bucket advances or
++  # the max-age backstop trips; prices stay live on the separate WS/midpoint path. Set
++  # enabled:false for byte-identical legacy behavior. Max-age = window + 60s buffer by default.
++  scanner_slug_cache_enabled: true
++  scanner_slug_cache_max_age_15m_sec: 960   # 15m window + 60s; boundary is the primary trigger
++  scanner_slug_cache_max_age_5m_sec: 360    # 5m window + 60s
+   dry_run: true
++  # 2026-08-08 PAPER SLIPPAGE EQUIVALENT (operator: "paper equivalent to the slippage shit"). ON.
++  # On a paper BUY the entry is FRESH-FILLED against the REAL ask book (clob_client.py:1445):
++  # fetch book -> sweep asks -> fill at the depth-weighted price (what live pays), and NO-FILL the
++  # trade if the book is too thin (return None, exactly like live can't fill). Closes the paper->live
++  # ENTRY slippage gap with zero real money. Exits are hold-to-resolution (settle $1/$0, no book sale)
++  # so entry is the only slippage exposure. Expect: worse entry prices + some no-fills => lower freq,
++  # tighter per-trade edge = the honest live picture. RESTART-CLASS (clob_client __init__). false => off (fill at quote).
++  paper_entry_fresh_fill: false
++  paper_entry_fresh_fill_slippage_tol: 0.02   # how far past the signal price it will sweep before NO-FILL (2c)
+   slippage_guard:
+     enabled: true
+     mode: enforce
+@@ -73,7 +90,7 @@ trading:
+     universe_subscribe_cap: 250
+     rest_book_price_fallback: true
+   default_position_size: 6
+-  max_position_size: 80   # 08-07 raised 25->80 so FAVORITES (which bypass the adaptive sizer) can reach $60-80; direction lanes stay capped at $12-40 by the adaptive sizer's lane_max_usd
++  max_position_size: 40   # 2026-08-10 KEEP 40 as the CEILING (operator caught: 25 would clamp the proven winning lanes). $40 is the HARD CAP; base bets stay Kelly-small; the SELECT WINNING lanes reach $35-40 via adaptive_sizer.proven_lane_max_usd (40) + lane_max_usd (bitcoin15mYES 35, bnb15mNO/xrp15mNO 40, ...). +869 geometry = achieved via KILLING the favorite lane (risk.favorite_lane_enabled:false), NOT by capping the winners. Do NOT drop to 25 — it strangles the winning-lane sizing.
+   max_days_to_resolution: 365
+   min_hours_to_resolution: 1
+   max_exposure_per_trade: 0.08
+@@ -438,12 +455,24 @@ trading:
+     hold_all: true
+     hold_5m_all: true
+     hold_catastrophic_stop_pct: 0.55   # EXIT-ASYMMETRY 08-07: cap losers at -55% (now FIRES independently under hold_all, was inert). Below observed winner worst-MAE -51% so it cuts genuine failures, not recoverable dips. Enables safe size-up.
++    # 2026-08-09 MFE-CONDITIONAL STOP (operator GO; ghost-confirmed; SUPERSEDES the window axis for NON-favorite lanes).
++    # Ghost-settled the 130 hold_catastrophic_stop trades held-to-resolution: 88% (105/120) still resolve to $0 —
++    # wrong-side entries that NEVER went green (100% had MFE<5%). Only 12% recovered, and those dipped below -55%
++    # first so the -55% stop already cut them. June (+$450 era) cut losers at ~-34% (payoff b=1.2-1.7); Aug rides
++    # them to -47%+ (b=0.49) => needs 67% WR just to break even. Fix: a NON-favorite hold position that never went
++    # green (peak MFE < arm) is cut SHALLOW at hold_never_green_stop_pct instead of riding to the -55% catastrophic;
++    # a position that went green THEN dipped rides (recoverable winner), deep -cat backstop only. Favorites are
++    # EXCLUDED (they win by settling to $1 without going green). Set enabled:false to fall back to the window axis.
++    hold_mfe_conditional_stop_enabled: true   # 2026-08-10 STAGED (Codex round-2 GO) — never-green (peak MFE<8%) cut shallow -34%, ever-green rides. Codex round-1 NO-GO (bypasses [1h] window axis on fast windows) was REFUTED by the ghost split: held (updown_expired) counterfactual shows never-green 5m/15m that dip past -34% recover 0/14 (100% resolve to a loss), while ever-green 5m/15m ride at 90% WR. Cutting the 14 dead losers: -$188 -> -$62 (+$126, zero winners forfeited). This is the "$16 never-green loss -> $5 cut" fix. STAGED not restarted (frozen at live_testing.__init__ — takes effect on next restart). _is_fav>=0.82 exemption is a cleanup note (favorite generators return [] when favorite_lane_enabled:false).
++    hold_never_green_mfe_arm: 0.08     # peak MFE >= +8% => "ever green" (rides); below => never-green (cut shallow)
++    hold_never_green_stop_pct: 0.34    # shallow cut depth for never-green non-favorite losers (~restores June discipline)
+     hold_5m_loser_floor_pct: 0.4
+     hold_lane_loser_floor_enabled: true
+-    tp_giveback_enabled: false
++    tp_giveback_enabled: false  # 2026-08-11 RIPPED (operator: "rip out the bullshit bandaids I don't need"). Feed-blind: proven this session it MISSES the give-backs it was built for (every big BNB give-back had mae==exit = no intervening tick observed, so a reactive trail can't bank a retrace it never sees). Confirmed-peak/green-floor sub-patches are now dead code (fire-condition first clause is self._tp_giveback_enabled). The ever-green MFE stop is the real exit fix and stays ON.  # 2026-08-10 RE-ENABLED (operator: "+108 to nothing is not okay"). The 08-09 off-decision was made on 4 fires, 2 of which were the RARE settlement-gap failure. Re-measured on the FULL log: of 200 give-backs (peak>=30% then lost), 96% are WALK-DOWNS the trail banks; only 4% are gaps. Both live BNB give-backs (1h YES peak +108% and +72%) are walk-downs -> trail converts -$15.21 to +$15.68 (+$31 swing). Only the 2 bitcoin-15m fade give-backs gap (trail misses those; separate fix). STAGED (frozen at init) -> rides the MFE-cond restart. WATCH first live fires bank real green.  # 2026-08-09 ENABLED (operator GO). ROOT of the deep-loss bleed: 74% of Aug catastrophic-stops were EVER-GREEN round-trips (median peaked +50% -> died -65%); 77 Aug losses peaked >=+30% then round-tripped (-$611). This banks a reversing winner on a >=retrace(0.20) from peak(>=arm 0.30) => exits >=+10% green instead of riding to -55%/-68% catastrophic. Fires UNDER hold (reason take_profit_giveback NOT in the hold-enforce suppression tuple). Only fires on a REAL retrace so a still-climbing runner is never cut (the 07-13/07-16 fixed-trail failure mode is avoided). Projected +~$977 swing on the 77 round-trip losses. WATCH first fires = banking real green not phantom-mark noise.
+   execution_fees:
+     enabled: true
+     crypto_updown_15m_taker_fee_rate: 0.07
++    hybrid_maker_fill_rate: 0.0    # 2026-08-08 OFF (was 0.50) — EXCLUDED from the window-conditional-stops restart: not operator-approved for this ship + not Codex-GO'd on the current (paper-guarded, entry-leg-only) version. rate 0.0 => the maker-factor code is INERT (guard requires _mfr>0.0), full-taker both legs = old behavior. Re-enable only after a fresh Codex GO. The #1 rationale still stands: paper over-charges 15m/1h entry fees vs maker-first live; measured ~0.56 from order_lifecycle.jsonl n=27.
+   fee_aware_edge:
+     enabled: true
+     taker_fee_rate: 0.07
+@@ -456,12 +485,12 @@ trading:
+     min_n_down: 4
+     min_n_up: 12
+     mult_floor: 0.4
+-    mult_ceil: 1.0
++    mult_ceil: 1.6          # 2026-08-10 (operator): was 1.0 = DOWNSIZE-ONLY (couldn't grow winners). 1.6 lets a proven lane grow above base toward its per-lane cap; re-clamped to max_position_size (40). "Kelly had different amounts per lane, flat isn't working."
+     roi_scale: 0.22
+     sensitivity: 0.8
+     ema_alpha: 0.5
+     unproven_lane_mult: 0.6
+-    proven_lane_max_usd: 0
++    proven_lane_max_usd: 40   # 2026-08-10 (operator): was 0 (off). Proven lanes (WR>=proven_wr_min 0.55 AND ROI>=proven_roi_min 0.05) cap at $40 = the "max bet 35-40 on select WINNING lanes". Unproven/losing lanes stay small (unproven_lane_mult 0.6) + regime_fade sits out <48% WR.
+     proven_wr_min: 0.55
+     proven_roi_min: 0.05
+     lane_max_usd:
+@@ -469,15 +498,15 @@ trading:
+       xrp_macro|1h|BUY_NO: 15
+       bitcoin|5m|BUY_NO: 15
+       sol_macro|5m|BUY_NO: 15
+-      bnb_macro|15m|BUY_NO: 15
+-      bitcoin|15m|BUY_NO: 15
+-      xrp_macro|15m|BUY_NO: 15
++      bnb_macro|15m|BUY_NO: 40     # 2026-08-10 UPSIZE proven winner (+$27, 75%WR, f*0.40)
++      bitcoin|15m|BUY_NO: 30       # UPSIZE proven winner (+$14, 68%WR)
++      xrp_macro|15m|BUY_NO: 40     # UPSIZE proven winner (+$35, 66%WR)
+       doge_macro|1h|BUY_NO: 15
+       doge_macro|5m|BUY_NO: 15
+       bitcoin|5m|BUY_YES: 12
+-      bnb_macro|15m|BUY_YES: 12
+-      bitcoin|15m|BUY_YES: 12
+-      xrp_macro|15m|BUY_YES: 12
++      bnb_macro|15m|BUY_YES: 30    # UPSIZE proven winner (+$9.5, 83%WR)
++      bitcoin|15m|BUY_YES: 35      # UPSIZE proven winner (+$33, 85%WR, f*0.33)
++      xrp_macro|15m|BUY_YES: 12    # KEEP LOW: loser (-$10.6, f*-0.18)
+       bnb_macro|5m|BUY_YES: 12
+       sol_macro|1h|BUY_YES: 12
+       bitcoin|1h|BUY_YES: 12
+@@ -561,7 +590,7 @@ lane_management:
+     min_pause_gap: 0.08
+     auto_pause_confirmation_trades: 3
+ regime_fade:
+-  enabled: false
++  enabled: true    # 2026-08-10 ENABLED (operator GO). Per-lane PER-SIDE auto-sitout when a lane's rolling WR collapses below fade_below_wr (0.48) in the mid-confidence band [0.45,0.65) — the eth NATIVE-LONG bleed (37% WR, -$136) is exactly this: momentum longs run over in a chop/down tape while the ≥0.65 favorites are protected. Adaptive/self-flipping (resumes when WR recovers >0.53), fail-open. Was left OFF; fade_regime_windows also empty (fade never fired) → bot ran native momentum, the known loser. RESTART-CLASS (regime_fade not in _HOT_RELOAD_TOP_LEVEL_KEYS).
+   band_low: 0.45
+   band_high: 0.65
+   window_trades: 60
+@@ -680,7 +709,7 @@ strategies:
+     ai_updown_marginal_min_edge: 0.03
+     ai_hold_veto_ttl_sec: 300
+     bitcoin_1h_simple_long:
+-      enabled: true
++      enabled: false   # 2026-08-11 OFF: forced allowed_side=LONG on 1h in [0.50,0.85] "even under bearish bias" (bitcoin.py:2255), pinning bitcoin LONG 119/0. In the current BEARISH btc tape that = a negative-edge forced long (est_prob 0.43, edge -0.43) that then self-blocks on lane_min_edge => bitcoin can neither short nor long = 0 trades. Disabled so 1h follows _resolve_bias_for_tf (short a bearish tape / sit out neutral). Revert enabled:true to restore the up-lean band.
+       entry_min: 0.5
+       entry_max: 0.85
+       sizing_edge: 0.06
+@@ -847,6 +876,7 @@ strategies:
+       min_edge: 0.12
+     use_true_kelly_sizing: true
+   sol_macro:
++    buy_no_min_no_price_5m: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap 5m shorts (NO<0.40 = shorting into an up-priced market). sol 5m BUY_NO at NO<0.40 was 17% WR / -$118 in Aug. Side-isolated (BUY_NO), 5m-only, per-lane. Hot-reloadable (self.config.get). Fires as lane_price_band skip when yes_price>0.60.
+     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
+     require_tape_direction: true   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
+     buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
+@@ -1078,6 +1108,7 @@ strategies:
+     fresh_cross_override: true
+     eth_pocket_allow_15m_buy_yes_fade: true
+     buy_no_min_no_price_5m: 0.49
++    buy_no_min_no_price_15m: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap eth 15m shorts (NO<0.40). eth 15m BUY_NO at NO<0.40 was 0% WR / -$27 in Aug. Side-isolated (BUY_NO), 15m-only, per-lane. Hot-reloadable. Fires as lane_price_band when yes_price>0.60.
+     eth_pocket_allow_buy_yes_1h: true
+     eth_pocket_allow_5m_buy_no: true
+     alt_neutral_htf_aligned_carry: false
+@@ -1109,11 +1140,11 @@ strategies:
+     low_atr_only_lanes: []
+     disable_buy_no_5m_native: true
+     eth_5m_buy_no_flip_to_yes: false
+-    enabled: false
++    enabled: true
+     use_ai: true
+     eth_momentum_confirm:
+-      buy_yes: []
+-      buy_no: []
++      buy_yes: ['5m', '15m', '1h']   # 2026-08-09 LIVE (was [], shadow-only): require MACD momentum confirm for eth LONGS. ROOT of the -$40 re-enable bleed: 3 BUY_YES (est_prob 0.55-0.64 = NOISE) bet UP into DOWN momentum, held, resolved DOWN. Momentum-confirm blocks up-bets when MACD momentum isn't up. Hot-reloadable (self.config.get). Skip reason: buy_yes_no_eth_momentum_confirm.
++      buy_no: ['5m', '15m', '1h']   # 2026-08-09 LIVE (was [], now SYMMETRIC to buy_yes): require MACD-DOWN momentum confirm for eth SHORTS. ROOT of this session's eth bleed: 3 BUY_NO shorts (entry 0.50/0.31/0.48) all bet DOWN into an UP market, ALL resolved YES/expired = -$38. Ungated shorts fire without momentum backing and short into rising tape. Symmetric momentum-confirm blocks down-bets when MACD momentum isn't down. Side-isolated. Hot-reloadable (self.config.get). Skip reason: buy_no_no_eth_momentum_confirm.
+       shadow:
+         buy_yes:
+         - 5m
+@@ -1590,6 +1621,7 @@ strategies:
+       band: 0.01
+       min_edge: 0.12
+   xrp_macro:
++    buy_no_min_no_price: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap xrp shorts (NO<0.40) across windows. xrp 15m/5m/1h BUY_NO at NO<0.40 lost -$145 (~25% WR); the WINNING xrp 15m NO (+$61) is all at NO>=0.40, so this cuts only the cheap losers and keeps the good shorts. Side-isolated (BUY_NO), per-lane. Hot-reloadable. Fires as lane_price_band when yes_price>0.60.
+     alt_neutral_tape_backup: false   # Phase 0a REVERTED 08-07: near-inert (112 tape sides / 1 conversion, lost). Direction is the problem, not freq.
+     require_tape_direction: true   # STOP-BLEED 08-07: sit out BOTH sides on FRESH-but-FLAT tape (kills coinflip shorts); fail-open on stale
+     buy_no_tape_map_veto_up: true   # STOP-BLEED 08-07: veto BUY_NO when tape confidently UP (no shorting into an up-tape); self-flips, fail-open on stale
+@@ -2324,7 +2356,7 @@ direction:
+   # favorites with working exits and judge on CLEAN data. Freshness was ruled out (losers had
+   # fresher prices). If it still loses with working caps -> then cut for real.
+ lane_tape_adapter:
+-  mode: "off"                 # size multiplier stays OFF (sizing is LAST, separate lever)
++  mode: "live"                # 2026-08-11 REALIZED SIZING LIVE (operator: results, not shadow). min_mult 0.25/max_mult 1.0 => DE-SIZE realized losers to as low as 25% bet, NEVER upsizes; winner-protected (avg_pnl>=0 never cut) + green-gated (only cuts lanes that STOPPED going green). Shrinks the band-long bleed the adapter already flags (hype15m/bitcoin5m up) and self-lifts when a lane recovers. Revert mode:"off" to disable.
+   admission_mode: "live"      # 2026-08-08 PLUG IN THE REALIZED SELF-FLIPPING BRAIN. Was default-off, so every gate calling get_tape_admission_delta() (eth/btc/sol min_edge + favorite sit-out) read a hardcoded 0.0 = tape-blind. Per-(asset|window|side) delta from the last k realized closes: >0 tightens a net-losing/never-green side, <0 loosens a winning+green side; flips sign automatically as the tape turns.
+   window_closes: 6            # rolling realized closes per lane (fast reaction)
+   min_samples: 3              # need >=3 closes before adapting; else neutral 0.0
+@@ -2338,15 +2370,25 @@ lane_tape_adapter:
+ favorite_lane:
+   enabled: true
+   floor: 0.85            # admit only if fav_price (max(yes,1-yes)) >= this
++  window_floors:         # 2026-08-10 PER-WINDOW FLOOR (operator "improve if data offers a filter, else cut"). 1h favorites split (n=29, 8 sess): 0.85-0.89 = 50% WR net -$65 (a 1h fav has a full HOUR to cross back through strike => 0.86 is a coin-flip); 0.90-0.94 = 72.7% WR net +$3.88 (clears 68% breakeven). 15m favs win 87% at 0.85 (net +$175 — UNTOUCHED). Raise ONLY 1h's floor. Turns 1h favs -$61 -> ~breakeven+. Absent/per-tf-absent => uses `floor` (byte-identical). Hot-reloads (read in _favorite_lane_signals via full_config.get each scan).
++    "1h": 0.90
+   price_max: 0.93        # 08-07 HUGE-LOSS FIX: skip DEEP favorites (>=0.93). A 0.96 fav pays ~4% per win but loses ~96% of stake when it gaps to $0 at settlement (the xrp -$70.37 was entry 0.96) — worst risk/reward. The 0.85-0.93 band pays enough per win (~9-18%) to survive its own loss ratio.
+-  size_usd: 70.0         # 08-07 raised 8->70: bigger wins (~$10/win) now that loss is capped at -55% + bankroll $1k gives exposure headroom; bypasses adaptive sizer
++  size_usd: 25.0         # 2026-08-10 ROLLED BACK 70->25 (operator, longevity/Kelly): favorites are Kelly-NEGATIVE (p0.77 b0.29 => f*=-0.02) so $70=7% of bankroll on a -EV lane = ruin risk. +869 baseline had NO fav lane + $25 max. $25 base; per-lane winners upsized via adaptive_sizer (proven_lane_max_usd 40).
++  size_taper_enabled: true   # 2026-08-09 #2 SIZE-TAPER (operator GO): scale stake by payoff (1-fav_price)/(1-floor); 0.85 fav=full, 0.93 fav=~0.47x. Scope: 0.88-0.91 band 71%WR but -$111 (thin payoff); recovers ~+$50, zero trades cut. RESTART-CLASS (code).
++  size_taper_min_frac: 0.4   # floor on the taper (never below 40% of size_usd)
++  size_taper_start: 0.88     # full size up to 0.88 (the +$72 sweet spot); taper only 0.88->0.93 (the bleed bands)
++  sit_out_trend_aligned_mode: shadow   # 2026-08-09 #1 (operator GO, SHADOW-first): favorites bet WITH a trending tape BLEED (-$365); FLAT/against-trend WIN. shadow=log would-sit-out only (still trades); live=sit out aligned; off=byte-identical. Flip to live after shadow confirms.
+   windows: [15m, 1h]     # 08-08 15m RESTORED: the earlier "cut 15m, it bled -$185" was the SAME confound — those -$70 15m losses were the exit-BLINDNESS bug (settlement gap-through skipped the cap), not a 15m-lane defect. With _mark_delta_blind_skip() live those cap at ~-$35. Re-test both windows on clean data before cutting anything.
+   min_mins_left: 3.0     # avoid last-candle settlement manipulation
+   presettle_derisk_secs: 180     # 08-07 HUGE-LOSS FIX (the gap-through): a %-stop CANNOT catch a favorite gapping 0.85->$0 in the final settlement candle (the sol -$70.81 entry 0.87 rode to RESOLVED:NO). In the final N secs, if a favorite's mark has FLIPPED to <= presettle_derisk_price (i.e. it's now the underdog = losing), exit to salvage instead of $0. Winners mark toward 1.0 near settlement so they're never touched. 0 => disabled. 08-08 NUDGE 120->180: give slower 1h favorites more runway to be caught.
+   presettle_derisk_price: 0.55   # 08-08 NUDGE 0.5->0.55: the bnb 1h loser expired at mark ~0.53 (entry 0.88, -40%), JUST above the 0.5 threshold, so the de-risk missed it (updown_expired -$32.39). 0.55 catches a favorite that has slipped to a coinflip-ish underdog. Still well below a winning favorite (>0.6), so it won't cut winners.
+   hard_stop_price: 0.70    # 2026-08-08 06:1x DISABLED (was 0.70) — AUTOWAKE REVERT, it cut WINNERS 3-for-3 in its first 4 minutes live. Session test_20260808_060714, the 9:00-9:15AM ET window: sol entry 0.86 cut 0.695 -$15.41 | btc entry 0.90 cut 0.415 -$39.75 (the paged bust) | xrp entry 0.86 cut 0.675 -$17.09 = -$72.25 realized. CLOB prices-history says ALL THREE Up tokens settled 0.995 (WON): sol 0.875->0.685 dip->0.995, btc 0.705->0.755->0.995, xrp whipsaw->0.995. doge (control, same window, never dipped below 0.90) was never cut and won. A 15m favorite bought at 0.85-0.93 routinely dips to 0.60-0.70 mid-window and still settles 1.0 — a 0.70 mark stop is structurally guaranteed to cut the lane's winners, which IS the lane's 94%-WR edge (hold to resolution). The btc one is worse still: it fired on mark 0.415 (best_bid 0.41/ask 0.42, ws age 6.9ms) at 13:09:44 when the real tape was ~0.62-0.755 — a mark that never existed, after 106s where the position was invisible to check_exits (mfe=0.0, mae==exit pnl => not one intervening tick was evaluated). 0 => off; loss control reverts to hold_catastrophic_stop_pct -55% + the presettle de-risk above (the config the proven favorite lane ran in). Do NOT re-enable without evidence from settled favorites that a mid-window dip below 0.70 actually predicts a LOSS.
++  early_stop_windows: [1h]  # 2026-08-09 RESTORED to [1h] (was reverted to [all] by the baseline restore, which re-armed the fast-window winner-cutter; it fired once this session on xrp 15m entry 0.91 -> cut 0.665 -$20.60, the session's biggest single loss = the exact documented failure mode). [1h] = 5m/15m ride to resolution, only doge-1h keeps the stop. STAGED not restarted. 2026-08-08 WINDOW-CONDITIONAL EARLY STOPS (operator GO; held-projection this session). The early hold-lane cuts — favorite_hard_stop (above) AND the independent hold_catastrophic_stop backstop — fire ONLY on these windows; other windows ride to resolution. Default 1h. WHY: the stop-hold sweep (this session) showed 5m/15m winners routinely dip to -20..-46% MAE mid-window and STILL settle GREEN (sol 15m held +114.73 vs stopped +105.65; xrp 15m +131.86 vs +124.02; hype 15m +83.84 vs +78.72) — so a mark stop on fast windows is structurally guaranteed to cut winners (this is the SAME finding as the autowake 15m bust note on hard_stop_price above). doge 1h is the LONE lane where HOLDING LOSES (-26.62 vs +8.49 stopped, delta -35.11) => 1h KEEPS the stop. The final-seconds presettle de-risk is a SEPARATE block and stays active on every window. Tokens: "all" => keep stop on every window (pre-change behavior); [] => keep it nowhere. RESTART-CLASS (execution code, not hot-reloadable).
+   tape_sit_out_delta: 0.02  # 2026-08-08 REALIZED TAPE DEFERENCE: sit out a favorite side while get_tape_admission_delta(asset,window,side) >= this (side net-losing/never-green in CURRENT tape). Self-flips with the tape; both sides losing (chop) => both sit out. Needs lane_tape_adapter.admission_mode: live. 0 => off.
+   respect_ai_direction: true  # 2026-08-08 favorite lane HONORS the AI direction driver (was side-agnostic, ignored it): AI FLAT/sit-out => skip asset; AI LONG => only UP favorites; AI SHORT => only DOWN. Kills the sol whipsaw (AI said sol=FLAT, favorite bought both sides+lost). false => legacy side-agnostic.
++  fav_net_sit_out_avg: -1.0   # 2026-08-10 FAVORITE-SCOPED REALIZED-NET SIT-OUT (operator GO). Sit out a favorite (asset,window,side) while its rolling AVG realized net per favorite close <= this ($/trade). Reads favorite_net_tracker (FAVORITE-only closes, entry>=floor, keyed asset|window|side) — NOT lane_tape_adapter (which mixes favorite+band + is MFE/green not NET, so it read sol|15m|up as loosen while it bled -$99). Payoff-trap aware (favorites are high-WR/neg-NET). Validated on journal: -1.0 sits out doge15mDOWN(-6.3) xrp15mUP(-4.4) bnb1hUP(-3.5) sol1hDOWN(-2.2) etc; KEEPS xrp1h(+6.6) sol15mUP(+3.5). Self-flips: rolling window rolls losers off / recovery re-admits. null/absent => OFF (fail-open). RESTART-CLASS (favorite_lane not hot-reloadable).
++  fav_net_window: 12          # rolling window: last N favorite closes per lane
++  fav_net_min_samples: 5      # need >= N favorite closes before the gate emits a signal (else fail-open/admit)
+ ai:
+   prompt_version: lane-feedback-v2-decisive
+   policy_version: decision-layer-v1
+@@ -2372,7 +2414,7 @@ ai:
+     base_url: http://localhost:11434/v1
+     local: true
+     models:
+-    - qwen3:8b
++    - qwen3-vl:4b-instruct-q4_K_M
+     json_mode: true
+     cooldown_on_429_seconds: 0
+   timeout: 90
+@@ -2466,7 +2508,14 @@ notifications:
+   alert_on_status: false
+   alert_on_error: true
+ risk:
+-  max_concurrent_positions: 50
++  favorite_lane_enabled: false   # 2026-08-10 KILL THE FAVORITE LANE (operator: revert to +869 winning config, which had NO favorite lane). Favorites 0.85+ = win-11%/lose-90% payoff-trap, b=0.13, need 88% WR, −$448 all-time. Under `risk` = HOT-RELOADABLE (no restart). Set true to re-enable. Read by sol_macro + bitcoin _favorite_lane_signals.
++  rsi_fade:                # 2026-08-10 RSI-GATED COINFLIP FADE (operator GO — the MEASURED >coinflip edge, project_rsi_fade_edge_found_2026_08_10). Under `risk` so it's HOT-RELOADABLE => REVERT TRIGGER = flip enabled:false (no restart) if fade-WR < breakeven. Read by sol_macro._resolve_alt_bias_for_tf (shared by ALL alts + eth): fades the direction-lane side when RSI < rsi_below AND trend NOT fully-aligned (align-gate = regime safety; fading a strong aligned trend gets run over). Favorites bypass the resolver = UNAFFECTED. Measured: RSI<40 native 30%WR => FADE 69.6% (4 sessions, never <56%). rsi_above 101 = overbought-fade OFF (ship strongest zone first). side_source retagged *_rsi_fade for attribution/monitoring.
++    enabled: false   # 2026-08-11 REVERT-TRIGGER HIT (hot, no restart). LIVE session: fade 43%WR, -$90 of a -$105 loss; hype = 13/24 longs faded into a DOWN tape (RSI<40 flips short->long = buying the falling knife), -$52 of hype's -$67. The 69.6%WR was measured in an UP/chop tape; in this down tape the align-gate isn't catching the trend and the fade is anti-edge. Re-enable when the tape is choppy/ranging, NOT trending down.
++    rsi_below: 40.0
++    rsi_above: 101.0
++    windows: [5m, 15m, 1h]
++    flat_edge: 0.05          # 2026-08-10 fade sizes on THIS flat edge, NOT est_prob (which is anti-predictive in the band). The fade is exempted from lane_min_edge + est_prob conviction floors (sol_macro scan loop) because est_prob-edge is ~0/NEGATIVE by construction on the faded side => without this the fade takes ZERO trades (measured: 74 resolutions -> 0 fills). Conservative 0.05 (below alt_1h_simple_long 0.06). Hot-reloadable. Set higher to size faded bets up once WR confirms.
++  max_concurrent_positions: 50   # 2026-08-08 NOW HOT-RELOADABLE (operator): raise/lower the max simultaneous OPEN trades in settings.yaml and it applies live WITHOUT restart (can_trade reads it from self.config each check; "risk" is in _HOT_RELOAD_TOP_LEVEL_KEYS). NOTE: 50 is high vs a $1k bankroll at $70/favorite — lower it here anytime to cap concurrent exposure. Per-strategy override: strategies.<name>.max_concurrent_positions.
+   max_trades_per_day: 500
+   paper_max_trades_per_day: 2000
+   check_interval: 60
+@@ -2485,6 +2534,8 @@ term_risk:
+     MID_TERM: 0.02
+     LONG_TERM: 0.02
+ exposure:
++  max_same_side_notional_usd: 125.0   # 2026-08-10 SAME-SIDE $-CAP (operator GO, Codex-verified). Downsize-to-fit: cap total same-outcome (YES/NO) OPEN notional at $125/side (~12% of $1k same-direction) — crypto lanes ~90% correlated so N same-side = 1 leveraged bet (corr peak-ss-notional vs maxDD ~0.7). ⚠️ DRAWDOWN INSURANCE not EV: Codex 12-sess replay ~halves worst session (−$141→~−$91) but trims near-breakeven net slightly neg (shrinks winning clusters too). 0=off. VALUE hot-reloads (exposure); the code path in clob_client.evaluate_entry is restart-class. See project_same_side_concurrency_is_edge_not_leak_2026_08_10.
++  same_side_notional_min_floor_usd: 10.0   # if remaining same-side room < this, BLOCK (don't place dust) instead of downsize
+   full_size: 25.0
+   moderate_size: 15.0
+   minimal_size: 8.0
+diff --git a/src/market/scanner.py b/src/market/scanner.py
+index 24fce3ea..e4f2ed57 100644
+--- a/src/market/scanner.py
++++ b/src/market/scanner.py
+@@ -451,6 +451,21 @@ class MarketScanner:
+         self._scan_call_count = 0
+         self._updown_1h_cache: List[Market] = []
+         self._updown_1h_cache_updated_at: Optional[datetime] = None
++        # 2026-08-11 WINDOW-BOUNDARY SLUG CACHE (5m/15m). The 5m/15m updown market
++        # LISTS are stable within a window (slugs are deterministic *-updown-{step}-{unix}
++        # timestamps; look-ahead already pre-loads upcoming windows), yet they were
++        # re-fetched from gamma EVERY ~60s cycle — the dominant non-analysis cost and the
++        # source of the slug-fetch timeouts. Cache the list per window bucket and re-fetch
++        # only when the bucket advances (a new window opens) or a max-age backstop trips.
++        # Prices stay live on the separate WS/midpoint path, so freshness is unaffected.
++        # Bucket advances only on a NON-EMPTY fetch so a transient empty/slow response
++        # never locks in an empty window. Fully guarded by scanner_slug_cache_enabled.
++        self._updown_15m_cache: List[Market] = []
++        self._updown_15m_cache_bucket: Optional[int] = None
++        self._updown_15m_cache_updated_at: Optional[datetime] = None
++        self._updown_5m_cache: List[Market] = []
++        self._updown_5m_cache_bucket: Optional[int] = None
++        self._updown_5m_cache_updated_at: Optional[datetime] = None
+         # WSS price overlay (wired by main after ws_client exists). Hot-path read.
+         self.ws_client = None
+         # Tokens we last requested prices for -> the WS subscription want-set
+@@ -670,6 +685,53 @@ class MarketScanner:
+         call_n = max(1, int(scan_call_count or 1))
+         return ((call_n - 1) % every_n) == 0
+ 
++    def _slug_cache_enabled(self) -> bool:
++        """Feature flag for the window-boundary 5m/15m slug cache. Default ON.
++
++        Set trading.scanner_slug_cache_enabled: false for byte-identical legacy behavior
++        (every cycle re-fetches the 5m/15m lists live).
++        """
++        trading_cfg = (self.config.get("trading", {}) or {})
++        return bool(trading_cfg.get("scanner_slug_cache_enabled", True))
++
++    def _slug_cache_max_age_sec(self, step_minutes: int) -> float:
++        """Backstop max-age for the per-window cache. Set just above the window length so
++        the boundary crossing is the primary refresh trigger and this is only a safety net.
++        """
++        trading_cfg = (self.config.get("trading", {}) or {})
++        key = f"scanner_slug_cache_max_age_{step_minutes}m_sec"
++        default = float(step_minutes) * 60.0 + 60.0  # window + 60s buffer
++        try:
++            return max(0.0, float(trading_cfg.get(key, default)))
++        except (TypeError, ValueError):
++            return default
++
++    @staticmethod
++    def _window_bucket(step_minutes: int) -> int:
++        """The integer window index for now, so the value changes exactly at each
++        step-minute boundary (e.g. every 15 min for 15m, every 5 min for 5m)."""
++        return int(time.time()) // max(1, int(step_minutes) * 60)
++
++    def _should_refresh_updown_window(
++        self,
++        step_minutes: int,
++        last_bucket: Optional[int],
++        updated_at: Optional[datetime],
++    ) -> bool:
++        """True => re-fetch this window's slug list; False => reuse the cache.
++
++        Refresh when: the cache is disabled (always live), the cache is cold, the window
++        boundary has advanced since the last fetch, or the max-age backstop has elapsed.
++        """
++        if not self._slug_cache_enabled():
++            return True
++        if last_bucket is None or updated_at is None:
++            return True
++        if self._window_bucket(step_minutes) != last_bucket:
++            return True
++        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
++        return age >= self._slug_cache_max_age_sec(step_minutes)
++
+     def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+         List[Market],
+         List[Market],
+@@ -712,11 +774,23 @@ class MarketScanner:
+         look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
+         fetch_hype = self._should_fetch_hype_alt_markets()
+ 
++        # WINDOW-BOUNDARY SLUG CACHE: only re-fetch a window's list when its bucket advances
++        # (or the max-age backstop trips). Between boundaries the cached list is reused and the
++        # live fetch is skipped entirely — this is what removes the ~per-cycle gamma slug cost.
++        refresh_15m = self._should_refresh_updown_window(
++            15, self._updown_15m_cache_bucket, self._updown_15m_cache_updated_at
++        )
++        refresh_5m = self._should_refresh_updown_window(
++            5, self._updown_5m_cache_bucket, self._updown_5m_cache_updated_at
++        )
++
+         tasks = {
+             "gamma": lambda: self._fetch_markets_gamma(limit=200),
+-            "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
+-            "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
+         }
++        if refresh_15m:
++            tasks["updown"] = lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m)
++        if refresh_5m:
++            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+         if refresh_updown_1h:
+             tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+         if fetch_hype:
+@@ -750,14 +824,35 @@ class MarketScanner:
+                 future.cancel()
+                 results.setdefault(name, [])
+ 
+-        # fetch_updown_markets historically returned (15m, ~30m carry) — the 30m carry path
+-        # is dead (Polymarket discontinued the 30m crypto product family). Accept either
+-        # the legacy tuple form or a bare list, ignoring any second element.
+-        up_pair = results.get("updown", [])
+-        if isinstance(up_pair, tuple) and up_pair:
+-            updown_15m = up_pair[0] if isinstance(up_pair[0], list) else []
++        # 15m updown: window-boundary cache. fetch_updown_markets historically returned
++        # (15m, ~30m carry) — the 30m carry path is dead (Polymarket discontinued the 30m
++        # crypto product family). Accept either the legacy tuple form or a bare list.
++        # Refresh path parses + stores the list keyed by window bucket (advancing the bucket
++        # only on a NON-EMPTY result so a transient miss never locks in an empty window) and
++        # falls back to the cache on failure; skip path reuses the cache without any fetch.
++        updown_15m: List[Market]
++        if refresh_15m:
++            fifteen_failed = (
++                "updown" in failed_fetches or "updown" not in completed_fetches
++            )
++            up_pair = results.get("updown", [])
++            if isinstance(up_pair, tuple) and up_pair:
++                fresh_15m = up_pair[0] if isinstance(up_pair[0], list) else []
++            else:
++                fresh_15m = up_pair if isinstance(up_pair, list) else []
++            if fifteen_failed and not fresh_15m and self._updown_15m_cache:
++                logger.warning(
++                    "Scanner: reusing cached 15m updown markets after live fetch failure/timeout"
++                )
++                updown_15m = list(self._updown_15m_cache)
++            else:
++                updown_15m = fresh_15m
++                self._updown_15m_cache = list(updown_15m)
++                self._updown_15m_cache_updated_at = datetime.now(timezone.utc)
++                if updown_15m:
++                    self._updown_15m_cache_bucket = self._window_bucket(15)
+         else:
+-            updown_15m = up_pair if isinstance(up_pair, list) else []
++            updown_15m = list(self._updown_15m_cache)
+ 
+         updown_1h_markets: List[Market]
+         if refresh_updown_1h:
+@@ -780,10 +875,31 @@ class MarketScanner:
+                     "Scanner: reusing cached hourly updown markets (skip cadence active)"
+                 )
+ 
++        # 5m updown: window-boundary cache (same shape as 15m above).
++        updown_5m_markets: List[Market]
++        if refresh_5m:
++            five_failed = (
++                "updown_5m" in failed_fetches or "updown_5m" not in completed_fetches
++            )
++            fresh_5m = results.get("updown_5m", []) or []
++            if five_failed and not fresh_5m and self._updown_5m_cache:
++                logger.warning(
++                    "Scanner: reusing cached 5m updown markets after live fetch failure/timeout"
++                )
++                updown_5m_markets = list(self._updown_5m_cache)
++            else:
++                updown_5m_markets = fresh_5m
++                self._updown_5m_cache = list(updown_5m_markets)
++                self._updown_5m_cache_updated_at = datetime.now(timezone.utc)
++                if updown_5m_markets:
++                    self._updown_5m_cache_bucket = self._window_bucket(5)
++        else:
++            updown_5m_markets = list(self._updown_5m_cache)
++
+         return (
+             results.get("gamma", []),
+             updown_15m,
+-            results.get("updown_5m", []),
++            updown_5m_markets,
+             updown_1h_markets,
+             results.get("hype_alt", []),
+             look_ahead_15m,
+
+exec
+/bin/zsh -lc 'rg -n "updown_1h_cache|slug_cache|window_bucket|should_refresh_updown_window|_sync_network_phase|_sync_driver_pool|overlap|skip" src/market/scanner.py config/settings.yaml' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+src/market/scanner.py:431:        self._sync_driver_pool = ThreadPoolExecutor(
+src/market/scanner.py:444:        self._slug_cache_lock = Lock()
+src/market/scanner.py:452:        self._updown_1h_cache: List[Market] = []
+src/market/scanner.py:453:        self._updown_1h_cache_updated_at: Optional[datetime] = None
+src/market/scanner.py:462:        # never locks in an empty window. Fully guarded by scanner_slug_cache_enabled.
+src/market/scanner.py:495:        # one slow cycle does not overlap the next and blind the bot indefinitely.
+src/market/scanner.py:688:    def _slug_cache_enabled(self) -> bool:
+src/market/scanner.py:691:        Set trading.scanner_slug_cache_enabled: false for byte-identical legacy behavior
+src/market/scanner.py:695:        return bool(trading_cfg.get("scanner_slug_cache_enabled", True))
+src/market/scanner.py:697:    def _slug_cache_max_age_sec(self, step_minutes: int) -> float:
+src/market/scanner.py:702:        key = f"scanner_slug_cache_max_age_{step_minutes}m_sec"
+src/market/scanner.py:710:    def _window_bucket(step_minutes: int) -> int:
+src/market/scanner.py:715:    def _should_refresh_updown_window(
+src/market/scanner.py:726:        if not self._slug_cache_enabled():
+src/market/scanner.py:730:        if self._window_bucket(step_minutes) != last_bucket:
+src/market/scanner.py:733:        return age >= self._slug_cache_max_age_sec(step_minutes)
+src/market/scanner.py:735:    def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+src/market/scanner.py:746:        sync_fn = self._sync_network_phase
+src/market/scanner.py:755:    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
+src/market/scanner.py:771:        with self._slug_cache_lock:
+src/market/scanner.py:779:        # live fetch is skipped entirely — this is what removes the ~per-cycle gamma slug cost.
+src/market/scanner.py:780:        refresh_15m = self._should_refresh_updown_window(
+src/market/scanner.py:783:        refresh_5m = self._should_refresh_updown_window(
+src/market/scanner.py:832:        # falls back to the cache on failure; skip path reuses the cache without any fetch.
+src/market/scanner.py:853:                    self._updown_15m_cache_bucket = self._window_bucket(15)
+src/market/scanner.py:862:            if hourly_failed and self._updown_1h_cache:
+src/market/scanner.py:866:                updown_1h_markets = list(self._updown_1h_cache)
+src/market/scanner.py:869:                self._updown_1h_cache = list(updown_1h_markets)
+src/market/scanner.py:870:                self._updown_1h_cache_updated_at = datetime.now(timezone.utc)
+src/market/scanner.py:872:            updown_1h_markets = list(self._updown_1h_cache)
+src/market/scanner.py:875:                    "Scanner: reusing cached hourly updown markets (skip cadence active)"
+src/market/scanner.py:895:                    self._updown_5m_cache_bucket = self._window_bucket(5)
+src/market/scanner.py:1172:                            # yields 0.0 (skipped) instead of throwing and dropping the
+src/market/scanner.py:1651:        with self._slug_cache_lock:
+src/market/scanner.py:1659:        with self._slug_cache_lock:
+src/market/scanner.py:1918:            with self._slug_cache_lock:
+src/market/scanner.py:1956:                with self._slug_cache_lock:
+src/market/scanner.py:2016:        skipped_other: List[Market] = []
+src/market/scanner.py:2023:                    skipped_other.append(m)
+src/market/scanner.py:2028:                skipped_other.append(m)
+src/market/scanner.py:2029:        if skipped_other:
+src/market/scanner.py:2031:                {int(x.window_minutes) for x in skipped_other if x.window_minutes is not None}
+src/market/scanner.py:2035:                len(skipped_other),
+src/market/scanner.py:2227:                "Scanner: previous sync phase still running; skipping new network phase to avoid overlap"
+src/market/scanner.py:2230:            result["scanner_meta"]["sync_phase_overlap_skipped"] = True
+src/market/scanner.py:2237:                self._sync_driver_pool,
+src/market/scanner.py:2238:                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
+src/market/scanner.py:2388:        self._sync_driver_pool.shutdown(wait=False, cancel_futures=True)
+config/settings.yaml:59:  scanner_slug_cache_enabled: true
+config/settings.yaml:60:  scanner_slug_cache_max_age_15m_sec: 960   # 15m window + 60s; boundary is the primary trigger
+config/settings.yaml:61:  scanner_slug_cache_max_age_5m_sec: 360    # 5m window + 60s
+config/settings.yaml:879:    buy_no_min_no_price_5m: 0.40   # 2026-08-09 DOG-BAND FLOOR (Change 1, operator GO): block cheap 5m shorts (NO<0.40 = shorting into an up-priced market). sol 5m BUY_NO at NO<0.40 was 17% WR / -$118 in Aug. Side-isolated (BUY_NO), 5m-only, per-lane. Hot-reloadable (self.config.get). Fires as lane_price_band skip when yes_price>0.60.
+config/settings.yaml:891:    buy_yes_5m_skip_mins_lo: 3.75
+config/settings.yaml:892:    buy_yes_5m_skip_mins_hi: 5.01
+config/settings.yaml:1012:    skip_on_degraded_correlation: true
+config/settings.yaml:1124:    buy_yes_5m_skip_mins_lo: null
+config/settings.yaml:1125:    buy_yes_5m_skip_mins_hi: null
+config/settings.yaml:1247:    eth_1h_weak_confirm_skip_longs: false
+config/settings.yaml:1350:    skip_on_degraded_correlation: true
+config/settings.yaml:1397:    buy_yes_15m_skip_mins_lo: 5.0
+config/settings.yaml:1398:    buy_yes_15m_skip_mins_hi: 12.0
+config/settings.yaml:1596:    skip_on_degraded_correlation: true
+config/settings.yaml:1748:    skip_on_degraded_correlation: true
+config/settings.yaml:2005:    skip_on_degraded_correlation: true
+config/settings.yaml:2236:    skip_on_degraded_correlation: true
+config/settings.yaml:2355:  # NOT a fair trial. Now that _mark_delta_blind_skip() lets the cap/de-risk actually run, RE-TEST
+config/settings.yaml:2375:  price_max: 0.93        # 08-07 HUGE-LOSS FIX: skip DEEP favorites (>=0.93). A 0.96 fav pays ~4% per win but loses ~96% of stake when it gaps to $0 at settlement (the xrp -$70.37 was entry 0.96) — worst risk/reward. The 0.85-0.93 band pays enough per win (~9-18%) to survive its own loss ratio.
+config/settings.yaml:2381:  windows: [15m, 1h]     # 08-08 15m RESTORED: the earlier "cut 15m, it bled -$185" was the SAME confound — those -$70 15m losses were the exit-BLINDNESS bug (settlement gap-through skipped the cap), not a 15m-lane defect. With _mark_delta_blind_skip() live those cap at ~-$35. Re-test both windows on clean data before cutting anything.
+config/settings.yaml:2388:  respect_ai_direction: true  # 2026-08-08 favorite lane HONORS the AI direction driver (was side-agnostic, ignored it): AI FLAT/sit-out => skip asset; AI LONG => only UP favorites; AI SHORT => only DOWN. Kills the sol whipsaw (AI said sol=FLAT, favorite bought both sides+lost). false => legacy side-agnostic.
+config/settings.yaml:2445:    hard_skip_if_unavailable_on_enforced: false
+config/settings.yaml:2496:    include_skip_exit_reasons: true
+
+codex
+The diff shows the cache is isolated to `scanner.py`, but there are unrelated config changes in the same diff. I’m going to trace the exact call path and fetch methods now, especially whether “disabled” really avoids cache reads/writes and whether stale cached markets are filtered later.
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '400,520p'" in /Users/mainfolder/Documents/psb-main 1
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '650,910p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+   400	    if "updown-15m" in slug_l:
+   401	        return 15
+   402	    if "updown-30m" in slug_l:
+   403	        return 30
+   404	
+   405	    # Current Gamma human slugs are hourly, e.g.
+   406	    # bitcoin-up-or-down-april-29-2026-9pm-et, with one market ending at 10PM ET.
+   407	    # The date pattern in the slug is sufficient to identify these as 60-min markets;
+   408	    # we don't need end_date to be successfully parsed from the question text.
+   409	    if _UPDOWN_SLUG_DATE_RE.search(slug_l):
+   410	        return 60
+   411	    return None
+   412	
+   413	
+   414	class MarketScanner:
+   415	    """Scans Polymarket for trading opportunities.
+   416	
+   417	    Primary data source: Gamma REST API (https://gamma-api.polymarket.com)
+   418	    Note: graphql.polymarket.com/matic is permanently offline — removed.
+   419	    """
+   420	    
+   421	    def __init__(self, config: Dict[str, Any]):
+   422	        self.config = config
+   423	        self._reload_config_fields()
+   424	        # 2026-07-27 ADAPTIVE SCANNER state: per-asset EMA of recent signal activity
+   425	        # (fed by main.py) drives deeper-lookahead slug ORDERING so the inner-fetch
+   426	        # timeout cuts unproductive tails, not producers. _scan_cycle_seq drives the
+   427	        # periodic escape-hatch cycle. Empty/off => canonical order (no behavior change).
+   428	        self._asset_productivity: Dict[str, float] = {}
+   429	        self._scan_cycle_seq: int = 0
+   430	        self.session: Optional[aiohttp.ClientSession] = None
+   431	        self._sync_driver_pool = ThreadPoolExecutor(
+   432	            max_workers=1, thread_name_prefix="scanner-driver"
+   433	        )
+   434	        self._sync_fetch_pool = ThreadPoolExecutor(
+   435	            max_workers=5, thread_name_prefix="scanner-sync"
+   436	        )
+   437	        self._slug_fetch_pool = ThreadPoolExecutor(
+   438	            max_workers=8, thread_name_prefix="scanner-slug"
+   439	        )
+   440	        self._background_fetch_pool = ThreadPoolExecutor(
+   441	            max_workers=2, thread_name_prefix="scanner-bg"
+   442	        )
+   443	        self._slow_fetch_lock = Lock()
+   444	        self._slug_cache_lock = Lock()
+   445	        self._cycle_empty_event_slugs: set[str] = set()
+   446	        self._slug_fetch_stats: Dict[str, Dict[str, int]] = {}
+   447	        self._gamma_thread_state = thread_local()
+   448	        self._gamma_sessions_lock = Lock()
+   449	        self._gamma_sessions: set[requests.Session] = set()
+   450	        self._active_sync_phase: Optional[asyncio.Future] = None
+   451	        self._scan_call_count = 0
+   452	        self._updown_1h_cache: List[Market] = []
+   453	        self._updown_1h_cache_updated_at: Optional[datetime] = None
+   454	        # 2026-08-11 WINDOW-BOUNDARY SLUG CACHE (5m/15m). The 5m/15m updown market
+   455	        # LISTS are stable within a window (slugs are deterministic *-updown-{step}-{unix}
+   456	        # timestamps; look-ahead already pre-loads upcoming windows), yet they were
+   457	        # re-fetched from gamma EVERY ~60s cycle — the dominant non-analysis cost and the
+   458	        # source of the slug-fetch timeouts. Cache the list per window bucket and re-fetch
+   459	        # only when the bucket advances (a new window opens) or a max-age backstop trips.
+   460	        # Prices stay live on the separate WS/midpoint path, so freshness is unaffected.
+   461	        # Bucket advances only on a NON-EMPTY fetch so a transient empty/slow response
+   462	        # never locks in an empty window. Fully guarded by scanner_slug_cache_enabled.
+   463	        self._updown_15m_cache: List[Market] = []
+   464	        self._updown_15m_cache_bucket: Optional[int] = None
+   465	        self._updown_15m_cache_updated_at: Optional[datetime] = None
+   466	        self._updown_5m_cache: List[Market] = []
+   467	        self._updown_5m_cache_bucket: Optional[int] = None
+   468	        self._updown_5m_cache_updated_at: Optional[datetime] = None
+   469	        # WSS price overlay (wired by main after ws_client exists). Hot-path read.
+   470	        self.ws_client = None
+   471	        # Tokens we last requested prices for -> the WS subscription want-set
+   472	        # (unioned with open positions in main, with stale-unsubscribe for OOM safety).
+   473	        self._last_priced_token_ids: Set[str] = set()
+   474	        # tid -> (monotonic ts last priced, minutes to window end); accumulated
+   475	        # across concurrent hydrate batches w/ TTL. See update_market_prices.
+   476	        self._ws_want_meta: Dict[str, Tuple[float, float]] = {}
+   477	        # tid -> (src "ws"/"rest", loop-time ts recorded, ws age_ms at pricing).
+   478	        # Entry provenance (observe-only); read by main._entry_price_provenance.
+   479	        self._last_price_src: Dict[str, Tuple[str, float, float]] = {}
+   480	        self._ws_price_stats: Dict[str, int] = {"ws_hit": 0, "rest": 0}
+   481	
+   482	    def _reload_config_fields(self) -> None:
+   483	        """Refresh derived thresholds from the shared config dict."""
+   484	        _pm = self.config.get("polymarket", {}) or {}
+   485	        _tr = self.config.get("trading", {}) or {}
+   486	        # 2026-07-17 degen-0.5 book verification (default ON; opt-out:
+   487	        # trading.admit_real_05_books: false). Lives in _reload_config_fields,
+   488	        # so once this code is loaded the flag is HOT-RELOADABLE via
+   489	        # reload_from_config; the verification code itself is restart-only.
+   490	        self._admit_real_05_books = bool(_tr.get("admit_real_05_books", True))
+   491	        self.min_liquidity = _pm.get("min_liquidity", 10000)
+   492	        self._cycle_interval_sec = float(_tr.get("cycle_interval_sec", 120))
+   493	        configured_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
+   494	        # Never let a sync timeout outrun the trading cadence. Leave a small gap so
+   495	        # one slow cycle does not overlap the next and blind the bot indefinitely.
+   496	        hard_cap_timeout = max(20.0, self._cycle_interval_sec - 15.0)
+   497	        self._scanner_sync_timeout = min(configured_timeout, hard_cap_timeout)
+   498	        if configured_timeout > self._scanner_sync_timeout:
+   499	            logger.warning(
+   500	                "Scanner timeout capped from %.1fs to %.1fs to stay below cycle interval %.1fs",
+   501	                configured_timeout,
+   502	                self._scanner_sync_timeout,
+   503	                self._cycle_interval_sec,
+   504	            )
+   505	        self._gamma_http_max_retries = max(1, int(_pm.get("gamma_http_max_retries", 3)))
+   506	        self._gamma_http_retry_backoff_base_sec = max(
+   507	            0.05, float(_pm.get("gamma_http_retry_backoff_base_sec", 0.5))
+   508	        )
+   509	        # WSS price overlay: serve mids from the pushed CLOB websocket book when fresh,
+   510	        # falling back to REST /midpoint per uncovered token. Removes most of the
+   511	        # per-cycle /midpoint fan-out. Fail-safe: any miss/staleness -> REST.
+   512	        _ws = _tr.get("clob_ws", {}) or {}
+   513	        self._ws_drive_prices = bool(_ws.get("drive_scanner_prices", False))
+   514	        self._ws_price_max_age_sec = float(_ws.get("price_max_age_sec", 8.0) or 8.0)
+   515	        # 2026-07-30 WS-STALENESS tertiary price fallback: tokens still unpriced after
+   516	        # WS + CLOB /midpoint would be dropped -> fail-closed rejected (a MISSED trade).
+   517	        # When on, recover them with a fresh top-of-book mid from GET /book. Fail-safe.
+   518	        self._rest_book_price_fallback = bool(_ws.get("rest_book_price_fallback", True))
+   519	        # 2026-07-18 batch REST midpoints: collapse per-token GET /midpoint fan-out
+   520	        # into chunked POST /midpoints (verified endpoint) -> kills the 429 storm from
+
+ succeeded in 0ms:
+   650	        new = dict(cur)
+   651	        for ak in set(cur) | set(agg):
+   652	            prev = cur.get(ak, 0.0)
+   653	            new[ak] = (1.0 - alpha) * prev + alpha * agg.get(ak, 0.0)
+   654	        # 2026-07-27 atomic reference swap so a concurrent reader (_order_assets, called
+   655	        # in a scanner worker thread) sees either the complete old or complete new map,
+   656	        # never a half-updated dict (Codex concurrency nit).
+   657	        self._asset_productivity = new
+   658	
+   659	    def _order_assets(self, assets: Tuple[str, ...], offset: int) -> List[str]:
+   660	        """Two-phase adaptive ordering (Codex-scoped, guarded).
+   661	
+   662	        COVERAGE: the nearest window (offset 0) ALWAYS keeps canonical order, so every
+   663	        enabled asset gets its most-tradeable window fetched first each cycle. PRIORITY:
+   664	        deeper lookahead (offset>=1) is ordered by EMA productivity DESC (stable ties ->
+   665	        canonical), so the inner-fetch timeout cuts unproductive deep-lookahead tails,
+   666	        never a producer's near window. ESCAPE HATCH: every Nth cycle reverts to canonical
+   667	        to avoid long-term bias. Off / empty productivity / cold-start => canonical
+   668	        (byte-identical to today). This is priority BIAS, never asset suppression.
+   669	        """
+   670	        assets = list(assets)
+   671	        if (
+   672	            offset <= 0
+   673	            or not self._adaptive_slug_order_enabled()
+   674	            or not self._asset_productivity
+   675	        ):
+   676	            return assets
+   677	        esc = self._adaptive_escape_every_n()
+   678	        if esc > 0 and (self._scan_cycle_seq % esc) == 0:
+   679	            return assets
+   680	        prod = self._asset_productivity
+   681	        return sorted(assets, key=lambda a: -float(prod.get(_asset_key(a), 0.0)))
+   682	
+   683	    def _should_refresh_updown_1h(self, scan_call_count: int) -> bool:
+   684	        every_n = self._resolve_hourly_crypto_scan_every_n_cycles()
+   685	        call_n = max(1, int(scan_call_count or 1))
+   686	        return ((call_n - 1) % every_n) == 0
+   687	
+   688	    def _slug_cache_enabled(self) -> bool:
+   689	        """Feature flag for the window-boundary 5m/15m slug cache. Default ON.
+   690	
+   691	        Set trading.scanner_slug_cache_enabled: false for byte-identical legacy behavior
+   692	        (every cycle re-fetches the 5m/15m lists live).
+   693	        """
+   694	        trading_cfg = (self.config.get("trading", {}) or {})
+   695	        return bool(trading_cfg.get("scanner_slug_cache_enabled", True))
+   696	
+   697	    def _slug_cache_max_age_sec(self, step_minutes: int) -> float:
+   698	        """Backstop max-age for the per-window cache. Set just above the window length so
+   699	        the boundary crossing is the primary refresh trigger and this is only a safety net.
+   700	        """
+   701	        trading_cfg = (self.config.get("trading", {}) or {})
+   702	        key = f"scanner_slug_cache_max_age_{step_minutes}m_sec"
+   703	        default = float(step_minutes) * 60.0 + 60.0  # window + 60s buffer
+   704	        try:
+   705	            return max(0.0, float(trading_cfg.get(key, default)))
+   706	        except (TypeError, ValueError):
+   707	            return default
+   708	
+   709	    @staticmethod
+   710	    def _window_bucket(step_minutes: int) -> int:
+   711	        """The integer window index for now, so the value changes exactly at each
+   712	        step-minute boundary (e.g. every 15 min for 15m, every 5 min for 5m)."""
+   713	        return int(time.time()) // max(1, int(step_minutes) * 60)
+   714	
+   715	    def _should_refresh_updown_window(
+   716	        self,
+   717	        step_minutes: int,
+   718	        last_bucket: Optional[int],
+   719	        updated_at: Optional[datetime],
+   720	    ) -> bool:
+   721	        """True => re-fetch this window's slug list; False => reuse the cache.
+   722	
+   723	        Refresh when: the cache is disabled (always live), the cache is cold, the window
+   724	        boundary has advanced since the last fetch, or the max-age backstop has elapsed.
+   725	        """
+   726	        if not self._slug_cache_enabled():
+   727	            return True
+   728	        if last_bucket is None or updated_at is None:
+   729	            return True
+   730	        if self._window_bucket(step_minutes) != last_bucket:
+   731	            return True
+   732	        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+   733	        return age >= self._slug_cache_max_age_sec(step_minutes)
+   734	
+   735	    def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+   736	        List[Market],
+   737	        List[Market],
+   738	        List[Market],
+   739	        List[Market],
+   740	        List[Market],
+   741	        List[Market],
+   742	        int,
+   743	        int,
+   744	        int,
+   745	    ]:
+   746	        sync_fn = self._sync_network_phase
+   747	        try:
+   748	            params = inspect.signature(sync_fn).parameters
+   749	        except (TypeError, ValueError):
+   750	            params = {}
+   751	        if not params:
+   752	            return sync_fn()
+   753	        return sync_fn(refresh_updown_1h)
+   754	
+   755	    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
+   756	        List[Market],
+   757	        List[Market],
+   758	        List[Market],
+   759	        List[Market],
+   760	        List[Market],
+   761	        int,
+   762	        int,
+   763	        int,
+   764	    ]:
+   765	        """Blocking HTTP: Gamma list + 15m/5m/30m updown + optional HYPE alt. Runs in a thread.
+   766	
+   767	        Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
+   768	        doesn't add to the wall-clock time of the other fetches.
+   769	        """
+   770	        self._scan_cycle_seq += 1  # 2026-07-27 ADAPTIVE: drives escape-hatch cadence
+   771	        with self._slug_cache_lock:
+   772	            self._cycle_empty_event_slugs = set()
+   773	            self._slug_fetch_stats = {}
+   774	        look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
+   775	        fetch_hype = self._should_fetch_hype_alt_markets()
+   776	
+   777	        # WINDOW-BOUNDARY SLUG CACHE: only re-fetch a window's list when its bucket advances
+   778	        # (or the max-age backstop trips). Between boundaries the cached list is reused and the
+   779	        # live fetch is skipped entirely — this is what removes the ~per-cycle gamma slug cost.
+   780	        refresh_15m = self._should_refresh_updown_window(
+   781	            15, self._updown_15m_cache_bucket, self._updown_15m_cache_updated_at
+   782	        )
+   783	        refresh_5m = self._should_refresh_updown_window(
+   784	            5, self._updown_5m_cache_bucket, self._updown_5m_cache_updated_at
+   785	        )
+   786	
+   787	        tasks = {
+   788	            "gamma": lambda: self._fetch_markets_gamma(limit=200),
+   789	        }
+   790	        if refresh_15m:
+   791	            tasks["updown"] = lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m)
+   792	        if refresh_5m:
+   793	            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+   794	        if refresh_updown_1h:
+   795	            tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+   796	        if fetch_hype:
+   797	            tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
+   798	
+   799	        results: Dict[str, Any] = {}
+   800	        failed_fetches: set[str] = set()
+   801	        completed_fetches: set[str] = set()
+   802	        futures = {self._sync_fetch_pool.submit(fn): name for name, fn in tasks.items()}
+   803	        try:
+   804	            for future in as_completed(futures, timeout=self._scanner_sync_timeout):
+   805	                name = futures[future]
+   806	                completed_fetches.add(name)
+   807	                try:
+   808	                    results[name] = future.result() or []
+   809	                except Exception as e:
+   810	                    logger.error(f"{name} fetch error: {e}")
+   811	                    failed_fetches.add(name)
+   812	                    results[name] = []
+   813	        except FuturesTimeoutError:
+   814	            unfinished = [name for future, name in futures.items() if not future.done()]
+   815	            logger.warning(
+   816	                "Scanner: partial sync timeout after %.1fs; returning completed sources only. unfinished=%s",
+   817	                self._scanner_sync_timeout,
+   818	                unfinished,
+   819	            )
+   820	        finally:
+   821	            for future, name in futures.items():
+   822	                if future.done():
+   823	                    continue
+   824	                future.cancel()
+   825	                results.setdefault(name, [])
+   826	
+   827	        # 15m updown: window-boundary cache. fetch_updown_markets historically returned
+   828	        # (15m, ~30m carry) — the 30m carry path is dead (Polymarket discontinued the 30m
+   829	        # crypto product family). Accept either the legacy tuple form or a bare list.
+   830	        # Refresh path parses + stores the list keyed by window bucket (advancing the bucket
+   831	        # only on a NON-EMPTY result so a transient miss never locks in an empty window) and
+   832	        # falls back to the cache on failure; skip path reuses the cache without any fetch.
+   833	        updown_15m: List[Market]
+   834	        if refresh_15m:
+   835	            fifteen_failed = (
+   836	                "updown" in failed_fetches or "updown" not in completed_fetches
+   837	            )
+   838	            up_pair = results.get("updown", [])
+   839	            if isinstance(up_pair, tuple) and up_pair:
+   840	                fresh_15m = up_pair[0] if isinstance(up_pair[0], list) else []
+   841	            else:
+   842	                fresh_15m = up_pair if isinstance(up_pair, list) else []
+   843	            if fifteen_failed and not fresh_15m and self._updown_15m_cache:
+   844	                logger.warning(
+   845	                    "Scanner: reusing cached 15m updown markets after live fetch failure/timeout"
+   846	                )
+   847	                updown_15m = list(self._updown_15m_cache)
+   848	            else:
+   849	                updown_15m = fresh_15m
+   850	                self._updown_15m_cache = list(updown_15m)
+   851	                self._updown_15m_cache_updated_at = datetime.now(timezone.utc)
+   852	                if updown_15m:
+   853	                    self._updown_15m_cache_bucket = self._window_bucket(15)
+   854	        else:
+   855	            updown_15m = list(self._updown_15m_cache)
+   856	
+   857	        updown_1h_markets: List[Market]
+   858	        if refresh_updown_1h:
+   859	            hourly_failed = (
+   860	                "updown_1h" in failed_fetches or "updown_1h" not in completed_fetches
+   861	            )
+   862	            if hourly_failed and self._updown_1h_cache:
+   863	                logger.warning(
+   864	                    "Scanner: reusing cached hourly updown markets after live 1h fetch failure/timeout"
+   865	                )
+   866	                updown_1h_markets = list(self._updown_1h_cache)
+   867	            else:
+   868	                updown_1h_markets = results.get("updown_1h", []) or []
+   869	                self._updown_1h_cache = list(updown_1h_markets)
+   870	                self._updown_1h_cache_updated_at = datetime.now(timezone.utc)
+   871	        else:
+   872	            updown_1h_markets = list(self._updown_1h_cache)
+   873	            if updown_1h_markets:
+   874	                logger.info(
+   875	                    "Scanner: reusing cached hourly updown markets (skip cadence active)"
+   876	                )
+   877	
+   878	        # 5m updown: window-boundary cache (same shape as 15m above).
+   879	        updown_5m_markets: List[Market]
+   880	        if refresh_5m:
+   881	            five_failed = (
+   882	                "updown_5m" in failed_fetches or "updown_5m" not in completed_fetches
+   883	            )
+   884	            fresh_5m = results.get("updown_5m", []) or []
+   885	            if five_failed and not fresh_5m and self._updown_5m_cache:
+   886	                logger.warning(
+   887	                    "Scanner: reusing cached 5m updown markets after live fetch failure/timeout"
+   888	                )
+   889	                updown_5m_markets = list(self._updown_5m_cache)
+   890	            else:
+   891	                updown_5m_markets = fresh_5m
+   892	                self._updown_5m_cache = list(updown_5m_markets)
+   893	                self._updown_5m_cache_updated_at = datetime.now(timezone.utc)
+   894	                if updown_5m_markets:
+   895	                    self._updown_5m_cache_bucket = self._window_bucket(5)
+   896	        else:
+   897	            updown_5m_markets = list(self._updown_5m_cache)
+   898	
+   899	        return (
+   900	            results.get("gamma", []),
+   901	            updown_15m,
+   902	            updown_5m_markets,
+   903	            updown_1h_markets,
+   904	            results.get("hype_alt", []),
+   905	            look_ahead_15m,
+   906	            look_ahead_5m,
+   907	            look_ahead_1h,
+   908	        )
+   909	
+   910	    def _empty_scan_result(self, sync_timeout: bool = False) -> Dict[str, Any]:
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '2200,2265p'" in /Users/mainfolder/Documents/psb-main 1
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1600,1685p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  2200	                step_minutes=5,
+  2201	                look_ahead=max(1, min(look_ahead_5m, 24)),
+  2202	            )
+  2203	        )
+  2204	        markets = self._fetch_event_slug_markets(
+  2205	            slugs,
+  2206	            timeout_sec=4,
+  2207	            limit=limit,
+  2208	            stats_key="updown_hype_alt",
+  2209	        )
+  2210	        if markets:
+  2211	            logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
+  2212	        return markets
+  2213	
+  2214	    async def scan_for_opportunities(self) -> Dict[str, Any]:
+  2215	        """Scan for different types of opportunities.
+  2216	
+  2217	        Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
+  2218	        timeout so the asyncio event loop is not blocked for minutes on slow APIs.
+  2219	        Price hydration for gamma, 15m / 5m / 1h updown batches runs in
+  2220	        parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
+  2221	        """
+  2222	        t_scan_start = time.perf_counter()
+  2223	        logger.info("Scanner: sync network phase (thread) starting")
+  2224	        active_phase = self._active_sync_phase
+  2225	        if active_phase is not None and not active_phase.done():
+  2226	            logger.warning(
+  2227	                "Scanner: previous sync phase still running; skipping new network phase to avoid overlap"
+  2228	            )
+  2229	            result = self._empty_scan_result(sync_timeout=True)
+  2230	            result["scanner_meta"]["sync_phase_overlap_skipped"] = True
+  2231	            return result
+  2232	        try:
+  2233	            loop = asyncio.get_running_loop()
+  2234	            self._scan_call_count += 1
+  2235	            refresh_updown_1h = self._should_refresh_updown_1h(self._scan_call_count)
+  2236	            sync_phase = loop.run_in_executor(
+  2237	                self._sync_driver_pool,
+  2238	                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
+  2239	            )
+  2240	            self._active_sync_phase = sync_phase
+  2241	            (
+  2242	                markets,
+  2243	                updown,
+  2244	                updown_5m,
+  2245	                updown_1h,
+  2246	                hype_alt,
+  2247	                look_ahead_15m,
+  2248	                look_ahead_5m,
+  2249	                look_ahead_1h,
+  2250	            ) = await asyncio.wait_for(
+  2251	                asyncio.shield(sync_phase),
+  2252	                timeout=self._scanner_sync_timeout + 2.0,
+  2253	            )
+  2254	        except asyncio.TimeoutError:
+  2255	            elapsed_ms = int((time.perf_counter() - t_scan_start) * 1000)
+  2256	            logger.error(
+  2257	                "Scanner: sync network phase timed out after %dms (limit=%.1fs) — empty scan",
+  2258	                elapsed_ms,
+  2259	                self._scanner_sync_timeout,
+  2260	            )
+  2261	            result = self._empty_scan_result(sync_timeout=True)
+  2262	            result["scanner_meta"]["sync_phase_elapsed_ms"] = elapsed_ms
+  2263	            return result
+  2264	        finally:
+  2265	            if self._active_sync_phase is not None and self._active_sync_phase.done():
+
+ succeeded in 0ms:
+  1600	
+  1601	            async def _rest_book_quad(token_id: str):
+  1602	                try:
+  1603	                    async with session.get(
+  1604	                        f"{self._CLOB_API}/book",
+  1605	                        params={"token_id": token_id},
+  1606	                        timeout=aiohttp.ClientTimeout(total=5),
+  1607	                    ) as resp:
+  1608	                        if resp.status != 200:
+  1609	                            return None
+  1610	                        data = await resp.json()
+  1611	                except Exception:
+  1612	                    return None
+  1613	                bids = data.get("bids") or []
+  1614	                asks = data.get("asks") or []
+  1615	                if not bids or not asks:
+  1616	                    return None
+  1617	                # REST /book arrays: best price level is the LAST element.
+  1618	                bb, aa = bids[-1] or {}, asks[-1] or {}
+  1619	                return (bb.get("price"), aa.get("price"), bb.get("size"), aa.get("size"))
+  1620	
+  1621	            async def _check_market(m: Market):
+  1622	                qy, qn = await asyncio.gather(
+  1623	                    _rest_book_quad(m.token_id_yes),
+  1624	                    _rest_book_quad(m.token_id_no),
+  1625	                )
+  1626	                return m, qy, qn
+  1627	
+  1628	            for m, qy, qn in await asyncio.gather(*[_check_market(m) for m in rest_batch]):
+  1629	                if (
+  1630	                    qy is not None and qn is not None
+  1631	                    and self._degen05_book_ok(*qy)
+  1632	                    and self._degen05_book_ok(*qn)
+  1633	                ):
+  1634	                    m.price_hydrated = True
+  1635	                    m.book_verified_05 = True
+  1636	                    readmitted_rest += 1
+  1637	
+  1638	        if readmitted_ws or readmitted_rest:
+  1639	            logger.info(
+  1640	                "Scanner: re-admitted %d exact-0.50 markets with VERIFIED two-sided "
+  1641	                "YES+NO books (ws=%d rest=%d, %d stay dropped)",
+  1642	                readmitted_ws + readmitted_rest,
+  1643	                readmitted_ws,
+  1644	                readmitted_rest,
+  1645	                len(pending) - readmitted_ws - readmitted_rest,
+  1646	            )
+  1647	
+  1648	    def _set_slug_fetch_stats(
+  1649	        self, key: str, *, attempted: int, hit_slugs: int, empty_slugs: int
+  1650	    ) -> None:
+  1651	        with self._slug_cache_lock:
+  1652	            self._slug_fetch_stats[key] = {
+  1653	                "attempted_slugs": int(max(0, attempted)),
+  1654	                "hit_slugs": int(max(0, hit_slugs)),
+  1655	                "empty_slug_responses": int(max(0, empty_slugs)),
+  1656	            }
+  1657	
+  1658	    def _get_slug_fetch_stats_snapshot(self) -> Dict[str, Dict[str, int]]:
+  1659	        with self._slug_cache_lock:
+  1660	            return {key: dict(values) for key, values in self._slug_fetch_stats.items()}
+  1661	    
+  1662	    def _fetch_markets_gamma(self, limit: int = 100) -> List[Market]:
+  1663	        """Fetch active markets from Gamma REST ``GET /markets`` (paginated)."""
+  1664	        markets = []
+  1665	        offset = 0
+  1666	        try:
+  1667	            while len(markets) < limit:
+  1668	                params = {"limit": min(limit - len(markets), 100), "offset": offset,
+  1669	                          "active": "true", "closed": "false"}
+  1670	                resp = self._gamma_get("/markets", params=params, timeout=15)
+  1671	                try:
+  1672	                    resp.raise_for_status()
+  1673	                    batch = resp.json()
+  1674	                finally:
+  1675	                    resp.close()
+  1676	                if not batch:
+  1677	                    break
+  1678	                for gm in batch:
+  1679	                    try:
+  1680	                        vol = float(gm.get("volume", 0) or 0)
+  1681	                        liq = float(gm.get("liquidity", 0) or 0)
+  1682	                        threshold = self._market_liquidity_threshold(
+  1683	                            gm.get("question", ""),
+  1684	                            gm.get("description", "") or "",
+  1685	                        )
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1885,1975p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  1885	            )
+  1886	
+  1887	            return Market(
+  1888	                id=gm.get("id", ""),
+  1889	                question=question,
+  1890	                description=(gm.get("description", "") or "")[:300],
+  1891	                volume=vol,
+  1892	                liquidity=liq,
+  1893	                yes_price=yes_price,
+  1894	                no_price=no_price,
+  1895	                spread=abs(yes_price - no_price),
+  1896	                end_date=end_date,
+  1897	                token_id_yes=tokens[0] if tokens else "",
+  1898	                token_id_no=tokens[1] if len(tokens) > 1 else "",
+  1899	                group_item_title=group_item_title,
+  1900	                condition_id=str(gm.get("conditionId") or gm.get("condition_id") or ""),
+  1901	                outcome_label_yes=outcome_labels[0] if outcome_labels else "Yes",
+  1902	                outcome_label_no=outcome_labels[1] if len(outcome_labels) > 1 else "No",
+  1903	                slug=slug,
+  1904	                window_minutes=window_minutes,
+  1905	            )
+  1906	        except Exception:
+  1907	            return None
+  1908	
+  1909	    def _fetch_event_slug_markets(
+  1910	        self,
+  1911	        slugs: List[str],
+  1912	        *,
+  1913	        timeout_sec: float,
+  1914	        limit: Optional[int] = None,
+  1915	        stats_key: Optional[str] = None,
+  1916	    ) -> List[Market]:
+  1917	        def _fetch_one(slug: str) -> List[Market]:
+  1918	            with self._slug_cache_lock:
+  1919	                if slug in self._cycle_empty_event_slugs:
+  1920	                    return []
+  1921	            parsed_markets: List[Market] = []
+  1922	            try:
+  1923	                market_resp = self._gamma_get(
+  1924	                    "/markets", params={"slug": slug}, timeout=timeout_sec
+  1925	                )
+  1926	                try:
+  1927	                    if market_resp.status_code == 200:
+  1928	                        for gm in market_resp.json() or []:
+  1929	                            parsed = self._parse_gamma_event_market(gm, slug)
+  1930	                            if parsed is not None:
+  1931	                                parsed_markets.append(parsed)
+  1932	                        # Non-empty /markets: done. Empty /markets on *-updown-* slugs must still
+  1933	                        # try /events — Gamma often nests those markets under the event only.
+  1934	                        if parsed_markets:
+  1935	                            return parsed_markets
+  1936	                finally:
+  1937	                    market_resp.close()
+  1938	
+  1939	                resp = self._gamma_get(
+  1940	                    "/events", params={"slug": slug}, timeout=timeout_sec
+  1941	                )
+  1942	                try:
+  1943	                    if resp.status_code == 200:
+  1944	                        events = resp.json() or []
+  1945	                        if events:
+  1946	                            event = events[0]
+  1947	                            for gm in event.get("markets", []):
+  1948	                                parsed = self._parse_gamma_event_market(gm, slug)
+  1949	                                if parsed is not None:
+  1950	                                    parsed_markets.append(parsed)
+  1951	                finally:
+  1952	                    resp.close()
+  1953	            except Exception as e:
+  1954	                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
+  1955	            if not parsed_markets:
+  1956	                with self._slug_cache_lock:
+  1957	                    self._cycle_empty_event_slugs.add(slug)
+  1958	            return parsed_markets
+  1959	
+  1960	        markets: List[Market] = []
+  1961	        seen_ids: set[str] = set()
+  1962	        hit_slugs = 0
+  1963	        empty_slugs = 0
+  1964	        future_to_slug = {self._slug_fetch_pool.submit(_fetch_one, slug): slug for slug in slugs}
+  1965	        # 2026-07-27 S2 (Codex GO): bound the inner wait so a hung slug can't hold the
+  1966	        # whole window until the OUTER sync guillotine drops it all-or-nothing. On inner
+  1967	        # timeout, keep the slugs that completed and cancel the rest (partial >> a full
+  1968	        # window of zero markets). Cancel only reaps QUEUED futures; a running HTTP call
+  1969	        # releases via its own 4/8s timeout — same as before.
+  1970	        _slug_timeout = self._resolve_slug_fetch_timeout()
+  1971	        try:
+  1972	            for future in as_completed(future_to_slug, timeout=_slug_timeout):
+  1973	                parsed_batch = future.result()
+  1974	                if parsed_batch:
+  1975	                    hit_slugs += 1
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '2260,2365p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  2260	            )
+  2261	            result = self._empty_scan_result(sync_timeout=True)
+  2262	            result["scanner_meta"]["sync_phase_elapsed_ms"] = elapsed_ms
+  2263	            return result
+  2264	        finally:
+  2265	            if self._active_sync_phase is not None and self._active_sync_phase.done():
+  2266	                self._active_sync_phase = None
+  2267	
+  2268	        sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
+  2269	        logger.info("Scanner: sync network phase finished in %dms", sync_ms)
+  2270	
+  2271	        # Drop already-expired markets BEFORE hydration/enrichment/strategy scan.
+  2272	        # Gamma still lists fast crypto up/down windows as active for a while after
+  2273	        # they resolve; scanning them wastes a price-fetch + full per-lane TA pass
+  2274	        # each cycle and is what balloons scanner_sync as the day's expired backlog
+  2275	        # grows. Expired = untradeable, so this is pure dead-weight removal.
+  2276	        _exp_now = datetime.now(timezone.utc)
+  2277	        _exp_total = 0
+  2278	        markets, _d = _drop_expired_markets(markets, now=_exp_now); _exp_total += _d
+  2279	        updown, _d = _drop_expired_markets(updown, now=_exp_now); _exp_total += _d
+  2280	        updown_5m, _d = _drop_expired_markets(updown_5m, now=_exp_now); _exp_total += _d
+  2281	        updown_1h, _d = _drop_expired_markets(updown_1h, now=_exp_now); _exp_total += _d
+  2282	        hype_alt, _d = _drop_expired_markets(hype_alt, now=_exp_now); _exp_total += _d
+  2283	        if _exp_total:
+  2284	            logger.info("Scanner: dropped %d expired markets before scan", _exp_total)
+  2285	
+  2286	        async def _hydrate(ms: List[Market]) -> List[Market]:
+  2287	            return await self.update_market_prices(ms) if ms else []
+  2288	
+  2289	        markets, updown, updown_5m, updown_1h = await asyncio.gather(
+  2290	            _hydrate(markets),
+  2291	            _hydrate(updown),
+  2292	            _hydrate(updown_5m),
+  2293	            _hydrate(updown_1h),
+  2294	        )
+  2295	
+  2296	        # Drop UNPRICED markets (price never loaded => yes/no are the 0.5 default).
+  2297	        # Trading these fabricates phantom edge (est_prob vs a fake 0.5) and was the
+  2298	        # cause of blind 0.5 entries (e.g. every HYPE trade at exactly 0.50). Never
+  2299	        # trade a market without a real quote. REST/WS fetch already happened above.
+  2300	        def _priced(ms: List[Market]) -> List[Market]:
+  2301	            return [m for m in ms if is_tradably_priced(m)]
+  2302	        _pre = (len(markets), len(updown), len(updown_5m), len(updown_1h))
+  2303	        markets = _priced(markets); updown = _priced(updown)
+  2304	        updown_5m = _priced(updown_5m); updown_1h = _priced(updown_1h)
+  2305	        _dropped = sum(_pre) - (len(markets) + len(updown) + len(updown_5m) + len(updown_1h))
+  2306	        if _dropped:
+  2307	            logger.info("Scanner: dropped %d UNPRICED markets (0.5-default, untradeable) before scan", _dropped)
+  2308	
+  2309	        # Optional microstructure enrichment (DEFAULT-OFF, fail-safe). Attaches
+  2310	        # order-book imbalance + trade-flow to up/down markets for signal hunting.
+  2311	        await self.enrich_microstructure([*updown, *updown_5m, *updown_1h])
+  2312	
+  2313	        opportunities: Dict[str, Any] = {
+  2314	            "high_liquidity": [],
+  2315	            "low_spread": [],
+  2316	            "near_expiration": [],
+  2317	        }
+  2318	
+  2319	        for market in markets:
+  2320	            if market.liquidity >= self.min_liquidity or market.volume >= self.min_liquidity:
+  2321	                opportunities["high_liquidity"].append(market)
+  2322	            if market.spread < 0.03:
+  2323	                opportunities["low_spread"].append(market)
+  2324	            hours = market.hours_to_expiration
+  2325	            if hours and hours < 48:
+  2326	                opportunities["near_expiration"].append(market)
+  2327	
+  2328	        if updown:
+  2329	            opportunities["high_liquidity"].extend(updown)
+  2330	            opportunities["updown"] = updown
+  2331	        else:
+  2332	            opportunities["updown"] = []
+  2333	
+  2334	        if updown_5m:
+  2335	            opportunities["high_liquidity"].extend(updown_5m)
+  2336	            opportunities["updown_5m"] = updown_5m
+  2337	        else:
+  2338	            opportunities["updown_5m"] = []
+  2339	
+  2340	        if updown_1h:
+  2341	            opportunities["high_liquidity"].extend(updown_1h)
+  2342	            opportunities["updown_1h"] = updown_1h
+  2343	        else:
+  2344	            opportunities["updown_1h"] = []
+  2345	
+  2346	        if hype_alt:
+  2347	            known_updown_ids = (
+  2348	                {m.id for m in opportunities.get("updown", [])}
+  2349	                | {m.id for m in opportunities.get("updown_5m", [])}
+  2350	                | {m.id for m in opportunities.get("updown_1h", [])}
+  2351	            )
+  2352	            hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
+  2353	
+  2354	        if hype_alt:
+  2355	            hype_alt = await self.update_market_prices(hype_alt)
+  2356	            hype_alt = [m for m in hype_alt if is_tradably_priced(m)]  # never trade unpriced (0.5-default)
+  2357	            opportunities["high_liquidity"].extend(hype_alt)
+  2358	            opportunities["updown_hype_alt"] = hype_alt
+  2359	        else:
+  2360	            opportunities["updown_hype_alt"] = []
+  2361	
+  2362	        opportunities["scanner_meta"] = {
+  2363	            "look_ahead_15m": look_ahead_15m,
+  2364	            "look_ahead_5m": look_ahead_5m,
+  2365	            "look_ahead_1h": look_ahead_1h,
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1970,2215p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  1970	        _slug_timeout = self._resolve_slug_fetch_timeout()
+  1971	        try:
+  1972	            for future in as_completed(future_to_slug, timeout=_slug_timeout):
+  1973	                parsed_batch = future.result()
+  1974	                if parsed_batch:
+  1975	                    hit_slugs += 1
+  1976	                else:
+  1977	                    empty_slugs += 1
+  1978	                for parsed in parsed_batch:
+  1979	                    if parsed is None or parsed.id in seen_ids:
+  1980	                        continue
+  1981	                    seen_ids.add(parsed.id)
+  1982	                    markets.append(parsed)
+  1983	                    if limit is not None and len(markets) >= limit:
+  1984	                        break
+  1985	                if limit is not None and len(markets) >= limit:
+  1986	                    break
+  1987	        except FuturesTimeoutError:
+  1988	            _done = sum(1 for f in future_to_slug if f.done())
+  1989	            logger.warning(
+  1990	                "Scanner: slug-fetch partial timeout %.1fs (%s) kept %d/%d slugs "
+  1991	                "(hung slugs cancelled; partial coverage this cycle)",
+  1992	                _slug_timeout, stats_key or "?", _done, len(slugs),
+  1993	            )
+  1994	        finally:
+  1995	            for future in future_to_slug:
+  1996	                if not future.done():
+  1997	                    future.cancel()
+  1998	        if stats_key:
+  1999	            self._set_slug_fetch_stats(
+  2000	                stats_key,
+  2001	                attempted=len(slugs),
+  2002	                hit_slugs=hit_slugs,
+  2003	                empty_slugs=empty_slugs,
+  2004	            )
+  2005	        markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
+  2006	        return markets
+  2007	
+  2008	    def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:
+  2009	        """Fetch crypto Up/Down markets from the ``*-updown-15m-{unix}`` slug family."""
+  2010	        raw = self._fetch_event_slug_markets(
+  2011	            self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
+  2012	            timeout_sec=8,
+  2013	            stats_key="updown_15m",
+  2014	        )
+  2015	        fifteen: List[Market] = []
+  2016	        skipped_other: List[Market] = []
+  2017	        for m in raw:
+  2018	            wm = m.window_minutes
+  2019	            if wm is None:
+  2020	                if "updown-15m" in (m.slug or "").lower():
+  2021	                    fifteen.append(m)
+  2022	                else:
+  2023	                    skipped_other.append(m)
+  2024	                continue
+  2025	            if 10 <= wm <= 20:
+  2026	                fifteen.append(m)
+  2027	            else:
+  2028	                skipped_other.append(m)
+  2029	        if skipped_other:
+  2030	            durs = sorted(
+  2031	                {int(x.window_minutes) for x in skipped_other if x.window_minutes is not None}
+  2032	            )
+  2033	            logger.info(
+  2034	                "Skipped %d updown rows from 15m slug batch (window_minutes not in 10-20 band; durations=%s)",
+  2035	                len(skipped_other),
+  2036	                durs,
+  2037	            )
+  2038	
+  2039	        if fifteen:
+  2040	            def _is_eth_mkt(m: Market) -> bool:
+  2041	                q = m.question.lower()
+  2042	                return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
+  2043	
+  2044	            def _is_hype_mkt(m: Market) -> bool:
+  2045	                q = m.question.lower()
+  2046	                return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
+  2047	
+  2048	            def _is_doge_mkt(m: Market) -> bool:
+  2049	                q = m.question.lower()
+  2050	                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+  2051	
+  2052	            def _is_bnb_mkt(m: Market) -> bool:
+  2053	                q = m.question.lower()
+  2054	                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+  2055	
+  2056	            logger.info(
+  2057	                f"Fetched {len(fifteen)} 15m updown markets "
+  2058	                f"(BTC: {sum(1 for m in fifteen if 'bitcoin' in m.question.lower())}, "
+  2059	                f"SOL: {sum(1 for m in fifteen if 'solana' in m.question.lower())}, "
+  2060	                f"ETH: {sum(1 for m in fifteen if _is_eth_mkt(m))}, "
+  2061	                f"XRP: {sum(1 for m in fifteen if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
+  2062	                f"HYPE: {sum(1 for m in fifteen if _is_hype_mkt(m))}, "
+  2063	                f"DOGE: {sum(1 for m in fifteen if _is_doge_mkt(m))}, "
+  2064	                f"BNB: {sum(1 for m in fifteen if _is_bnb_mkt(m))})"
+  2065	            )
+  2066	        return fifteen
+  2067	
+  2068	    def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
+  2069	        """Fetch current + upcoming 5-minute crypto Up/Down markets.
+  2070	
+  2071	        Args:
+  2072	            look_ahead: number of future 5-min windows to fetch (default 3 ≈ 15 minutes ahead;
+  2073	                keep small vs window length so momentum features target this cycle, not the next)
+  2074	
+  2075	        Returns:
+  2076	            List of Market objects for tradeable 5m updown windows.
+  2077	        """
+  2078	        markets = self._fetch_event_slug_markets(
+  2079	            self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead),
+  2080	            timeout_sec=8,
+  2081	            stats_key="updown_5m",
+  2082	        )
+  2083	        rejected = [m for m in markets if m.window_minutes and m.window_minutes > 6]
+  2084	        markets = [m for m in markets if m.window_minutes and m.window_minutes <= 6]
+  2085	        if rejected:
+  2086	            logger.info(
+  2087	                "Skipped %d non-5m updown markets from 5m bucket (durations=%s)",
+  2088	                len(rejected),
+  2089	                sorted({m.window_minutes for m in rejected}),
+  2090	            )
+  2091	
+  2092	        if markets:
+  2093	            def _is_eth_mkt_5(m: Market) -> bool:
+  2094	                q = m.question.lower()
+  2095	                return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
+  2096	
+  2097	            def _is_hype_mkt_5(m: Market) -> bool:
+  2098	                q = m.question.lower()
+  2099	                return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
+  2100	
+  2101	            def _is_doge_mkt_5(m: Market) -> bool:
+  2102	                q = m.question.lower()
+  2103	                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+  2104	
+  2105	            def _is_bnb_mkt_5(m: Market) -> bool:
+  2106	                q = m.question.lower()
+  2107	                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+  2108	
+  2109	            logger.info(
+  2110	                f"Fetched {len(markets)} 5m updown markets "
+  2111	                f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
+  2112	                f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
+  2113	                f"ETH: {sum(1 for m in markets if _is_eth_mkt_5(m))}, "
+  2114	                f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
+  2115	                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_5(m))}, "
+  2116	                f"DOGE: {sum(1 for m in markets if _is_doge_mkt_5(m))}, "
+  2117	                f"BNB: {sum(1 for m in markets if _is_bnb_mkt_5(m))})"
+  2118	            )
+  2119	        return markets
+  2120	
+  2121	    def fetch_updown_1h_markets(self, look_ahead: int = 4) -> List[Market]:
+  2122	        """Fetch current + upcoming 1-hour crypto Up/Down markets.
+  2123	
+  2124	        Slug shape: ``{asset}-up-or-down-{month}-{day}-{year}-{H}{am|pm}-et``
+  2125	        (e.g. ``bitcoin-up-or-down-may-17-2026-1am-et``).
+  2126	
+  2127	        Polymarket discontinued the legacy ``*-updown-30m-{unix}`` family entirely; the
+  2128	        hourly product is the live replacement. The active hourly scanner universe is
+  2129	        defined by ``_HOURLY_UPDOWN_ASSETS``.
+  2130	        """
+  2131	        slugs = self._iter_updown_1h_human_slugs(look_ahead=look_ahead)
+  2132	        markets = self._fetch_event_slug_markets(
+  2133	            slugs,
+  2134	            timeout_sec=8,
+  2135	            stats_key="updown_1h",
+  2136	        )
+  2137	        # Hourly markets have endDate-startDate spanning the trade-open window (~48h),
+  2138	        # so band-filter against window_minutes — _infer_updown_window_minutes returns 60
+  2139	        # for any market whose slug matches the ``up-or-down-<month>-<day>-<year>`` pattern.
+  2140	        lo, hi = 55, 65
+  2141	        rejected = [m for m in markets if m.window_minutes and not (lo <= m.window_minutes <= hi)]
+  2142	        markets = [m for m in markets if m.window_minutes and lo <= m.window_minutes <= hi]
+  2143	        if rejected:
+  2144	            logger.info(
+  2145	                "Skipped %d non-1h updown markets from hourly bucket (durations=%s)",
+  2146	                len(rejected),
+  2147	                sorted({m.window_minutes for m in rejected}),
+  2148	            )
+  2149	
+  2150	        if markets:
+  2151	            def _is_eth_mkt_1h(m: Market) -> bool:
+  2152	                q = m.question.lower()
+  2153	                return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
+  2154	
+  2155	            def _is_hype_mkt_1h(m: Market) -> bool:
+  2156	                q = m.question.lower()
+  2157	                return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
+  2158	
+  2159	            def _is_doge_mkt_1h(m: Market) -> bool:
+  2160	                q = m.question.lower()
+  2161	                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+  2162	
+  2163	            def _is_bnb_mkt_1h(m: Market) -> bool:
+  2164	                q = m.question.lower()
+  2165	                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+  2166	
+  2167	            logger.info(
+  2168	                f"Fetched {len(markets)} 1h updown markets "
+  2169	                f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
+  2170	                f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
+  2171	                f"ETH: {sum(1 for m in markets if _is_eth_mkt_1h(m))}, "
+  2172	                f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
+  2173	                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_1h(m))}, "
+  2174	                f"DOGE: {sum(1 for m in markets if _is_doge_mkt_1h(m))}, "
+  2175	                f"BNB: {sum(1 for m in markets if _is_bnb_mkt_1h(m))})"
+  2176	            )
+  2177	        return markets
+  2178	
+  2179	    def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
+  2180	        """Fetch the human-format HYPE Up/Down event slugs directly.
+  2181	
+  2182	        Polymarket lists HYPE only under the ``hype-`` prefix; the legacy
+  2183	        ``hyperliquid-`` alias is dead (verified 2026-06-24: every
+  2184	        ``hyperliquid-...`` slug returns zero markets from both Gamma /markets
+  2185	        and /events, across all window formats). Probing it was ~50% of this
+  2186	        path's ``empty_slug_responses`` for zero coverage gain, so only ``hype``
+  2187	        is queried here. The ``hype-up-or-down-...{hour}{ampm}-et`` human slug is
+  2188	        the sole source of the *hourly* HYPE market (id family distinct from the
+  2189	        ``hype-updown-15m/5m-{ts}`` timestamp markets the main path fetches).
+  2190	        """
+  2191	        look_ahead_15m, look_ahead_5m, _look_ahead_1h = self._resolve_updown_lookahead()
+  2192	        slugs = self._iter_named_event_slugs(
+  2193	            prefixes=("hype",),
+  2194	            step_minutes=15,
+  2195	            look_ahead=max(1, min(look_ahead_15m, 8)),
+  2196	        )
+  2197	        slugs.extend(
+  2198	            self._iter_named_event_slugs(
+  2199	                prefixes=("hype",),
+  2200	                step_minutes=5,
+  2201	                look_ahead=max(1, min(look_ahead_5m, 24)),
+  2202	            )
+  2203	        )
+  2204	        markets = self._fetch_event_slug_markets(
+  2205	            slugs,
+  2206	            timeout_sec=4,
+  2207	            limit=limit,
+  2208	            stats_key="updown_hype_alt",
+  2209	        )
+  2210	        if markets:
+  2211	            logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
+  2212	        return markets
+  2213	
+  2214	    async def scan_for_opportunities(self) -> Dict[str, Any]:
+  2215	        """Scan for different types of opportunities.
+
+exec
+/bin/zsh -lc 'rg -n "end_date|window_minutes|expired|minutes.*left|time_left|mins_left|closed|active|updown_5m|updown_1h|hype_alt|all_markets|hydrate|dedupe" src/market/scanner.py' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+58:    end_date: Optional[datetime]
+70:    window_minutes: Optional[int] = None
+85:    # that need to be tradable must set price_hydrated=True explicitly.
+86:    price_hydrated: bool = False
+101:        if not self.end_date:
+103:        end = self.end_date
+157:    (``price_hydrated`` set True by ``update_market_prices``) AND ``yes_price``
+159:    /midpoint yet) keep the fail-closed default and are rejected here, so no
+164:    if not getattr(market, "price_hydrated", False):
+170:def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
+201:def _dedupe_markets_by_id(markets: List[Market]) -> List[Market]:
+213:def _drop_expired_markets(
+216:    """Remove markets whose ``end_date`` is already in the past (untradeable).
+218:    Fast crypto up/down markets keep reporting ``active=true closed=false`` in
+219:    Gamma for a window AFTER they resolve, so without this guard already-expired
+224:    removal (the strategies already require positive minutes-left to enter, so no
+225:    real entry is lost). Markets with no parsed ``end_date`` are kept (unknown).
+233:        ed = getattr(m, "end_date", None)
+282:def resolved_updown_window_minutes(market: Market) -> int:
+283:    """Best-effort candle length for routing (5 / 15 / 60). Prefer Gamma ``window_minutes``."""
+284:    wm = getattr(market, "window_minutes", None)
+293:    parsed = _parse_updown_window_minutes_from_text(blob)
+312:def updown_timeframe_label(window_minutes: int) -> str:
+318:    if window_minutes <= 6:
+320:    if window_minutes <= 22:
+388:def _infer_updown_window_minutes(
+389:    *, slug: str, question: str, group_item_title: str, end_date: Optional[datetime]
+393:    explicit = _parse_updown_window_minutes_from_text(text)
+408:    # we don't need end_date to be successfully parsed from the question text.
+450:        self._active_sync_phase: Optional[asyncio.Future] = None
+452:        self._updown_1h_cache: List[Market] = []
+453:        self._updown_1h_cache_updated_at: Optional[datetime] = None
+466:        self._updown_5m_cache: List[Market] = []
+467:        self._updown_5m_cache_bucket: Optional[int] = None
+468:        self._updown_5m_cache_updated_at: Optional[datetime] = None
+475:        # across concurrent hydrate batches w/ TTL. See update_market_prices.
+516:        # WS + CLOB /midpoint would be dropped -> fail-closed rejected (a MISSED trade).
+582:    def _should_fetch_hype_alt_markets(self) -> bool:
+585:        Set polymarket.fetch_hype_alt_markets to true/false to override.
+588:        if "fetch_hype_alt_markets" in pm:
+589:            return bool(pm.get("fetch_hype_alt_markets"))
+607:        ENTIRE window all-or-nothing (hype_alt / 1h windows getting 0 markets under
+683:    def _should_refresh_updown_1h(self, scan_call_count: int) -> bool:
+735:    def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+753:        return sync_fn(refresh_updown_1h)
+755:    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
+775:        fetch_hype = self._should_fetch_hype_alt_markets()
+784:            5, self._updown_5m_cache_bucket, self._updown_5m_cache_updated_at
+793:            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+794:        if refresh_updown_1h:
+795:            tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+797:            tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
+857:        updown_1h_markets: List[Market]
+858:        if refresh_updown_1h:
+860:                "updown_1h" in failed_fetches or "updown_1h" not in completed_fetches
+862:            if hourly_failed and self._updown_1h_cache:
+866:                updown_1h_markets = list(self._updown_1h_cache)
+868:                updown_1h_markets = results.get("updown_1h", []) or []
+869:                self._updown_1h_cache = list(updown_1h_markets)
+870:                self._updown_1h_cache_updated_at = datetime.now(timezone.utc)
+872:            updown_1h_markets = list(self._updown_1h_cache)
+873:            if updown_1h_markets:
+875:                    "Scanner: reusing cached hourly updown markets (skip cadence active)"
+879:        updown_5m_markets: List[Market]
+882:                "updown_5m" in failed_fetches or "updown_5m" not in completed_fetches
+884:            fresh_5m = results.get("updown_5m", []) or []
+885:            if five_failed and not fresh_5m and self._updown_5m_cache:
+889:                updown_5m_markets = list(self._updown_5m_cache)
+891:                updown_5m_markets = fresh_5m
+892:                self._updown_5m_cache = list(updown_5m_markets)
+893:                self._updown_5m_cache_updated_at = datetime.now(timezone.utc)
+894:                if updown_5m_markets:
+895:                    self._updown_5m_cache_bucket = self._window_bucket(5)
+897:            updown_5m_markets = list(self._updown_5m_cache)
+902:            updown_5m_markets,
+903:            updown_1h_markets,
+904:            results.get("hype_alt", []),
+916:            "updown_5m_count": 0,
+917:            "updown_1h_count": 0,
+918:            "updown_hype_alt_count": 0,
+928:            "updown_5m": [],
+929:            "updown_1h": [],
+930:            "updown_hype_alt": [],
+985:        if self.session is None or self.session.closed:
+996:        """Fetch active markets from Polymarket via Gamma REST API."""
+1157:            # would be dropped -> fail-closed rejected (a MISSED trade, not a bad one).
+1318:                end_date = None
+1321:                        end_date = datetime.fromisoformat(m['endDate'].replace('Z', '+00:00'))
+1330:                window_minutes = _infer_updown_window_minutes(
+1334:                    end_date=end_date,
+1346:                    end_date=end_date,
+1354:                    window_minutes=window_minutes,
+1381:        # near windows — the active, entry-relevant books. Hydrate batches run
+1416:            # The market still passes the price_hydrated guard below (one leg hit),
+1439:            hydrated = bool(yes_hit or no_hit)
+1447:            if hydrated and abs(yes_price - 0.5) < 1e-3 and abs(no_price - 0.5) < 1e-3:
+1456:                hydrated = False
+1464:                    # because window_minutes is None at this point (float(None or 15)
+1465:                    # =15 -> mins_left<=17), which ZEROED the 15m lanes (windows
+1472:            market.price_hydrated = hydrated
+1506:    _DEGEN05_REST_CAP = 10  # bound added latency per hydrate batch
+1544:        price_hydrated=True with their true 0.5 mid; everything unverified
+1586:                m.price_hydrated = True
+1594:        # budget so a hydrate batch never adds more than ~10 concurrent calls.
+1634:                    m.price_hydrated = True
+1663:        """Fetch active markets from Gamma REST ``GET /markets`` (paginated)."""
+1669:                          "active": "true", "closed": "false"}
+1695:                        end_str = gm.get("endDate") or gm.get("end_date_iso")
+1696:                        end_date = None
+1699:                                end_date = datetime.fromisoformat(end_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+1706:                        window_minutes = _infer_updown_window_minutes(
+1710:                            end_date=end_date,
+1717:                            end_date=end_date, token_id_yes=token_yes, token_id_no=token_no,
+1723:                            window_minutes=window_minutes,
+1831:    def _iter_updown_1h_human_slugs(
+1867:            end_str = gm.get("endDate") or gm.get("end_date_iso")
+1868:            end_date = _parse_updown_market_end_from_text(
+1875:                    end_date = end_date or datetime.fromisoformat(
+1880:            window_minutes = _infer_updown_window_minutes(
+1884:                end_date=end_date,
+1896:                end_date=end_date,
+1904:                window_minutes=window_minutes,
+2005:        markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
+2018:            wm = m.window_minutes
+2031:                {int(x.window_minutes) for x in skipped_other if x.window_minutes is not None}
+2034:                "Skipped %d updown rows from 15m slug batch (window_minutes not in 10-20 band; durations=%s)",
+2068:    def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
+2081:            stats_key="updown_5m",
+2083:        rejected = [m for m in markets if m.window_minutes and m.window_minutes > 6]
+2084:        markets = [m for m in markets if m.window_minutes and m.window_minutes <= 6]
+2089:                sorted({m.window_minutes for m in rejected}),
+2121:    def fetch_updown_1h_markets(self, look_ahead: int = 4) -> List[Market]:
+2128:        hourly product is the live replacement. The active hourly scanner universe is
+2131:        slugs = self._iter_updown_1h_human_slugs(look_ahead=look_ahead)
+2135:            stats_key="updown_1h",
+2138:        # so band-filter against window_minutes — _infer_updown_window_minutes returns 60
+2141:        rejected = [m for m in markets if m.window_minutes and not (lo <= m.window_minutes <= hi)]
+2142:        markets = [m for m in markets if m.window_minutes and lo <= m.window_minutes <= hi]
+2147:                sorted({m.window_minutes for m in rejected}),
+2179:    def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
+2208:            stats_key="updown_hype_alt",
+2220:        parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
+2224:        active_phase = self._active_sync_phase
+2225:        if active_phase is not None and not active_phase.done():
+2235:            refresh_updown_1h = self._should_refresh_updown_1h(self._scan_call_count)
+2238:                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
+2240:            self._active_sync_phase = sync_phase
+2244:                updown_5m,
+2245:                updown_1h,
+2246:                hype_alt,
+2265:            if self._active_sync_phase is not None and self._active_sync_phase.done():
+2266:                self._active_sync_phase = None
+2271:        # Drop already-expired markets BEFORE hydration/enrichment/strategy scan.
+2272:        # Gamma still lists fast crypto up/down windows as active for a while after
+2274:        # each cycle and is what balloons scanner_sync as the day's expired backlog
+2278:        markets, _d = _drop_expired_markets(markets, now=_exp_now); _exp_total += _d
+2279:        updown, _d = _drop_expired_markets(updown, now=_exp_now); _exp_total += _d
+2280:        updown_5m, _d = _drop_expired_markets(updown_5m, now=_exp_now); _exp_total += _d
+2281:        updown_1h, _d = _drop_expired_markets(updown_1h, now=_exp_now); _exp_total += _d
+2282:        hype_alt, _d = _drop_expired_markets(hype_alt, now=_exp_now); _exp_total += _d
+2284:            logger.info("Scanner: dropped %d expired markets before scan", _exp_total)
+2286:        async def _hydrate(ms: List[Market]) -> List[Market]:
+2289:        markets, updown, updown_5m, updown_1h = await asyncio.gather(
+2290:            _hydrate(markets),
+2291:            _hydrate(updown),
+2292:            _hydrate(updown_5m),
+2293:            _hydrate(updown_1h),
+2302:        _pre = (len(markets), len(updown), len(updown_5m), len(updown_1h))
+2304:        updown_5m = _priced(updown_5m); updown_1h = _priced(updown_1h)
+2305:        _dropped = sum(_pre) - (len(markets) + len(updown) + len(updown_5m) + len(updown_1h))
+2311:        await self.enrich_microstructure([*updown, *updown_5m, *updown_1h])
+2334:        if updown_5m:
+2335:            opportunities["high_liquidity"].extend(updown_5m)
+2336:            opportunities["updown_5m"] = updown_5m
+2338:            opportunities["updown_5m"] = []
+2340:        if updown_1h:
+2341:            opportunities["high_liquidity"].extend(updown_1h)
+2342:            opportunities["updown_1h"] = updown_1h
+2344:            opportunities["updown_1h"] = []
+2346:        if hype_alt:
+2349:                | {m.id for m in opportunities.get("updown_5m", [])}
+2350:                | {m.id for m in opportunities.get("updown_1h", [])}
+2352:            hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
+2354:        if hype_alt:
+2355:            hype_alt = await self.update_market_prices(hype_alt)
+2356:            hype_alt = [m for m in hype_alt if is_tradably_priced(m)]  # never trade unpriced (0.5-default)
+2357:            opportunities["high_liquidity"].extend(hype_alt)
+2358:            opportunities["updown_hype_alt"] = hype_alt
+2360:            opportunities["updown_hype_alt"] = []
+2366:            "updown_1h_source": "live" if refresh_updown_1h else "cache",
+2369:            "updown_5m_count": len(opportunities.get("updown_5m", [])),
+2370:            "updown_1h_count": len(opportunities.get("updown_1h", [])),
+2371:            "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
+2377:            "Scanner: scan_for_opportunities complete in %dms (includes price hydrate)",
+2385:        if self.session and not self.session.closed:
+
+codex
+One important point from the trace: expired cached markets are dropped before hydration and strategy scanning, so a stale fallback should not be directly tradeable if `end_date` parsed correctly. I’m checking the slug timestamp generation next because bucket alignment only works if the fetched slug set aligns to the same UTC window grid.
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1,245p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+     1	"""
+     2	Market Scanner Module
+     3	Fetches market data from Polymarket Gamma REST API (bulk /markets and slug/event helpers).
+     4	Historical note: GraphQL primary was removed; Gamma is the live list source.
+     5	"""
+     6	import asyncio
+     7	import inspect
+     8	import json
+     9	import logging
+    10	import re
+    11	import time
+    12	from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+    13	from concurrent.futures import TimeoutError as FuturesTimeoutError
+    14	from threading import Lock
+    15	from threading import local as thread_local
+    16	from typing import Dict, List, Optional, Any, Tuple, Set
+    17	from datetime import datetime, timedelta, timezone
+    18	from zoneinfo import ZoneInfo
+    19	import aiohttp
+    20	import requests
+    21	from dataclasses import dataclass, field
+    22	
+    23	from src.utils.http_retry import requests_get_with_retries
+    24	from src.market.microstructure import ob_imbalance, trade_flow_ratio
+    25	
+    26	logger = logging.getLogger(__name__)
+    27	_ET = ZoneInfo("America/New_York")
+    28	
+    29	# 2026-07-27 ADAPTIVE SCANNER: normalize every slug-prefix / strategy variant to one
+    30	# canonical asset key so productivity (fed per-strategy from main.py) can order the
+    31	# timestamp prefixes (btc/doge/...) AND the hourly prefixes (bitcoin/dogecoin/...).
+    32	_SCANNER_ASSET_KEY = {
+    33	    "btc": "btc", "bitcoin": "btc",
+    34	    "sol": "sol", "solana": "sol", "sol_macro": "sol",
+    35	    "eth": "eth", "ethereum": "eth", "eth_macro": "eth",
+    36	    "xrp": "xrp", "xrp_macro": "xrp",
+    37	    "hype": "hype", "hype_macro": "hype",
+    38	    "doge": "doge", "dogecoin": "doge", "doge_macro": "doge",
+    39	    "bnb": "bnb", "bnb_macro": "bnb",
+    40	}
+    41	
+    42	
+    43	def _asset_key(prefix: Any) -> str:
+    44	    p = str(prefix or "").lower()
+    45	    return _SCANNER_ASSET_KEY.get(p, p)
+    46	
+    47	@dataclass
+    48	class Market:
+    49	    """Represents a Polymarket market"""
+    50	    id: str
+    51	    question: str
+    52	    description: str
+    53	    volume: float
+    54	    liquidity: float
+    55	    yes_price: float
+    56	    no_price: float
+    57	    spread: float
+    58	    end_date: Optional[datetime]
+    59	    token_id_yes: str
+    60	    token_id_no: str
+    61	    group_item_title: str
+    62	    condition_id: str = ""
+    63	    outcome_label_yes: str = "Yes"
+    64	    outcome_label_no: str = "No"
+    65	    # Event slug when fetched via Gamma (e.g. eth-updown-15m-1712345678); empty for bulk feeds.
+    66	    slug: str = ""
+    67	    # Parsed candle duration for crypto Up/Down event markets. Current Gamma
+    68	    # hourly markets use the same question shape as old short-window markets, so
+    69	    # strategy buckets must not infer 5m/15m from asset name alone.
+    70	    window_minutes: Optional[int] = None
+    71	    # Microstructure features (2026-06-09) — populated by the optional
+    72	    # MarketScanner.enrich_microstructure step (default-off). None = not enriched.
+    73	    # The hunt for a signal the TA stack lacks: order-book imbalance (resting
+    74	    # depth) + trade flow (executed taker pressure). Logged on candidates to
+    75	    # forward-validate whether they separate winners from losers.
+    76	    ob_imbalance: Optional[float] = None
+    77	    trade_flow_ratio: Optional[float] = None
+    78	    # True once a REAL price (WS push or REST /midpoint) was applied. False means
+    79	    # yes_price/no_price are the 0.5 DEFAULT — the market is unpriced and MUST NOT be
+    80	    # traded (a 0.5 default fabricates phantom edge vs est_prob => blind entries).
+    81	    # 2026-06-22: default FLIPPED True->False (fail-CLOSED). A market is unpriced
+    82	    # until update_market_prices() applies a real mid; any market that bypasses
+    83	    # hydration (e.g. just-opened BTC books with no /midpoint yet) now stays
+    84	    # untradable instead of trading the fabricated 0.5. Test/manual Market objects
+    85	    # that need to be tradable must set price_hydrated=True explicitly.
+    86	    price_hydrated: bool = False
+    87	    # True when only ONE leg's midpoint returned and the other was DERIVED as
+    88	    # 1 - present_leg (see update_market_prices). The derived leg is a synthetic
+    89	    # complementary midpoint, not an independently observed/executable quote — treat
+    90	    # accordingly in any audit or live-fill provenance.
+    91	    price_one_sided_derived: bool = False
+    92	
+    93	    @property
+    94	    def is_binary(self) -> bool:
+    95	        """Check if market is binary"""
+    96	        return self.yes_price + self.no_price > 0.98
+    97	    
+    98	    @property
+    99	    def hours_to_expiration(self) -> Optional[float]:
+   100	        """Calculate hours until market expiration"""
+   101	        if not self.end_date:
+   102	            return None
+   103	        end = self.end_date
+   104	        if end.tzinfo is not None:
+   105	            now = datetime.now(timezone.utc)
+   106	            if end.tzinfo is not timezone.utc:
+   107	                end = end.astimezone(timezone.utc)
+   108	        else:
+   109	            now = datetime.now()
+   110	        delta = end - now
+   111	        return delta.total_seconds() / 3600
+   112	
+   113	
+   114	# Matches BTC / SOL / ETH short-candle "Up or Down" questions (15m / 5m windows).
+   115	_CRYPTO_ASSET_UPDOWN_PATTERN = re.compile(
+   116	    r"(?:(?:bitcoin|btc)|(?:solana|sol)|(?:ethereum|eth|ether)|(?:ripple|xrp)|(?:hyperliquid|hype)|(?:dogecoin|doge)|(?:bnb|binance\s+coin))\s+up\s+or\s+down",
+   117	    re.IGNORECASE,
+   118	)
+   119	# Slug prefix from Gamma event slugs (5m / 15m updown).
+   120	_CRYPTO_UPDOWN_SLUG_RE = re.compile(
+   121	    r"(?:btc|sol|eth|xrp|hype|doge|bnb)-updown-(?:5m|15m|30m)-", re.IGNORECASE
+   122	)
+   123	_HYPE_ALT_UPDOWN_SLUG_RE = re.compile(
+   124	    r"(?:hyperliquid-up-or-down|hype-up-or-down)-", re.IGNORECASE
+   125	)
+   126	_UPDOWN_SLUG_DATE_RE = re.compile(
+   127	    r"up-or-down-([a-z]+)-(\d{1,2})-(\d{4})-", re.IGNORECASE
+   128	)
+   129	_UPDOWN_TIME_RANGE_RE = re.compile(
+   130	    r"(\d{1,2}):(\d{2})\s*(AM|PM)?\s*[–-]\s*(\d{1,2}):(\d{2})\s*(AM|PM)",
+   131	    re.IGNORECASE,
+   132	)
+   133	
+   134	
+   135	def _coerce_json_list(raw: Any) -> List[Any]:
+   136	    """Accept Gamma list-like fields serialized as JSON strings or arrays."""
+   137	    if isinstance(raw, list):
+   138	        return raw
+   139	    if raw is None:
+   140	        return []
+   141	    if isinstance(raw, str):
+   142	        payload = raw.strip()
+   143	        if not payload:
+   144	            return []
+   145	        try:
+   146	            parsed = json.loads(payload)
+   147	        except Exception:
+   148	            return []
+   149	        return parsed if isinstance(parsed, list) else []
+   150	    return []
+   151	
+   152	
+   153	def is_tradably_priced(market) -> bool:
+   154	    """Single source of truth for 'this market has a REAL, tradable quote'.
+   155	
+   156	    Fail-CLOSED: a market is tradable only if a real mid was applied
+   157	    (``price_hydrated`` set True by ``update_market_prices``) AND ``yes_price``
+   158	    is a real number. Markets that bypassed hydration (just-opened books with no
+   159	    /midpoint yet) keep the fail-closed default and are rejected here, so no
+   160	    strategy can fabricate phantom edge against the 0.5 default. Used by the
+   161	    scanner ``_priced`` filter and every macro-strategy entry filter so the guard
+   162	    is uniform across all 7 assets (2026-06-22 contamination fix).
+   163	    """
+   164	    if not getattr(market, "price_hydrated", False):
+   165	        return False
+   166	    yp = getattr(market, "yes_price", None)
+   167	    return yp is not None
+   168	
+   169	
+   170	def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
+   171	    """Return the explicit Up/Down candle length from a market title/range."""
+   172	    time_match = _UPDOWN_TIME_RANGE_RE.search(text or "")
+   173	    if not time_match:
+   174	        return None
+   175	    h1, m1, p1, h2, m2, p2 = time_match.groups()
+   176	    start_period = (p1 or p2 or "").upper()
+   177	    end_period = (p2 or p1 or "").upper()
+   178	    try:
+   179	        start_hour = int(h1)
+   180	        start_minute = int(m1)
+   181	        end_hour = int(h2)
+   182	        end_minute = int(m2)
+   183	    except (TypeError, ValueError):
+   184	        return None
+   185	
+   186	    def _to_24h(hour: int, period: str) -> int:
+   187	        if period == "PM" and hour != 12:
+   188	            return hour + 12
+   189	        if period == "AM" and hour == 12:
+   190	            return 0
+   191	        return hour
+   192	
+   193	    start_total = _to_24h(start_hour, start_period) * 60 + start_minute
+   194	    end_total = _to_24h(end_hour, end_period) * 60 + end_minute
+   195	    diff = end_total - start_total
+   196	    if diff <= 0:
+   197	        diff += 24 * 60
+   198	    return diff
+   199	
+   200	
+   201	def _dedupe_markets_by_id(markets: List[Market]) -> List[Market]:
+   202	    seen: set[str] = set()
+   203	    out: List[Market] = []
+   204	    for m in markets:
+   205	        mid = (m.id or "").strip()
+   206	        if not mid or mid in seen:
+   207	            continue
+   208	        seen.add(mid)
+   209	        out.append(m)
+   210	    return out
+   211	
+   212	
+   213	def _drop_expired_markets(
+   214	    markets: List[Market], *, now: Optional[datetime] = None
+   215	) -> Tuple[List[Market], int]:
+   216	    """Remove markets whose ``end_date`` is already in the past (untradeable).
+   217	
+   218	    Fast crypto up/down markets keep reporting ``active=true closed=false`` in
+   219	    Gamma for a window AFTER they resolve, so without this guard already-expired
+   220	    windows (e.g. a 2:40AM market still in the set at 7AM) flow into the scan.
+   221	    Each one then costs a /midpoint price-fetch + microstructure enrich + a full
+   222	    per-lane TA pass every cycle — the backlog grows through the day and is what
+   223	    balloons scanner_sync. Expired == untradeable, so this is pure dead-weight
+   224	    removal (the strategies already require positive minutes-left to enter, so no
+   225	    real entry is lost). Markets with no parsed ``end_date`` are kept (unknown).
+   226	    """
+   227	    if not markets:
+   228	        return markets, 0
+   229	    ref = now or datetime.now(timezone.utc)
+   230	    kept: List[Market] = []
+   231	    dropped = 0
+   232	    for m in markets:
+   233	        ed = getattr(m, "end_date", None)
+   234	        if ed is not None:
+   235	            if ed.tzinfo is None:
+   236	                ed = ed.replace(tzinfo=timezone.utc)
+   237	            if ed <= ref:
+   238	                dropped += 1
+   239	                continue
+   240	        kept.append(m)
+   241	    return kept, dropped
+   242	
+   243	
+   244	def is_crypto_updown_market(market: Market) -> bool:
+   245	    """True for crypto up/down candle markets (bitcoin/sol_macro/eth_macro), not price-threshold markets."""
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1220,1365p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  1220	        """Optional, DEFAULT-OFF: attach order-book imbalance + trade-flow to each
+  1221	        up/down market so they get logged on candidates for signal validation.
+  1222	
+  1223	        The hunt for a signal the TA stack lacks. Fully FAIL-SAFE: any fetch/parse
+  1224	        error leaves the field None and never interrupts the scan. Gated by
+  1225	        ``trading.microstructure_enrichment_enabled`` (default False) so it ships
+  1226	        inert. When on it adds ~1-2 public REST calls per up/down market.
+  1227	        """
+  1228	        if not markets:
+  1229	            return markets
+  1230	        cfg = (self.config.get("trading", {}) or {})
+  1231	        if not bool(cfg.get("microstructure_enrichment_enabled", False)):
+  1232	            return markets
+  1233	        session = await self._get_session()
+  1234	        sem = asyncio.Semaphore(self._PRICE_CONCURRENCY)
+  1235	        flow_window = int(cfg.get("microstructure_trade_flow_window_sec", 300) or 300)
+  1236	
+  1237	        async def _enrich_one(m: Market) -> None:
+  1238	            try:
+  1239	                async with sem:
+  1240	                    book = await self._fetch_order_book(session, m.token_id_yes)
+  1241	                if book is not None:
+  1242	                    m.ob_imbalance = ob_imbalance(book.get("bids"), book.get("asks"))
+  1243	                    cond = book.get("market") or ""
+  1244	                    if cond:
+  1245	                        m.condition_id = str(cond)
+  1246	                        async with sem:
+  1247	                            trades = await self._fetch_recent_trades(
+  1248	                                session, str(cond), flow_window
+  1249	                            )
+  1250	                        if trades is not None:
+  1251	                            m.trade_flow_ratio = trade_flow_ratio(trades)
+  1252	            except Exception:
+  1253	                return  # enrichment must NEVER break the scan
+  1254	
+  1255	        try:
+  1256	            await asyncio.gather(*[_enrich_one(m) for m in markets])
+  1257	        except Exception as e:
+  1258	            logger.debug("enrich_microstructure failed: %s", e)
+  1259	        return markets
+  1260	
+  1261	    async def _fetch_order_book(self, session, token_id: str):
+  1262	        """Public CLOB GET /book — fail-safe (returns None on any error)."""
+  1263	        if not token_id:
+  1264	            return None
+  1265	        try:
+  1266	            async with session.get(
+  1267	                f"{self._CLOB_API}/book",
+  1268	                params={"token_id": token_id},
+  1269	                timeout=aiohttp.ClientTimeout(total=5),
+  1270	            ) as resp:
+  1271	                if resp.status != 200:
+  1272	                    return None
+  1273	                data = await resp.json()
+  1274	                return {
+  1275	                    "bids": data.get("bids") or [],
+  1276	                    "asks": data.get("asks") or [],
+  1277	                    "market": data.get("market"),
+  1278	                }
+  1279	        except Exception:
+  1280	            return None
+  1281	
+  1282	    async def _fetch_recent_trades(self, session, condition_id: str, window_sec: int):
+  1283	        """Public Data-API GET /trades — fail-safe (returns None on any error)."""
+  1284	        if not condition_id:
+  1285	            return None
+  1286	        after = int(time.time()) - max(30, int(window_sec))
+  1287	        try:
+  1288	            async with session.get(
+  1289	                f"{self._DATA_API}/trades",
+  1290	                params={"market": condition_id, "after": after, "limit": 200},
+  1291	                timeout=aiohttp.ClientTimeout(total=5),
+  1292	            ) as resp:
+  1293	                if resp.status != 200:
+  1294	                    return None
+  1295	                data = await resp.json()
+  1296	                if isinstance(data, dict):
+  1297	                    data = data.get("data") or data.get("trades") or []
+  1298	                return data if isinstance(data, list) else None
+  1299	        except Exception:
+  1300	            return None
+  1301	
+  1302	    def _parse_markets(self, markets_data: List[Dict]) -> List[Market]:
+  1303	        """Parse raw market data into Market objects"""
+  1304	        markets = []
+  1305	        
+  1306	        for m in markets_data:
+  1307	            try:
+  1308	                # Extract token IDs (YES and NO)
+  1309	                clob_token_ids = _coerce_json_list(m.get('clobTokenIds', []))
+  1310	                outcome_labels = [str(x) for x in _coerce_json_list(m.get("outcomes", []))]
+  1311	                if len(clob_token_ids) < 2:
+  1312	                    continue
+  1313	                    
+  1314	                token_id_yes = clob_token_ids[0]
+  1315	                token_id_no = clob_token_ids[1]
+  1316	                
+  1317	                # Parse end date
+  1318	                end_date = None
+  1319	                if m.get('endDate'):
+  1320	                    try:
+  1321	                        end_date = datetime.fromisoformat(m['endDate'].replace('Z', '+00:00'))
+  1322	                    except (ValueError, TypeError, AttributeError) as e:
+  1323	                        logger.debug(
+  1324	                            "Scanner: failed to parse endDate=%r for market %s: %s",
+  1325	                            m.get('endDate'), m.get('id', '?'), e,
+  1326	                        )
+  1327	                question = m.get('question', '')
+  1328	                group_item_title = m.get('groupItemTitle', '')
+  1329	                slug = str(m.get("slug") or "")
+  1330	                window_minutes = _infer_updown_window_minutes(
+  1331	                    slug=slug,
+  1332	                    question=question,
+  1333	                    group_item_title=group_item_title,
+  1334	                    end_date=end_date,
+  1335	                ) if _CRYPTO_ASSET_UPDOWN_PATTERN.search(question or "") else None
+  1336	                
+  1337	                market = Market(
+  1338	                    id=m['id'],
+  1339	                    question=question,
+  1340	                    description=m.get('description', ''),
+  1341	                    volume=float(m.get('volume', 0)),
+  1342	                    liquidity=float(m.get('liquidity', 0)),
+  1343	                    yes_price=0.5,  # Will be updated with real prices
+  1344	                    no_price=0.5,   # Will be updated with real prices
+  1345	                    spread=0.0,      # Will be calculated
+  1346	                    end_date=end_date,
+  1347	                    token_id_yes=token_id_yes,
+  1348	                    token_id_no=token_id_no,
+  1349	                    group_item_title=group_item_title,
+  1350	                    condition_id=str(m.get("conditionId") or m.get("condition_id") or ""),
+  1351	                    outcome_label_yes=outcome_labels[0] if outcome_labels else "Yes",
+  1352	                    outcome_label_no=outcome_labels[1] if len(outcome_labels) > 1 else "No",
+  1353	                    slug=slug,
+  1354	                    window_minutes=window_minutes,
+  1355	                )
+  1356	                
+  1357	                # Filter by liquidity
+  1358	                threshold = self._market_liquidity_threshold(
+  1359	                    market.question, market.description
+  1360	                )
+  1361	                if market.liquidity >= threshold or market.volume >= threshold:
+  1362	                    markets.append(market)
+  1363	                    
+  1364	            except Exception as e:
+  1365	                logger.warning(f"Error parsing market: {e}")
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1760,1845p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  1760	        "sol",
+  1761	        "eth",
+  1762	        "xrp",
+  1763	        "hype",
+  1764	        "doge",
+  1765	        "bnb",
+  1766	    )
+  1767	
+  1768	    @staticmethod
+  1769	    def _build_human_updown_event_slug(asset_prefix: str, when_utc: datetime) -> str:
+  1770	        """Build Gamma's human-readable event slug in America/New_York time.
+  1771	
+  1772	        Example:
+  1773	            bitcoin-up-or-down-april-27-2026-3pm-et
+  1774	        """
+  1775	        if when_utc.tzinfo is None:
+  1776	            when_utc = when_utc.replace(tzinfo=timezone.utc)
+  1777	        when_et = when_utc.astimezone(_ET)
+  1778	        month = when_et.strftime("%B").lower()
+  1779	        day = when_et.day
+  1780	        year = when_et.year
+  1781	        hour_12 = when_et.hour % 12 or 12
+  1782	        ampm = "am" if when_et.hour < 12 else "pm"
+  1783	        return f"{asset_prefix}-up-or-down-{month}-{day}-{year}-{hour_12}{ampm}-et"
+  1784	
+  1785	    def _iter_named_event_slugs(
+  1786	        self,
+  1787	        *,
+  1788	        prefixes: Tuple[str, ...],
+  1789	        step_minutes: int,
+  1790	        look_ahead: int,
+  1791	    ) -> List[str]:
+  1792	        now = datetime.now(timezone.utc)
+  1793	        slugs: List[str] = []
+  1794	        seen: set[str] = set()
+  1795	        for offset in range(0, look_ahead + 1):
+  1796	            window_time = now + timedelta(minutes=offset * step_minutes)
+  1797	            for asset_prefix in self._order_assets(prefixes, offset):
+  1798	                slug = self._build_human_updown_event_slug(asset_prefix, window_time)
+  1799	                if slug in seen:
+  1800	                    continue
+  1801	                seen.add(slug)
+  1802	                slugs.append(slug)
+  1803	        return slugs
+  1804	
+  1805	    def _iter_updown_event_slugs(self, *, step_minutes: int, look_ahead: int) -> List[str]:
+  1806	        now_ts = int(datetime.now(timezone.utc).timestamp())
+  1807	        step_seconds = step_minutes * 60
+  1808	        floor_ts = (now_ts // step_seconds) * step_seconds
+  1809	        label = f"{step_minutes}m"
+  1810	        slugs: List[str] = []
+  1811	        for offset in range(0, look_ahead + 1):
+  1812	            window_ts = floor_ts + offset * step_seconds
+  1813	            for asset_prefix in self._order_assets(self._TIMESTAMP_UPDOWN_PREFIXES, offset):
+  1814	                slugs.append(f"{asset_prefix}-updown-{label}-{window_ts}")
+  1815	        return slugs
+  1816	
+  1817	    # Asset prefixes Polymarket lists under the hourly Up/Down product
+  1818	    # (https://polymarket.com/crypto/hourly). Prefixes are not fully consistent
+  1819	    # with the short-window slug families: HYPE uses ``hype-`` (not
+  1820	    # ``hyperliquid-``), while DOGE uses ``dogecoin-`` (not ``doge-``).
+  1821	    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = (
+  1822	        "bitcoin",
+  1823	        "ethereum",
+  1824	        "solana",
+  1825	        "xrp",
+  1826	        "hype",
+  1827	        "dogecoin",
+  1828	        "bnb",
+  1829	    )
+  1830	
+  1831	    def _iter_updown_1h_human_slugs(
+  1832	        self, *, look_ahead: int, now_utc: Optional[datetime] = None
+  1833	    ) -> List[str]:
+  1834	        """Hourly Up/Down slugs in the live Polymarket shape.
+  1835	
+  1836	        Example: ``bitcoin-up-or-down-may-17-2026-1am-et`` — single start-hour token (ET),
+  1837	        year included. One market per asset per hour, starting at the current ET hour.
+  1838	        """
+  1839	        ref = now_utc or datetime.now(timezone.utc)
+  1840	        now_et = ref.astimezone(_ET).replace(minute=0, second=0, microsecond=0)
+  1841	        out: List[str] = []
+  1842	        seen: set[str] = set()
+  1843	        for offset in range(0, max(0, int(look_ahead)) + 1):
+  1844	            slot = now_et + timedelta(hours=offset)
+  1845	            for asset_w in self._order_assets(self._HOURLY_UPDOWN_ASSETS, offset):
+
+exec
+/bin/zsh -lc 'rg -n "def _iter_updown_event_slugs|_iter_named_event_slugs|_floor_time_to_step|updown.*slug|look_ahead" src/market/scanner.py' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+298:    if "updown-5m-" in slug_l or "updown-5-" in slug_l:
+300:    if "updown-30m-" in slug_l:
+398:    if "updown-5m" in slug_l:
+400:    if "updown-15m" in slug_l:
+402:    if "updown-30m" in slug_l:
+774:        look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
+791:            tasks["updown"] = lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m)
+793:            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+795:            tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+905:            look_ahead_15m,
+906:            look_ahead_5m,
+907:            look_ahead_1h,
+912:            "look_ahead_15m": 0,
+913:            "look_ahead_5m": 0,
+914:            "look_ahead_1h": 0,
+964:            look_15m = max(look_15m, int(cfg.get("look_ahead_15m", 8)))
+965:            look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 3)))
+966:            # Accept legacy look_ahead_30m as alias for the renamed lane.
+969:                int(cfg.get("look_ahead_1h", cfg.get("look_ahead_30m", 4))),
+1769:    def _build_human_updown_event_slug(asset_prefix: str, when_utc: datetime) -> str:
+1785:    def _iter_named_event_slugs(
+1790:        look_ahead: int,
+1795:        for offset in range(0, look_ahead + 1):
+1798:                slug = self._build_human_updown_event_slug(asset_prefix, window_time)
+1805:    def _iter_updown_event_slugs(self, *, step_minutes: int, look_ahead: int) -> List[str]:
+1811:        for offset in range(0, look_ahead + 1):
+1831:    def _iter_updown_1h_human_slugs(
+1832:        self, *, look_ahead: int, now_utc: Optional[datetime] = None
+1843:        for offset in range(0, max(0, int(look_ahead)) + 1):
+1846:                slug = self._build_human_updown_event_slug(asset_w, slot.astimezone(timezone.utc))
+1932:                        # Non-empty /markets: done. Empty /markets on *-updown-* slugs must still
+1954:                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
+2008:    def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:
+2009:        """Fetch crypto Up/Down markets from the ``*-updown-15m-{unix}`` slug family."""
+2011:            self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
+2020:                if "updown-15m" in (m.slug or "").lower():
+2034:                "Skipped %d updown rows from 15m slug batch (window_minutes not in 10-20 band; durations=%s)",
+2068:    def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
+2072:            look_ahead: number of future 5-min windows to fetch (default 3 ≈ 15 minutes ahead;
+2079:            self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead),
+2121:    def fetch_updown_1h_markets(self, look_ahead: int = 4) -> List[Market]:
+2131:        slugs = self._iter_updown_1h_human_slugs(look_ahead=look_ahead)
+2191:        look_ahead_15m, look_ahead_5m, _look_ahead_1h = self._resolve_updown_lookahead()
+2192:        slugs = self._iter_named_event_slugs(
+2195:            look_ahead=max(1, min(look_ahead_15m, 8)),
+2198:            self._iter_named_event_slugs(
+2201:                look_ahead=max(1, min(look_ahead_5m, 24)),
+2247:                look_ahead_15m,
+2248:                look_ahead_5m,
+2249:                look_ahead_1h,
+2363:            "look_ahead_15m": look_ahead_15m,
+2364:            "look_ahead_5m": look_ahead_5m,
+2365:            "look_ahead_1h": look_ahead_1h,
+
+codex
+I found one concrete revert-path issue: the flag makes every cycle fetch live, but the post-fetch cache update/fallback logic still runs. That means `scanner_slug_cache_enabled: false` is not byte-identical on failures after a prior successful fetch.
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '245,390p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+   245	    """True for crypto up/down candle markets (bitcoin/sol_macro/eth_macro), not price-threshold markets."""
+   246	    slug = (market.slug or "").strip()
+   247	    if slug and _CRYPTO_UPDOWN_SLUG_RE.search(slug):
+   248	        return True
+   249	    if slug and _HYPE_ALT_UPDOWN_SLUG_RE.search(slug):
+   250	        return True
+   251	    if _CRYPTO_ASSET_UPDOWN_PATTERN.search(market.question):
+   252	        return True
+   253	    q = (market.question or "").lower()
+   254	    if "up or down" in q and any(
+   255	        tok in q
+   256	        for tok in (
+   257	            "bitcoin",
+   258	            "btc",
+   259	            "solana",
+   260	            "sol ",
+   261	            "ethereum",
+   262	            "eth ",
+   263	            "ether",
+   264	            "xrp",
+   265	            "ripple",
+   266	            "hyperliquid",
+   267	            "hype",
+   268	            "dogecoin",
+   269	            "doge",
+   270	            "bnb",
+   271	            "binance coin",
+   272	        )
+   273	    ):
+   274	        return True
+   275	    git = (market.group_item_title or "").lower()
+   276	    return "up or down" in git and any(
+   277	        tok in git
+   278	        for tok in ("bitcoin", "btc", "solana", "sol", "ethereum", "eth", "xrp", "hyperliquid", "hype", "doge", "dogecoin", "bnb", "binance coin")
+   279	    )
+   280	
+   281	
+   282	def resolved_updown_window_minutes(market: Market) -> int:
+   283	    """Best-effort candle length for routing (5 / 15 / 60). Prefer Gamma ``window_minutes``."""
+   284	    wm = getattr(market, "window_minutes", None)
+   285	    if wm is not None:
+   286	        try:
+   287	            wmi = int(wm)
+   288	            if wmi > 0:
+   289	                return wmi
+   290	        except (TypeError, ValueError):
+   291	            pass
+   292	    blob = f"{market.question or ''} {market.group_item_title or ''}"
+   293	    parsed = _parse_updown_window_minutes_from_text(blob)
+   294	    if parsed is not None:
+   295	        return int(parsed)
+   296	    q = (market.question or "").lower()
+   297	    slug_l = (market.slug or "").lower()
+   298	    if "updown-5m-" in slug_l or "updown-5-" in slug_l:
+   299	        return 5
+   300	    if "updown-30m-" in slug_l:
+   301	        return 30  # historic journal/backfill rows only — product discontinued
+   302	    # Hourly slug shape: e.g. bitcoin-up-or-down-may-17-2026-1am-et
+   303	    if _UPDOWN_SLUG_DATE_RE.search(slug_l):
+   304	        return 60
+   305	    if "5m" in q or "5-min" in q:
+   306	        return 5
+   307	    if "30m" in q or "30-min" in q:
+   308	        return 30
+   309	    return 15
+   310	
+   311	
+   312	def updown_timeframe_label(window_minutes: int) -> str:
+   313	    """Bucket for strategy entry logic: 5m, 15m, or 1h.
+   314	
+   315	    The legacy 30m crypto product was discontinued; hourly (~60min) is the live
+   316	    long-cycle bucket. Anything above 22min routes to 1h.
+   317	    """
+   318	    if window_minutes <= 6:
+   319	        return "5m"
+   320	    if window_minutes <= 22:
+   321	        return "15m"
+   322	    return "1h"
+   323	
+   324	
+   325	def _parse_updown_market_end_from_text(
+   326	    *, slug: str, question: str, group_item_title: str
+   327	) -> Optional[datetime]:
+   328	    """Parse the individual up/down candle end time from Gamma text.
+   329	
+   330	    Gamma event markets can expose an event-level ``endDate``. For hourly grouped
+   331	    up/down events that is too late for 5m/15m entries, so prefer the market's
+   332	    own time range when present.
+   333	    """
+   334	    slug_match = _UPDOWN_SLUG_DATE_RE.search(slug or "")
+   335	    if not slug_match:
+   336	        return None
+   337	    month_name, day_s, year_s = slug_match.groups()
+   338	    try:
+   339	        month = datetime.strptime(month_name[:3], "%b").month
+   340	        day = int(day_s)
+   341	        year = int(year_s)
+   342	    except (TypeError, ValueError):
+   343	        return None
+   344	
+   345	    text = f"{question or ''} {group_item_title or ''}"
+   346	    time_match = _UPDOWN_TIME_RANGE_RE.search(text)
+   347	    if not time_match:
+   348	        return None
+   349	    h1, m1, p1, h2, m2, p2 = time_match.groups()
+   350	    start_period = (p1 or p2 or "").upper()
+   351	    end_period = (p2 or p1 or "").upper()
+   352	    try:
+   353	        start_hour = int(h1)
+   354	        start_minute = int(m1)
+   355	        end_hour = int(h2)
+   356	        end_minute = int(m2)
+   357	    except (TypeError, ValueError):
+   358	        return None
+   359	
+   360	    def _to_24h(hour: int, period: str) -> int:
+   361	        if period == "PM" and hour != 12:
+   362	            return hour + 12
+   363	        if period == "AM" and hour == 12:
+   364	            return 0
+   365	        return hour
+   366	
+   367	    start_et = datetime(
+   368	        year,
+   369	        month,
+   370	        day,
+   371	        _to_24h(start_hour, start_period),
+   372	        start_minute,
+   373	        tzinfo=_ET,
+   374	    )
+   375	    end_et = datetime(
+   376	        year,
+   377	        month,
+   378	        day,
+   379	        _to_24h(end_hour, end_period),
+   380	        end_minute,
+   381	        tzinfo=_ET,
+   382	    )
+   383	    if end_et <= start_et:
+   384	        end_et += timedelta(days=1)
+   385	    return end_et.astimezone(timezone.utc)
+   386	
+   387	
+   388	def _infer_updown_window_minutes(
+   389	    *, slug: str, question: str, group_item_title: str, end_date: Optional[datetime]
+   390	) -> Optional[int]:
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '930,980p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+   930	            "updown_hype_alt": [],
+   931	            "scanner_meta": meta,
+   932	        }
+   933	
+   934	    def _resolve_updown_lookahead(self) -> tuple[int, int, int]:
+   935	        """Resolve scanner look-ahead from enabled strategy configs.
+   936	
+   937	        Returns:
+   938	            (lookahead_15m, lookahead_5m, lookahead_1h)
+   939	        """
+   940	        strategies = self.config.get("strategies", {}) or {}
+   941	        keys = [
+   942	            "bitcoin",
+   943	            "sol_macro",
+   944	            "eth_macro",
+   945	            "hype_macro",
+   946	            "xrp_macro",
+   947	            "doge_macro",
+   948	            "bnb_macro",
+   949	        ]
+   950	
+   951	        enabled_cfgs = []
+   952	        for key in keys:
+   953	            cfg = strategies.get(key, {}) or {}
+   954	            if bool(cfg.get("enabled", False)):
+   955	                enabled_cfgs.append(cfg)
+   956	
+   957	        cfg_pool = enabled_cfgs if enabled_cfgs else [strategies.get(k, {}) or {} for k in keys]
+   958	
+   959	        # Seed low so max() across strategy configs reflects requested lookahead (not a floor of 8).
+   960	        look_15m = 1
+   961	        look_5m = 1
+   962	        look_1h = 1
+   963	        for cfg in cfg_pool:
+   964	            look_15m = max(look_15m, int(cfg.get("look_ahead_15m", 8)))
+   965	            look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 3)))
+   966	            # Accept legacy look_ahead_30m as alias for the renamed lane.
+   967	            look_1h = max(
+   968	                look_1h,
+   969	                int(cfg.get("look_ahead_1h", cfg.get("look_ahead_30m", 4))),
+   970	            )
+   971	
+   972	        look_15m = max(1, min(96, look_15m))
+   973	        look_5m = max(1, min(288, look_5m))
+   974	        look_1h = max(1, min(48, look_1h))
+   975	        return look_15m, look_5m, look_1h
+   976	        
+   977	    async def _get_session(self) -> aiohttp.ClientSession:
+   978	        """Get or create HTTP session.
+   979	
+   980	        Cap connection pool to prevent socket exhaustion under bursty fetches
+
+exec
+/bin/zsh -lc 'rg -n "minutes_to_expiration|hours_to_expiration|mins_left|minutes.*left|end_date" src/strategies src/main.py | head -n 120' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+src/main.py:688:    if market.end_date is None:
+src/main.py:691:    end = market.end_date
+src/main.py:1144:        self._topup_universe = []  # list of (market_id, yes_token, no_token, end_date, question)
+src/main.py:2191:                end_date = None
+src/main.py:2195:                        end_date = datetime.fromisoformat(str(raw_end))
+src/main.py:2197:                        end_date = None
+src/main.py:2210:                    end_date=end_date,
+src/main.py:4412:                        # pos.end_date (verified sane: secs_to_expiry_at_exit=128.2 on the
+src/main.py:4414:                        # anchor, NOT end_date). Takes precedence over stop-through when close.
+src/main.py:4430:                            and getattr(pos, "end_date", None) is not None
+src/main.py:4433:                                _wb_ed = pos.end_date
+src/main.py:4534:                    _end = getattr(pos, "market_end_at", None) or getattr(pos, "end_date", None)
+src/main.py:4535:                    _mins_left = None
+src/main.py:4543:                            _mins_left = (_enddt - datetime.now(timezone.utc)).total_seconds() / 60.0
+src/main.py:4545:                            _mins_left = None
+src/main.py:4556:                        mins_left=_mins_left,
+src/main.py:4656:        for market_id, yes_token, no_token, end_date, question in universe:
+src/main.py:4658:                if not end_date or not yes_token:
+src/main.py:4660:                ed = end_date if isinstance(end_date, datetime) else datetime.fromisoformat(
+src/main.py:4661:                    str(end_date).replace("Z", "+00:00"))
+src/main.py:4664:                mins_left = (ed - now).total_seconds() / 60.0
+src/main.py:4665:                if mins_left < 0 or mins_left > win:
+src/main.py:4684:                    mins_left=mins_left,
+src/main.py:5297:                    (m.id, m.token_id_yes, m.token_id_no, m.end_date, m.question)
+src/main.py:5300:                    and m.token_id_yes and m.end_date is not None
+src/main.py:6529:        end_date = getattr(signal, "end_date", None)
+src/main.py:6530:        if end_date is None:
+src/main.py:6533:            end_dt = end_date
+src/main.py:6549:        configured_by_window = guard_cfg.get("min_mins_left") or {}
+src/main.py:6554:        min_mins_left = max(configured_min or 0.0, guard_min)
+src/main.py:6555:        min_seconds_left = max(0.0, min_mins_left * 60.0)
+src/main.py:6682:            end_date=signal.end_date,
+src/main.py:6839:                end_date=signal.end_date,
+src/main.py:6932:                market_end_at=signal.end_date,
+src/main.py:6978:        end_date/est_prob/window_size/action/price)."""
+src/main.py:7001:                end_date=getattr(signal, "end_date", None),
+src/main.py:7131:            end_date=signal.end_date,
+src/main.py:7302:                end_date=signal.end_date,
+src/main.py:7400:                market_end_at=signal.end_date,
+src/strategies/btc_updown_5m.py.bak_pre_htfboost_20260720:69:def m5_candle_age_minutes(window_minutes: int, eval_minutes_left: float) -> float:
+src/strategies/btc_updown_5m.py.bak_pre_htfboost_20260720:71:    return max(0.0, float(window_minutes) - float(eval_minutes_left))
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:105:    Derives mins_left from the market end_date (matching the alt eval path) and
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:113:        end = getattr(market, "end_date", None)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:118:        mins_left = max(0.0, (end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:119:        wd = evaluate_window_delta(ta, window, mins_left)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:171:    end_date: Optional[datetime] = Field(None, description="Resolution date")
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:500:        self, ta: Any, tf: str, mins_left: float, action: str
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:528:            wd = evaluate_window_delta(ta, tf, mins_left)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:548:        eval_mins_left: float,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:575:        min_left_key = f"bull_regime_buy_no_min_mins_left_{window_size}"
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:576:        min_mins_left = self.config.get(min_left_key)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:577:        if min_mins_left is None:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:578:            min_mins_left = self.config.get("bull_regime_buy_no_min_mins_left")
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:579:        if min_mins_left is not None and eval_mins_left <= float(min_mins_left):
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:697:        minutes_left: float,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:716:            minutes_to_resolution=minutes_left,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:981:        # silently ignored (early-listed Polymarket contracts often report mins_left > 15).
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:982:        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1066:        """Return the preferred minutes-left band for marginal up/down tie-break timing."""
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1081:    def _within_entry_timing_window(self, *, mins_left: float, tf: str) -> bool:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1083:        return win_min <= mins_left <= win_max
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1989:                if not market.end_date:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1990:                    _bump_skip("no_end_date")
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1991:                    logger.debug(f"  BTC skip '{market.question[:40]}' — no end_date")
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1994:                    market.end_date.replace(tzinfo=timezone.utc)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1995:                    if market.end_date.tzinfo is None else market.end_date
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1997:                _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1998:                _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:1999:                _sample("mins_left", _mins_left)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2001:                    mins_left=_eval_left,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2332:                        eval_mins_left=float(_eval_left),
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2601:                            if market.end_date:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2602:                                _wd_end = market.end_date
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2690:                        eval_mins_left=float(_eval_left),
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2734:                if market.end_date:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2735:                    end_date = market.end_date
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2736:                    if end_date.tzinfo is None:
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2737:                        end_date = end_date.replace(tzinfo=timezone.utc)
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:2739:                        1, (end_date - datetime.now(timezone.utc)).days
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:3083:                    _mins_left,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:3495:                    f"({_mins_left:.1f}m left)"
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:3897:                    minutes_left=_mins_left,
+src/strategies/bitcoin.py.bak_pre_B4_1hshort_20260720:4236:                end_date=market.end_date,
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:105:    Derives mins_left from the market end_date (matching the alt eval path) and
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:113:        end = getattr(market, "end_date", None)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:118:        mins_left = max(0.0, (end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:119:        wd = evaluate_window_delta(ta, window, mins_left)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:171:    end_date: Optional[datetime] = Field(None, description="Resolution date")
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:500:        self, ta: Any, tf: str, mins_left: float, action: str
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:528:            wd = evaluate_window_delta(ta, tf, mins_left)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:548:        eval_mins_left: float,
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:575:        min_left_key = f"bull_regime_buy_no_min_mins_left_{window_size}"
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:576:        min_mins_left = self.config.get(min_left_key)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:577:        if min_mins_left is None:
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:578:            min_mins_left = self.config.get("bull_regime_buy_no_min_mins_left")
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:579:        if min_mins_left is not None and eval_mins_left <= float(min_mins_left):
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:697:        minutes_left: float,
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:716:            minutes_to_resolution=minutes_left,
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:981:        # silently ignored (early-listed Polymarket contracts often report mins_left > 15).
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:982:        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1066:        """Return the preferred minutes-left band for marginal up/down tie-break timing."""
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1081:    def _within_entry_timing_window(self, *, mins_left: float, tf: str) -> bool:
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1083:        return win_min <= mins_left <= win_max
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1985:                if not market.end_date:
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1986:                    _bump_skip("no_end_date")
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1987:                    logger.debug(f"  BTC skip '{market.question[:40]}' — no end_date")
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1990:                    market.end_date.replace(tzinfo=timezone.utc)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1991:                    if market.end_date.tzinfo is None else market.end_date
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1993:                _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1994:                _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1995:                _sample("mins_left", _mins_left)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:1997:                    mins_left=_eval_left,
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2281:                        eval_mins_left=float(_eval_left),
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2617:                        eval_mins_left=float(_eval_left),
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2661:                if market.end_date:
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2662:                    end_date = market.end_date
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2663:                    if end_date.tzinfo is None:
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2664:                        end_date = end_date.replace(tzinfo=timezone.utc)
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:2666:                        1, (end_date - datetime.now(timezone.utc)).days
+src/strategies/bitcoin.py.bak_pre_frozenest_20260703_201454:3010:                    _mins_left,
+
+codex
+Another thing I’m checking because it matters for “prices are not cached”: the list cache stores `Market` objects, not immutable slugs. If price hydration mutates those objects and does not clear stale `price_hydrated` on misses, stale prices could leak through even though the list cache was intended to cache only slugs.
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '1365,1515p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+  1365	                logger.warning(f"Error parsing market: {e}")
+  1366	                continue
+  1367	        return markets
+  1368	    
+  1369	    async def update_market_prices(self, markets: List[Market]) -> List[Market]:
+  1370	        """Update markets with current prices"""
+  1371	        if not markets:
+  1372	            return []
+  1373	        
+  1374	        # Collect all token IDs
+  1375	        token_ids = []
+  1376	        for market in markets:
+  1377	            token_ids.extend([market.token_id_yes, market.token_id_no])
+  1378	
+  1379	        # 2026-07-11 WS-coverage fix (ws_cov was 0.003): remember each priced
+  1380	        # token's imminence so the capped WS subscribe set holds the CURRENT/
+  1381	        # near windows — the active, entry-relevant books. Hydrate batches run
+  1382	        # concurrently (asyncio.gather), so this ACCUMULATES with a TTL instead
+  1383	        # of overwriting (the old set() only ever held the last batch).
+  1384	        _now_m = time.monotonic()
+  1385	        for market in markets:
+  1386	            _h = market.hours_to_expiration
+  1387	            _mins = 1e9 if _h is None else max(0.0, _h * 60.0)
+  1388	            for _tid in (market.token_id_yes, market.token_id_no):
+  1389	                _tid = str(_tid or "").strip()
+  1390	                if _tid:
+  1391	                    self._ws_want_meta[_tid] = (_now_m, _mins)
+  1392	        if len(self._ws_want_meta) > 4000:
+  1393	            _cut = _now_m - 180.0
+  1394	            self._ws_want_meta = {
+  1395	                t: v for t, v in self._ws_want_meta.items() if v[0] >= _cut
+  1396	            }
+  1397	        if len(self._last_price_src) > 4000:
+  1398	            _cut2 = time.monotonic() - 180.0
+  1399	            self._last_price_src = {
+  1400	                t: v for t, v in self._last_price_src.items() if v[1] >= _cut2
+  1401	            }
+  1402	        
+  1403	        # Fetch prices
+  1404	        prices = await self.fetch_prices(token_ids)
+  1405	        _degen_05_pending: List[Market] = []
+  1406	        
+  1407	        # Update markets
+  1408	        for market in markets:
+  1409	            yes_hit = market.token_id_yes in prices
+  1410	            no_hit = market.token_id_no in prices
+  1411	            yes_price = prices.get(market.token_id_yes, 0.5)
+  1412	            no_price = prices.get(market.token_id_no, 0.5)
+  1413	
+  1414	            # One-sided-fetch repair (2026-06-22): when only ONE leg's /midpoint
+  1415	            # (or WS push) returns, the other leg silently kept the 0.5 placeholder.
+  1416	            # The market still passes the price_hydrated guard below (one leg hit),
+  1417	            # so a BUY_YES whose real YES mid is ~0.495 (NO=0.505 hit, YES fetch
+  1418	            # missed) entered AND logged at the 0.5 DEFAULT — a ½¢ adverse fill
+  1419	            # contamination on the long side (favorable on short → why longs bled).
+  1420	            # Diagnosed from trades.jsonl: a 553-row spike at *exactly* 0.5000 vs
+  1421	            # ~16 at each 0.495/0.505 neighbour = the default, not a real mid. A
+  1422	            # binary's legs are complementary (yes+no≈1), so derive the missing leg
+  1423	            # from the present one instead of trading the 0.5 default. Genuine
+  1424	            # two-sided quotes (both hit) are untouched; both-miss stays 0.5/0.5 and
+  1425	            # is dropped by the unpriced guard below.
+  1426	            if no_hit and not yes_hit:
+  1427	                yes_price = 1.0 - no_price
+  1428	                market.price_one_sided_derived = True
+  1429	            elif yes_hit and not no_hit:
+  1430	                no_price = 1.0 - yes_price
+  1431	                market.price_one_sided_derived = True
+  1432	            else:
+  1433	                market.price_one_sided_derived = False
+  1434	
+  1435	            market.yes_price = yes_price
+  1436	            market.no_price = no_price
+  1437	            # Real quote only if at least one side returned a live mid; otherwise both
+  1438	            # are the 0.5 default and the market is unpriced (filtered before strategy scan).
+  1439	            hydrated = bool(yes_hit or no_hit)
+  1440	            # Degenerate-0.5 guard (2026-06-20): a thin/one-sided Polymarket book whose
+  1441	            # /midpoint falls back to an EXACT 0.50 is "present" in the price map but is
+  1442	            # not a real quote — trading it fabricates phantom edge (est_prob vs a fake
+  1443	            # 0.5) and was the recurring HYPE blind-0.5 bleed. A genuine balanced book is
+  1444	            # virtually never exactly 0.5000 on BOTH legs (real best bid/ask carry an
+  1445	            # imbalance), and a true coin-flip has ~0 edge anyway. Treat both-legs-0.5 as
+  1446	            # unpriced so the _priced() filter drops it before the strategy scan.
+  1447	            if hydrated and abs(yes_price - 0.5) < 1e-3 and abs(no_price - 0.5) < 1e-3:
+  1448	                # 2026-07-17: do NOT drop unconditionally. A REAL freshly-opened
+  1449	                # book parks at symmetric maker quotes (0.49/0.51 -> mid exactly
+  1450	                # 0.500), indistinguishable from the no-book placeholder by mid
+  1451	                # alone — this guard was silently discarding genuine two-sided
+  1452	                # books and 5m lanes missed 9-30%% of live windows (bnb worst;
+  1453	                # misses clustered in quiet hours). Defer the verdict to a book
+  1454	                # check below: verified two-sided book -> keep; else drop as
+  1455	                # before (the blind-0.5 protection stays for actual placeholders).
+  1456	                hydrated = False
+  1457	                # Codex fix (2026-07-17): only a market whose BOTH legs returned a
+  1458	                # real /midpoint (or WS mid) is a re-admission candidate. A
+  1459	                # one-sided-DERIVED 0.50 (one leg missed, derived = 1 - other)
+  1460	                # is exactly the placeholder shape the guard exists for.
+  1461	                if yes_hit and no_hit:
+  1462	                    # 2026-07-18 REVERT (operator debug): the 07-17 window-proximity
+  1463	                    # scope gate here dropped EVERY 0.50 parked book beyond ~17min
+  1464	                    # because window_minutes is None at this point (float(None or 15)
+  1465	                    # =15 -> mins_left<=17), which ZEROED the 15m lanes (windows
+  1466	                    # 120/135) and the 5m engine post-restart (A/B: xrp5m 5->0, sol5m
+  1467	                    # 4->0, eth15m 5->0). The proven morning behavior re-admits any
+  1468	                    # verified two-sided 0.50 book unconditionally; the far-out
+  1469	                    # parked-book risk it reintroduces is ONE rare trade vs an
+  1470	                    # engine-wide outage. Revert to that.
+  1471	                    _degen_05_pending.append(market)
+  1472	            market.price_hydrated = hydrated
+  1473	            if market.spread <= 0:
+  1474	                # Mid prices only reveal convergence, not true order-book spread.
+  1475	                market.spread = max(0.0, 1.0 - (yes_price + no_price))
+  1476	
+  1477	        # Observability for the one-sided-fetch rate (the upstream cause of the
+  1478	        # 0.5-default contamination). A persistently high count points at a WS-
+  1479	        # overlay / batch-/midpoint coverage gap dropping one leg, not just a
+  1480	        # transient miss — worth chasing separately from this fail-safe derive.
+  1481	        _derived = sum(1 for m in markets if getattr(m, "price_one_sided_derived", False))
+  1482	        if _derived:
+  1483	            logger.info(
+  1484	                "Scanner: derived %d/%d one-sided binary legs (1-present_leg; synthetic mid)",
+  1485	                _derived,
+  1486	                len(markets),
+  1487	            )
+  1488	
+  1489	        if _degen_05_pending and self._admit_real_05_books:
+  1490	            try:
+  1491	                await self._verify_degenerate_05_books(_degen_05_pending)
+  1492	            except Exception:
+  1493	                # Fail-CLOSED: on any verification error the markets stay
+  1494	                # unpriced (exactly the pre-fix behavior).
+  1495	                logger.debug("degen-0.5 book verification failed (markets stay dropped)", exc_info=True)
+  1496	
+  1497	        return markets
+  1498	
+  1499	    # Book-shape gates for re-admitting an exact-0.50 mid: must look like a real
+  1500	    # freshly-seeded two-sided book (0.49/0.51-style), never a placeholder and
+  1501	    # never a degenerate 0.01/0.99 shell whose mid also happens to be 0.50.
+  1502	    _DEGEN05_MIN_BID = 0.40
+  1503	    _DEGEN05_MAX_ASK = 0.60
+  1504	    _DEGEN05_MAX_SPREAD = 0.06
+  1505	    _DEGEN05_MIN_BEST_SIZE = 1.0
+  1506	    _DEGEN05_REST_CAP = 10  # bound added latency per hydrate batch
+  1507	
+  1508	    @classmethod
+  1509	    def _degen05_book_ok(
+  1510	        cls,
+  1511	        best_bid: Optional[float],
+  1512	        best_ask: Optional[float],
+  1513	        bid_size: float = None,
+  1514	        ask_size: float = None,
+  1515	    ) -> bool:
+
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '980,1220p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+   980	        Cap connection pool to prevent socket exhaustion under bursty fetches
+   981	        (e.g. fetch_prices fan-out across many token_ids). Default aiohttp limit
+   982	        is 100 with no per-host cap, which can exhaust ephemeral ports on
+   983	        long-running processes and cause 5-10s tail stalls.
+   984	        """
+   985	        if self.session is None or self.session.closed:
+   986	            connector = aiohttp.TCPConnector(
+   987	                limit=50, limit_per_host=20, ttl_dns_cache=300
+   988	            )
+   989	            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+   990	            self.session = aiohttp.ClientSession(
+   991	                connector=connector, timeout=timeout
+   992	            )
+   993	        return self.session
+   994	    
+   995	    async def fetch_markets(self, limit: int = 100) -> List[Market]:
+   996	        """Fetch active markets from Polymarket via Gamma REST API."""
+   997	        return self._fetch_markets_gamma(limit=limit)
+   998	
+   999	    _CLOB_API = "https://clob.polymarket.com"
+  1000	    _PRICE_CONCURRENCY = 20  # max simultaneous CLOB midpoint requests
+  1001	
+  1002	    def ws_want_token_ids(self, max_age_sec: float = 180.0) -> List[str]:
+  1003	        """Scan-universe CLOB tokens for the WS book subscription, most-
+  1004	        imminent (fewest minutes to window end) first, recently-priced only.
+  1005	        Consumed by main._wanted_clob_book_token_ids, which caps the set —
+  1006	        this ordering is what makes the cap keep the LIVE windows instead of
+  1007	        an arbitrary slice dominated by far-lookahead dead books (2026-07-11
+  1008	        ws_cov=0.003 root cause)."""
+  1009	        _now = time.monotonic()
+  1010	        items = [
+  1011	            (mins, ts, t)
+  1012	            for t, (ts, mins) in self._ws_want_meta.items()
+  1013	            if (_now - ts) <= max_age_sec
+  1014	        ]
+  1015	        items.sort()
+  1016	        return [t for _, _, t in items]
+  1017	
+  1018	    async def fetch_prices(self, token_ids: List[str]) -> Dict[str, float]:
+  1019	        """Fetch current mid prices for token IDs.
+  1020	
+  1021	        When the WSS overlay is enabled, mids are read from the pushed CLOB
+  1022	        websocket book first (fresh within ``price_max_age_sec``); only the
+  1023	        uncovered tokens hit REST ``/midpoint``. Fail-safe: any miss/staleness
+  1024	        falls through to REST, so pricing is always correct even if WS is empty.
+  1025	        """
+  1026	        if not token_ids:
+  1027	            return {}
+  1028	
+  1029	        # Record the want-set so main can subscribe these tokens on the WS
+  1030	        # (with stale-unsubscribe for OOM safety).
+  1031	        self._last_priced_token_ids = set(token_ids)
+  1032	
+  1033	        prices: Dict[str, float] = {}
+  1034	        remaining = token_ids
+  1035	        ws = self.ws_client
+  1036	        if self._ws_drive_prices and ws is not None and getattr(ws, "order_books", None):
+  1037	            try:
+  1038	                loop_now = asyncio.get_event_loop().time()
+  1039	                max_age = self._ws_price_max_age_sec
+  1040	                covered: List[str] = []
+  1041	                _ws_src_batch: Dict[str, Tuple[str, float, float]] = {}
+  1042	                for tid in token_ids:
+  1043	                    book = ws.order_books.get(tid)
+  1044	                    if book is None:
+  1045	                        continue
+  1046	                    mid = book.mid_price
+  1047	                    if mid is None or mid <= 0:
+  1048	                        continue
+  1049	                    if (loop_now - float(book.last_update or 0)) > max_age:
+  1050	                        continue  # stale -> let REST refresh it
+  1051	                    prices[tid] = mid
+  1052	                    _ws_src_batch[tid] = (
+  1053	                        "ws", loop_now,
+  1054	                        (loop_now - float(book.last_update or 0)) * 1000.0,
+  1055	                    )
+  1056	                    covered.append(tid)
+  1057	                if covered:
+  1058	                    cov = set(covered)
+  1059	                    remaining = [t for t in token_ids if t not in cov]
+  1060	                    self._ws_price_stats["ws_hit"] += len(covered)
+  1061	                    self._last_price_src.update(_ws_src_batch)
+  1062	            except Exception as e:  # never let the overlay break pricing
+  1063	                logger.debug("WS price overlay failed, full REST fallback: %s", e)
+  1064	                remaining = token_ids
+  1065	                prices = {}
+  1066	
+  1067	        if not remaining:
+  1068	            logger.debug(
+  1069	                "Scanner.fetch_prices: %d/%d served from WS (0 REST)",
+  1070	                len(prices), len(token_ids),
+  1071	            )
+  1072	            return prices
+  1073	        self._ws_price_stats["rest"] += len(remaining)
+  1074	
+  1075	        session = await self._get_session()
+  1076	        sem = asyncio.Semaphore(self._PRICE_CONCURRENCY)
+  1077	
+  1078	        async def _get_mid(token_id: str):
+  1079	            async with sem:
+  1080	                try:
+  1081	                    async with session.get(
+  1082	                        f"{self._CLOB_API}/midpoint",
+  1083	                        params={"token_id": token_id},
+  1084	                        timeout=aiohttp.ClientTimeout(total=5),
+  1085	                    ) as resp:
+  1086	                        if resp.status == 200:
+  1087	                            data = await resp.json()
+  1088	                            mid = float(data.get("mid", 0) or 0)
+  1089	                            if mid > 0:
+  1090	                                return token_id, mid
+  1091	                        else:
+  1092	                            return token_id, None
+  1093	                except asyncio.TimeoutError:
+  1094	                    return token_id, "timeout"
+  1095	                except Exception as e:
+  1096	                    return token_id, f"err:{type(e).__name__}"
+  1097	                return token_id, None
+  1098	
+  1099	        async def _get_mid_chunk(chunk):
+  1100	            # Batch: one POST /midpoints per chunk; same output shape as _get_mid
+  1101	            # (list of (tid, float|None|"timeout"|"err:*")). Fail-safe to None.
+  1102	            async with sem:
+  1103	                try:
+  1104	                    async with session.post(
+  1105	                        f"{self._CLOB_API}/midpoints",
+  1106	                        json=[{"token_id": t} for t in chunk],
+  1107	                        timeout=aiohttp.ClientTimeout(total=5),
+  1108	                    ) as resp:
+  1109	                        if resp.status == 200:
+  1110	                            data = await resp.json()
+  1111	                            out = []
+  1112	                            for t in chunk:
+  1113	                                raw = data.get(str(t)) if isinstance(data, dict) else None
+  1114	                                try:
+  1115	                                    m = float(raw) if raw is not None else 0.0
+  1116	                                except (TypeError, ValueError):
+  1117	                                    m = 0.0
+  1118	                                out.append((t, m if m > 0 else None))
+  1119	                            return out
+  1120	                        if resp.status == 429:
+  1121	                            return [(t, "err:RateLimited") for t in chunk]
+  1122	                        return [(t, None) for t in chunk]
+  1123	                except asyncio.TimeoutError:
+  1124	                    return [(t, "timeout") for t in chunk]
+  1125	                except Exception as e:
+  1126	                    return [(t, f"err:{type(e).__name__}") for t in chunk]
+  1127	
+  1128	        try:
+  1129	            if self._rest_batch_midpoints:
+  1130	                _bsz = self._rest_batch_size
+  1131	                _chunks = [remaining[i:i + _bsz] for i in range(0, len(remaining), _bsz)]
+  1132	                _subs = await asyncio.gather(*[_get_mid_chunk(c) for c in _chunks])
+  1133	                results = [pair for sub in _subs for pair in sub]
+  1134	            else:
+  1135	                results = await asyncio.gather(*[_get_mid(tid) for tid in remaining])
+  1136	            _rest_now = asyncio.get_event_loop().time()
+  1137	            timeouts = 0
+  1138	            errors = 0
+  1139	            misses = 0
+  1140	            for tid, val in results:
+  1141	                if isinstance(val, float):
+  1142	                    prices[tid] = val
+  1143	                    self._last_price_src[tid] = ("rest", _rest_now, 0.0)
+  1144	                elif val == "timeout":
+  1145	                    timeouts += 1
+  1146	                elif isinstance(val, str) and val.startswith("err:"):
+  1147	                    errors += 1
+  1148	                else:
+  1149	                    misses += 1
+  1150	            if timeouts or errors or misses:
+  1151	                logger.debug(
+  1152	                    "Scanner.fetch_prices: %d/%d ok via REST (ws_served=%d timeouts=%d errors=%d misses=%d)",
+  1153	                    len(prices), len(token_ids), len(token_ids) - len(remaining),
+  1154	                    timeouts, errors, misses,
+  1155	                )
+  1156	            # WS-STALENESS tertiary fallback: tokens STILL unpriced after WS + /midpoint
+  1157	            # would be dropped -> fail-closed rejected (a MISSED trade, not a bad one).
+  1158	            # Recover them with a fresh top-of-book mid from GET /book. Bounded to the
+  1159	            # still-unpriced set, shares the price semaphore, fully fail-safe (any error
+  1160	            # leaves the token unpriced = prior behavior). Gated: clob_ws.rest_book_price_fallback.
+  1161	            if self._rest_book_price_fallback:
+  1162	                _unpriced = [t for t in remaining if t not in prices]
+  1163	                if _unpriced:
+  1164	
+  1165	                    async def _book_mid(token_id: str):
+  1166	                        async with sem:
+  1167	                            book = await self._fetch_order_book(session, token_id)
+  1168	                        if not book:
+  1169	                            return token_id, None
+  1170	                        def _px(row):
+  1171	                            # Parse a level's price ONCE, defensively — a malformed row
+  1172	                            # yields 0.0 (skipped) instead of throwing and dropping the
+  1173	                            # whole token's fallback.
+  1174	                            try:
+  1175	                                return float((row or {}).get("price", 0) or 0)
+  1176	                            except (TypeError, ValueError, AttributeError):
+  1177	                                return 0.0
+  1178	                        try:
+  1179	                            bids = book.get("bids") or []
+  1180	                            asks = book.get("asks") or []
+  1181	                            _bid_prices = [p for p in (_px(b) for b in bids) if p > 0]
+  1182	                            _ask_prices = [p for p in (_px(a) for a in asks) if p > 0]
+  1183	                            best_bid = max(_bid_prices) if _bid_prices else 0.0
+  1184	                            best_ask = min(_ask_prices) if _ask_prices else 0.0
+  1185	                        except Exception:
+  1186	                            return token_id, None
+  1187	                        if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
+  1188	                            return token_id, (best_bid + best_ask) / 2.0
+  1189	                        return token_id, None
+  1190	
+  1191	                    try:
+  1192	                        _book_results = await asyncio.gather(
+  1193	                            *[_book_mid(t) for t in _unpriced]
+  1194	                        )
+  1195	                        _bnow = asyncio.get_event_loop().time()
+  1196	                        _recovered = 0
+  1197	                        for tid, mid in _book_results:
+  1198	                            if isinstance(mid, float) and mid > 0:
+  1199	                                prices[tid] = mid
+  1200	                                self._last_price_src[tid] = ("rest_book", _bnow, 0.0)
+  1201	                                _recovered += 1
+  1202	                        if _recovered:
+  1203	                            self._ws_price_stats["rest_book_fallback"] = (
+  1204	                                self._ws_price_stats.get("rest_book_fallback", 0) + _recovered
+  1205	                            )
+  1206	                            logger.debug(
+  1207	                                "Scanner.fetch_prices: recovered %d/%d unpriced via /book fallback",
+  1208	                                _recovered, len(_unpriced),
+  1209	                            )
+  1210	                    except Exception as _be:  # never let the fallback break pricing
+  1211	                        logger.debug("book-price fallback failed (non-fatal): %s", _be)
+  1212	            return prices
+  1213	        except Exception as e:
+  1214	            logger.error(f"Error fetching prices: {e}")
+  1215	            return prices  # keep WS-served mids even if the REST leg errored
+  1216	
+  1217	    _DATA_API = "https://data-api.polymarket.com"
+  1218	
+  1219	    async def enrich_microstructure(self, markets: List[Market]) -> List[Market]:
+  1220	        """Optional, DEFAULT-OFF: attach order-book imbalance + trade-flow to each
+
+2026-08-11T23:49:48.338437Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `base_instructions` at line 94 column 5
+codex
+## NO-GO
+
+The cache is mostly safe, but I would not ship as-is because two edge cases violate the stated safety/revert requirements.
+
+### Findings
+
+**1. Boundary race can mark old-bucket data as new-bucket cache.**  
+Refresh is decided before the fetch using current bucket, but the cache bucket is assigned after the fetch using a fresh `time.time()` call: [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:780>) and [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:853>). If a scan starts just before a 5m/15m boundary and finishes just after it, the fetched slug list may have been generated from the old bucket, while `_updown_*_cache_bucket` is set to the new bucket.
+
+Risk: not likely to trade an expired market because expired markets are dropped before hydration at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2271>), but it can miss/starve the newly opened current window if the old-bucket lookahead did not already return that market. This is bounded to one bucket, not permanent, but it is exactly the “new window opens, cache thinks it is fresh” failure mode.
+
+**2. `scanner_slug_cache_enabled: false` is not byte-identical legacy behavior.**  
+Disabled mode forces `refresh_* = True` via [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:726>), so it does fetch every cycle. However, the refresh branch still writes caches and still falls back to cached markets on failed/timeout fetches: [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:843>) and [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:885>). Old behavior would return the live fetch result, usually `[]` on failure. So the flag does not fully bypass the cache.
+
+Risk: with the flag off, an operator expecting exact old behavior could still get cached 5m/15m lists after a failed fetch. Expired markets should still be dropped, but this is not a clean revert switch.
+
+### Checks That Pass
+
+**Permanent stale/starvation:** unlikely. On fetch failure fallback, the bucket is not advanced, so the next cycle keeps retrying the new bucket. On empty successful fetch, the cache may be set empty but bucket remains `None`/old, so it also retries. The “advance bucket only on non-empty result” guard is directionally correct.
+
+**Missed markets within a window:** acceptable if the assumption holds that timestamp slugs are deterministic and lookahead slugs already include upcoming windows. The boundary race above is the only place this assumption becomes fragile.
+
+**Thread safety:** acceptable. `_sync_driver_pool` has `max_workers=1` at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:431>), and overlapping phases are skipped at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2224>). I do not see a cache read/write race in normal scanner execution.
+
+**Prices:** actionable stale prices are unlikely. Cached `Market` objects are rehydrated every scan, and unpriced/missed hydration is fail-closed before strategy scan at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2289>).
+
+### Required Fixes Before GO
+
+1. Capture the bucket used for slug generation and store that exact bucket, not a post-fetch bucket.  
+2. When `scanner_slug_cache_enabled` is false, bypass cache reads, writes, and fallback entirely.
+
+**Metadata/Summary**  
+Tags: `#PSB`, `#MarketScanner`, `#Polymarket`, `#LiveTradingSafety`  
+Related Concepts: [[Window Boundary Cache]], [[Slug Fetch Timeout]], [[Fail Closed Pricing]], [[Scanner Revert Flag]]  
+Summary: The design is close, but the current implementation can stamp old-bucket results as fresh for a new bucket during boundary-crossing scans. The revert flag also does not fully disable cache behavior, so this is a **NO-GO** until those two issues are fixed.
+tokens used
+85,127
+## NO-GO
+
+The cache is mostly safe, but I would not ship as-is because two edge cases violate the stated safety/revert requirements.
+
+### Findings
+
+**1. Boundary race can mark old-bucket data as new-bucket cache.**  
+Refresh is decided before the fetch using current bucket, but the cache bucket is assigned after the fetch using a fresh `time.time()` call: [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:780>) and [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:853>). If a scan starts just before a 5m/15m boundary and finishes just after it, the fetched slug list may have been generated from the old bucket, while `_updown_*_cache_bucket` is set to the new bucket.
+
+Risk: not likely to trade an expired market because expired markets are dropped before hydration at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2271>), but it can miss/starve the newly opened current window if the old-bucket lookahead did not already return that market. This is bounded to one bucket, not permanent, but it is exactly the “new window opens, cache thinks it is fresh” failure mode.
+
+**2. `scanner_slug_cache_enabled: false` is not byte-identical legacy behavior.**  
+Disabled mode forces `refresh_* = True` via [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:726>), so it does fetch every cycle. However, the refresh branch still writes caches and still falls back to cached markets on failed/timeout fetches: [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:843>) and [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:885>). Old behavior would return the live fetch result, usually `[]` on failure. So the flag does not fully bypass the cache.
+
+Risk: with the flag off, an operator expecting exact old behavior could still get cached 5m/15m lists after a failed fetch. Expired markets should still be dropped, but this is not a clean revert switch.
+
+### Checks That Pass
+
+**Permanent stale/starvation:** unlikely. On fetch failure fallback, the bucket is not advanced, so the next cycle keeps retrying the new bucket. On empty successful fetch, the cache may be set empty but bucket remains `None`/old, so it also retries. The “advance bucket only on non-empty result” guard is directionally correct.
+
+**Missed markets within a window:** acceptable if the assumption holds that timestamp slugs are deterministic and lookahead slugs already include upcoming windows. The boundary race above is the only place this assumption becomes fragile.
+
+**Thread safety:** acceptable. `_sync_driver_pool` has `max_workers=1` at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:431>), and overlapping phases are skipped at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2224>). I do not see a cache read/write race in normal scanner execution.
+
+**Prices:** actionable stale prices are unlikely. Cached `Market` objects are rehydrated every scan, and unpriced/missed hydration is fail-closed before strategy scan at [scanner.py](</Users/mainfolder/Documents/psb-main 1/src/market/scanner.py:2289>).
+
+### Required Fixes Before GO
+
+1. Capture the bucket used for slug generation and store that exact bucket, not a post-fetch bucket.  
+2. When `scanner_slug_cache_enabled` is false, bypass cache reads, writes, and fallback entirely.
+
+**Metadata/Summary**  
+Tags: `#PSB`, `#MarketScanner`, `#Polymarket`, `#LiveTradingSafety`  
+Related Concepts: [[Window Boundary Cache]], [[Slug Fetch Timeout]], [[Fail Closed Pricing]], [[Scanner Revert Flag]]  
+Summary: The design is close, but the current implementation can stamp old-bucket results as fresh for a new bucket during boundary-crossing scans. The revert flag also does not fully disable cache behavior, so this is a **NO-GO** until those two issues are fixed.

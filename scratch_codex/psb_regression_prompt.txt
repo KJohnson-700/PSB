@@ -1,0 +1,18 @@
+You are auditing a paper crypto-trading bot (PSB) for a REGRESSION. Do NOT edit files — analysis only, output a ranked verdict.
+
+FACT: The bot WON on 2026-08-09 evening (session test_20260809_223821: +$92.92, 66% WR, 110 trades). Since a bundle of changes landed on 2026-08-10, EVERY session is negative with WR collapsing to ~42-56% (near coinflip). The operator believes an experimental feature added ~08-10 is the cause.
+
+YOUR TASK — find which change(s) broke it:
+1. Diff the CURRENT config/settings.yaml against config/settings.yaml.WINNING_BASELINE_plus244_20260808_1637 (the last known-good baseline).
+2. Review `git diff HEAD -- config/settings.yaml src/strategies/bitcoin.py src/strategies/sol_macro.py src/execution/live_testing.py` (uncommitted working-tree changes).
+3. Focus on the 08-10 experimental additions: risk.rsi_fade (now enabled:false), regime_fade, size_taper_enabled, fav_net_sit_out_avg, favorite_lane_enabled:false, trading.exit_rules.hold_mfe_conditional_stop_enabled, tp_giveback_enabled.
+
+For EACH suspect, determine if it could plausibly drop WR from 66% to ~47%, via these mechanisms:
+ (a) SIDE SELECTION — does it flip or force a trade direction (LONG/SHORT) away from the native resolver?
+ (b) ADMISSION — does it suppress winning trades or admit losing ones (frequency/selection bias)?
+ (c) EXIT CLASH — do two exit rules (MFE-cond stop, tp_giveback, window-conditional stops, catastrophic stop) contradict each other so a winner gets cut or a loser rides?
+ (d) SIZING — does it upsize losers / downsize winners?
+
+Pay special attention to whether killing the favorite lane (favorite_lane_enabled:false) removed a NET-POSITIVE contributor — the +$93/66% session HAD favorites enabled. Compare favorite-lane economics.
+
+OUTPUT: a ranked list (most-likely-culprit first) with the exact config key or code line to revert, and a one-line mechanism for each. Be concrete and skeptical. End with the single highest-confidence revert to restore the 08-09 winning behavior.

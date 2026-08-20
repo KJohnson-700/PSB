@@ -1,0 +1,32 @@
+### sol_macro diff
+--- src/strategies/sol_macro.py.bak_pre_alt1h_hardblock_20260804_205426	2026-08-04 20:54:26
++++ src/strategies/sol_macro.py	2026-08-04 20:55:55
+@@ -4547,6 +4547,28 @@
+                     )
+                     continue
+                 if self.enforce_alt_1h_alignment:
++                    # 2026-08-04 (operator GO): the alignment gate was DIAGNOSTIC-ONLY — it appended a
++                    # reason and LET THE TRADE THROUGH ("a guard that only writes a comment"). LIVE PROOF
++                    # (sess 175827 ops_pulse): all 6 lanes went SHORT into a BULLISH btc/market because the
++                    # alts' native 15m/5m were bearish and the 1h (NEUTRAL) didn't block. When
++                    # alt_1h_require_confirm is set, actually SKIP a native entry the alt's OWN 1h does not
++                    # confirm: a short (BUY_NO) needs 1H BEARISH, a long (BUY_YES) needs 1H BULLISH — a
++                    # NEUTRAL/opposing 1H blocks it. Alt-native (NOT btc). Hot-reloadable (self.config.get).
++                    # Reversible (false). NOTE: this reduces frequency (neutral-1H entries are blocked).
++                    _need_1h = "BEARISH" if action == "BUY_NO" else "BULLISH"
++                    if (
++                        bool(self.config.get("alt_1h_require_confirm", False))
++                        and str(_h1_trend or "NEUTRAL").upper() != _need_1h
++                    ):
++                        reason_parts.append(
++                            f"alt_1h_unconfirmed_{action.lower()}_{str(_h1_trend or 'neutral').lower()}"
++                        )
++                        logger.info(
++                            "  %s SKIP %s on '%s' — own 1H=%s does not confirm (need %s)",
++                            self._signal_strategy_name, action, market.question[:40],
++                            _h1_trend, _need_1h,
++                        )
++                        continue
+                     if action == "BUY_NO" and _h1_trend == "BULLISH":
+                         reason_parts.append("buy_no_against_alt_1h_bullish")
+                         logger.info(

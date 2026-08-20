@@ -1,0 +1,13 @@
+Review a change to a live paper trading bot (PSB) for whether it BREAKS the HYPE lane, which has a fragile fetch path (slow Hyperliquid /info, 50%-empty legacy slugs, highest analysis cost). Analysis only, no edits. Output GO / NO-GO focused on HYPE safety.
+
+CONTEXT: We are lowering trading.cycle_interval_sec from 60 to 30 (the built-in floor is max(30,...) at src/main.py:1199) to scan assets 2x more often. The concern: a faster loop would fetch HYPE-alt 2x more often and overload its fragile path. To prevent that, we added a HYPE-alt fetch throttle + cache so HYPE fetches at ~its current 55s cadence regardless of loop speed.
+
+Review `git diff HEAD -- src/market/scanner.py config/settings.yaml`. Focus on:
+1. HYPE THROTTLE CORRECTNESS: `_hype_alt_fetch_due()` returns True on cold/disabled/interval-0/age>=min_interval, else False. In `_sync_network_phase`, `fetch_hype = hype_enabled and self._hype_alt_fetch_due()`. On a throttled cycle it must REUSE `_hype_alt_cache` (not return empty and starve HYPE). Confirm the `elif hype_enabled and slug_cache_on: hype_alt_markets = list(self._hype_alt_cache)` branch does this. Could HYPE ever be starved (empty markets) on a throttled cycle when it has a valid cache?
+2. STALE HYPE MARKETS: the cache holds HYPE market objects for up to ~55s. Prices refresh on a separate WS/midpoint path. Is a 55s-old HYPE market LIST safe (same coarseness as the current 60s loop), or could it serve an expired HYPE market?
+3. FAILURE PATH: on HYPE-alt fetch failure/timeout, does it correctly fall back to the prior cache WITHOUT advancing the timestamp (so it retries next cycle)? Trace `hype_failed`.
+4. LOAD CLAIM: verify that at cycle_interval=30 with hype_alt_fetch_min_interval_sec=55, HYPE actually fetches ~every other cycle (~60s), i.e. load does NOT increase vs the old 60s loop.
+5. INTERVAL DROP SIDE-EFFECTS: does halving cycle_interval to 30 create any other risk — per-lane 22s/15s timeouts, the 35s scanner sync timeout, sync-phase overlap-skip (scanner.py ~2224), exit_check_interval_sec=3? Could 30s cycles cause sync-phase pile-up/overlap?
+6. REVERT: scanner_slug_cache_enabled:false disables the HYPE throttle too (fetch every cycle). Confirm.
+
+Give a clear GO/NO-GO on whether this is safe for HYPE, and any concrete bug that would starve or overload HYPE.

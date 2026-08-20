@@ -1,0 +1,12 @@
+Review a change to a live trading bot's market scanner for correctness and safety. Analysis only, no edits. Output a GO / NO-GO with specific risks.
+
+CHANGE: Added a window-boundary slug cache to src/market/scanner.py for the 5m and 15m Polymarket up/down market LISTS. Previously both were re-fetched from the gamma API every ~60s cycle (the dominant non-analysis cost + source of slug-fetch timeouts). Now the list is cached per window bucket and only re-fetched when the bucket advances (a new 5m/15m window opens) or a max-age backstop trips. Prices are NOT cached (they flow on a separate WS/midpoint path). It mirrors the pre-existing `_updown_1h_cache` pattern.
+
+Review these specifically (see `git diff HEAD -- src/market/scanner.py config/settings.yaml`):
+1. CORRECTNESS: `_window_bucket` = int(time.time()) // (step*60); `_should_refresh_updown_window` refreshes on cold/boundary-advance/max-age/disabled. Is the boundary math right — could it ever fail to refresh when a new window opens (serving an EXPIRED market), or refresh so often the cache is pointless?
+2. STARVATION RISK: could the cache ever go permanently stale and starve the bot of markets (no trades)? Trace the failure/empty paths. Note the "advance bucket only on NON-EMPTY result" guard and the failure-fallback-to-cache.
+3. MISSED MARKETS: within a window, could a newly-listed market be missed? (Note: slug look-ahead already pre-fetches upcoming windows; slugs are deterministic timestamps.)
+4. THREAD-SAFETY: cache attrs are read/written only inside `_sync_network_phase`, which runs on `_sync_driver_pool` (max_workers=1) and the caller skips overlapping phases (scanner.py ~2224). Confirm no race.
+5. REVERT: `trading.scanner_slug_cache_enabled: false` should be byte-identical to the old behavior. Confirm the flag fully bypasses the cache.
+
+Give a clear GO or NO-GO and any concrete bug or edge case that would starve trading or serve stale/expired markets.

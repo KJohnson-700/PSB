@@ -1,0 +1,122 @@
+### live_testing.py diff
+--- src/execution/live_testing.py.bak_pre_ethlong_tapehold_20260804_124812	2026-08-04 12:48:12
++++ src/execution/live_testing.py	2026-08-04 12:49:13
+@@ -213,6 +213,29 @@
+                         self._ngc_by_lane_min_loss[str(_lk)] = float(_lv["min_loss_pct"])
+                     except (TypeError, ValueError):
+                         pass
++        # 2026-08-04 TAPE-CONDITIONED STOP DEFERRAL (per-lane, LONG-only). A LONG whose asset
++        # tape reads UP (HTF-confirmed) is riding an up-tape dip, not a wrong-side loss — defer its
++        # %-stop while the loss is SHALLOW (above floor_pct). Past the floor, or in a DOWN/FLAT tape,
++        # the stop fires exactly as before (the bull<->bear self-flip). Keyed "strategy:BUY_YES"
++        # (side-isolated). Loser-floor is mandatory (see holdmeanshold_no_loser_floor blowup) and the
++        # -50% catastrophic backstop is untouched. LIVE-forward validated (ghosts don't cover exits).
++        _th_top = (config.get("tape_hold_stop", {}) or {})
++        self._tape_hold_enabled = bool(_th_top.get("enabled", False))
++        self._tape_hold_by_lane = {}
++        _th_by_lane_cfg = _th_top.get("by_lane", {})
++        if isinstance(_th_by_lane_cfg, dict):
++            for _tk, _tv in _th_by_lane_cfg.items():
++                if not isinstance(_tv, dict):
++                    continue
++                try:
++                    self._tape_hold_by_lane[str(_tk)] = {
++                        "floor_pct": abs(float(_tv.get("floor_pct", 0.15) or 0.15)),
++                        "conf_min": float(_tv.get("conf_min", 0.60) or 0.60),
++                        "max_age_s": float(_tv.get("max_age_s", 90.0) or 90.0),
++                        "require_1h_macd": int(_tv.get("require_1h_macd", 1) or 0),
++                    }
++                except (TypeError, ValueError):
++                    pass
+         # 2026-08-01 TIME-UNDERWATER SHADOW (Codex audit; BTC 1h BUY_YES). LOG-ONLY, no behavior
+         # change. 1h holds rode the hour: losers 25%WR/-$43 (RESOLVED:NO + catastrophic), BUT the
+         # winners ALSO ride underwater then take_profit_late, and the code deliberately excludes 1h
+@@ -858,6 +881,53 @@
+                             if not (stop_pnl_pct <= -_ls_deep and _ls_fresh):
+                                 _late_stop_suppressed = True
+ 
++                # 2026-08-04 TAPE-CONDITIONED STOP DEFERRAL (per-lane LONG; see __init__). Suppress
++                # the %-stop ONLY when: (a) LONG/BUY_YES lane with a by_lane entry, (b) loss still
++                # SHALLOW (pnl_pct above -floor_pct — the loser floor), (c) this asset's tape reads
++                # UP, HTF-confirmed (dscore>=2 AND 1h-MACD up), at conf>=conf_min and fresh. In a
++                # DOWN/FLAT tape, or once loss breaches the floor, this stays False and the stop
++                # fires as normal. Deferring drops to the else-branch (time-stop near expiry still
++                # runs) — the position keeps being managed, it just isn't %-stopped mid-up-tape.
++                _tape_hold_suppressed = False
++                if (
++                    self._tape_hold_enabled
++                    and _latest_tape_state is not None
++                    and entry_leg != "NO"
++                ):
++                    _th_cfg = self._tape_hold_by_lane.get(f"{strategy_name}:BUY_YES")
++                    if _th_cfg is not None and pnl_pct > -_th_cfg["floor_pct"]:
++                        try:
++                            _th_tm = _latest_tape_state(strategy_name) or {}
++                        except Exception:
++                            _th_tm = {}
++                        _th_dir = str(_th_tm.get("direction") or "").upper()
++                        _th_conf = float(_th_tm.get("confidence", 0.0) or 0.0)
++                        _th_dscore = int(_th_tm.get("dscore", 0) or 0)
++                        _th_signs = _th_tm.get("macd_signs") or [0, 0, 0]
++                        _th_m1h = int(_th_signs[2]) if len(_th_signs) >= 3 else 0
++                        try:
++                            _th_age = (
++                                datetime.now(timezone.utc).timestamp()
++                                - float(_th_tm.get("ts", 0.0) or 0.0)
++                            )
++                        except Exception:
++                            _th_age = 1e9
++                        if (
++                            _th_dir == "UP"
++                            and _th_conf >= _th_cfg["conf_min"]
++                            and _th_age <= _th_cfg["max_age_s"]
++                            and _th_dscore >= 2
++                            and _th_m1h >= _th_cfg["require_1h_macd"]
++                        ):
++                            _tape_hold_suppressed = True
++                            logging.info(
++                                "TAPE-HOLD deferred stop on %s (%s BUY_YES): pnl=%.1f%% "
++                                "tape=UP conf=%.2f dscore=%d m1h=%d age=%.0fs floor=%.0f%%",
++                                pos.market_id, strategy_name, pnl_pct * 100.0,
++                                _th_conf, _th_dscore, _th_m1h, _th_age,
++                                _th_cfg["floor_pct"] * 100.0,
++                            )
++
+                 # Regular-TP net gate: the midpoint mark says take-profit, but when the
+                 # executable-net guard is on, only fire if the pnl we'd actually realize
+                 # (exit-side price minus round-trip taker fee) clears take_profit_net_min_pct.
+@@ -921,6 +991,7 @@
+                     effective_stop_loss_pct != 0
+                     and stop_pnl_pct <= -effective_stop_loss_pct
+                     and not _late_stop_suppressed  # 2026-08-03 P0 late-only stop gate
++                    and not _tape_hold_suppressed  # 2026-08-04 tape-conditioned LONG deferral
+                     and (
+                         not _wide_book_stop_needs_mid
+                         or pnl_pct <= -effective_stop_loss_pct
+
+### settings.yaml diff
+--- config/settings.yaml.bak_pre_ethlong_tapehold_20260804_124812	2026-08-04 12:48:12
++++ config/settings.yaml	2026-08-04 12:49:41
+@@ -2967,6 +2967,22 @@
+     "eth_macro:5m:BUY_NO":
+       cut_after_secs: 180      # 60 -> 180: let the 5m short breathe (it recovers post-cut)
+       min_loss_pct: 0.12       # only cut if already -12% (deep); shallow-red rides to TP/late-stop
++# 2026-08-04 TAPE-CONDITIONED STOP DEFERRAL (per-lane, LONG-only; operator GO pending). Audit of
++# sess test_20260804_034213: updown_stop_loss = 68% of exits / -70.60, and on the eth LONG lanes the
++# stops CUT WINNERS (hold_minus_exit_pnl +54.81 — held to resolution they win). The stop knifes an
++# eth LONG on an up-tape dip. This defers the %-stop for a BUY_YES lane ONLY while the loss is SHALLOW
++# (above -floor_pct) AND the asset's tape is HTF-confirmed UP (direction UP, dscore>=2, 1h-MACD up,
++# conf>=conf_min, fresh). DOWN/FLAT tape or loss past floor -> stop fires as normal (self-flips bull<->
++# bear). Loser floor is the hard safety (holdmeanshold blowup); -50% catastrophic untouched. eth-only
++# to start (both 5m+1h BUY_YES bled). Restart-class (frozen __init__ attrs). Reversible: enabled:false.
++tape_hold_stop:
++  enabled: true
++  by_lane:
++    "eth_macro:BUY_YES":
++      floor_pct: 0.15          # suppress the %-stop only while loss shallower than -15%; past that it fires
++      conf_min: 0.60           # tape confidence gate
++      max_age_s: 90.0          # tape must be fresh (<=90s old)
++      require_1h_macd: 1       # 1h MACD must be UP (+1) — the HTF clause (5m tape alone is only 47%)
+ tape_freshness:
+   enabled: true
+   mode: live

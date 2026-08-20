@@ -1,0 +1,64 @@
+### adaptive_lane_sizer.py diff
+--- src/analysis/adaptive_lane_sizer.py.bak_pre_wrgate_selfflip_20260804_151756	2026-08-04 15:17:56
++++ src/analysis/adaptive_lane_sizer.py	2026-08-04 15:18:15
+@@ -64,6 +64,17 @@
+     c["mult_floor"] = min(float(c["mult_floor"]), 1.0)
+     c["mult_ceil"] = max(float(c["mult_ceil"]), 1.0)
+     c["ema_alpha"] = max(0.0, min(float(c["ema_alpha"]), 1.0))
++    # 2026-08-04 WR-GATE (per-lane realized SELF-FLIP): nested block, ALLOWLISTED lanes only.
++    # A structurally wrong-side lane (recent WR below a floor at n>=min_n) is driven to a
++    # near-sitout mult that rides the ~$1 venue floor — it keeps trading (calibration data)
++    # at ~0 risk and self-reverses as WR recovers. Kept OUT of DEFAULTS/params (it's a dict).
++    wg = {}
++    if config:
++        blk = ((config.get("trading") or {}).get("adaptive_sizer")) or config.get("adaptive_sizer") or {}
++        _w = (blk or {}).get("wr_gate")
++        if isinstance(_w, dict):
++            wg = _w
++    c["wr_gate"] = wg
+     return c
+ 
+ 
+@@ -163,6 +174,25 @@
+         # clamp the SMOOTHED value too (Codex nit 1): a corrupt prev_state or a
+         # narrowed band must never let ema_mult escape [floor, ceil].
+         ema = round(max(float(c["mult_floor"]), min(ema, float(c["mult_ceil"]))), 4)
++        # 2026-08-04 WR-GATE self-flip override. Applied AFTER the [mult_floor,ceil] clamp so
++        # a sit-out can go BELOW mult_floor. Allowlisted lanes only (protects winners /
++        # collection lanes from a global WR sweep). Only ever SHRINKS (min), never grows, and
++        # self-reverses: when wr climbs back above the floor the override lifts and ema returns
++        # to the ROI value on the next recompute. wr is a percent (0..100) here.
++        wg = c.get("wr_gate") or {}
++        if wg.get("enabled") and lane in set(wg.get("lanes") or []) and n >= int(wg.get("min_n", 8) or 8):
++            _sit_wr = 100.0 * float(wg.get("sitout_wr", 0.35) or 0.35)
++            _dn_wr = 100.0 * float(wg.get("downsize_wr", 0.45) or 0.45)
++            if wr < _sit_wr:
++                _sm = float(wg.get("sitout_mult", 0.10) or 0.10)
++                if ema > _sm:
++                    ema = round(_sm, 4)
++                    reason = "wr_sitout(wr=%.0f,n=%d)" % (wr, n)
++            elif wr < _dn_wr:
++                _dm = float(wg.get("downsize_mult", 0.40) or 0.40)
++                if ema > _dm:
++                    ema = round(_dm, 4)
++                    reason = "wr_downsize(wr=%.0f,n=%d)" % (wr, n)
+         strat, window, action = lane.split("|")
+         lanes.append({
+             "lane": lane, "strategy": strat, "window": window, "action": action,
+
+### settings.yaml diff (wr_gate block)
++    wr_gate:
++      enabled: true
++      min_n: 8            # need >=8 recent settled before any WR gate fires (avoid tiny-n noise; bnb 15m n=5 rides ROI until it has 8)
++      sitout_wr: 0.35     # recent WR < 35% -> near-sitout (rides $1 floor); xrp(31%)+eth(27%) 15m BUY_NO qualify
++      sitout_mult: 0.10
++      downsize_wr: 0.45   # recent WR in [35%,45%) -> cap mult at downsize_mult; sol(38%) 15m BUY_NO qualifies
++      downsize_mult: 0.40
++      lanes:              # OPERATOR-APPROVED allowlist (strategy|window|action). Start = the 4 wrong-side 15m shorts.
++        - "eth_macro|15m|BUY_NO"
++        - "sol_macro|15m|BUY_NO"
++        - "xrp_macro|15m|BUY_NO"
++        - "bnb_macro|15m|BUY_NO"
+   # 2026-07-28 WARMUP GATE — settle into feed-sync before the FIRST trade after a
+   # restart. Signal-based (NOT a timer): blocks NEW entries until the websocket is
+   # delivering fresh prices across the universe (not REST-fallback) for

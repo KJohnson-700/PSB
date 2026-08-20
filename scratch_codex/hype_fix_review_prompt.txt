@@ -1,0 +1,13 @@
+Re-review ONE fix to a trading bot scanner for HYPE safety. Prior review NO-GO'd because a successful-but-empty HYPE-alt fetch overwrote a valid cache with [] and advanced the throttle timestamp, starving HYPE ~55s.
+
+THE FIX (src/market/scanner.py, in _sync_network_phase hype_alt block): now reuses the prior cache on ANY empty result (failure OR successful-empty) and only advances _hype_alt_cache_updated_at on a NON-EMPTY refresh:
+  if slug_cache_on and not fresh_hype and self._hype_alt_cache:
+      hype_alt_markets = list(self._hype_alt_cache)   # keep prior, don't advance clock
+  else:
+      hype_alt_markets = fresh_hype
+      if slug_cache_on:
+          self._hype_alt_cache = list(hype_alt_markets)
+          if hype_alt_markets:
+              self._hype_alt_cache_updated_at = datetime.now(...)
+
+Review `git diff HEAD -- src/market/scanner.py`. Confirm: (1) an empty successful HYPE fetch no longer wipes a valid cache nor advances the clock (so next cycle retries); (2) cold-start empty retries each cycle until non-empty (acceptable) rather than caching empty forever; (3) non-empty still replaces cache + advances clock; (4) no new starvation or overload path. Give a clear GO / NO-GO. Keep it focused and short.

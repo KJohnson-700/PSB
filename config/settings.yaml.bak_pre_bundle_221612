@@ -33,7 +33,7 @@ final_window_topup:
   sampler_window_mins: 1.5
 trading:
   persistent_session: false
-  cycle_interval_sec: 30
+  cycle_interval_sec: 30  # 2026-08-19 RIDE-TO-ZERO FIX: 30s was the 08-13/14 winning-era value; doubles the chances of catching the pre-resolution flatten window.
   exit_check_interval_sec: 3
   ws_candle_feed:
     enabled: true
@@ -431,7 +431,7 @@ trading:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
-    updown_flatten_before_resolution_sec: 210
+    updown_flatten_before_resolution_sec: 210  # 2026-08-19 RIDE-TO-ZERO FIX: was 60 == exactly one 60s scan cycle, so a loser got ONE chance to flatten and the resolver settled it at 0. 210s spans ~3 cycles.
     updown_time_stop_respect_hold_lanes: []
     updown_time_stop_hold_severe_pct: 0.5
     updown_time_stop_hold_min_excursion: 0.04
@@ -528,7 +528,6 @@ trading:
   flat_sizing_enabled: true
   flat_base_usd: 15.0
   min_live_notional: 5.0
-  max_directional_exposure: 0.45
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -2350,9 +2349,6 @@ favorite_lane:
   hard_stop_price: 0.7
   tape_sit_out_delta: 0.02
   respect_ai_direction: false
-  early_stop_windows:
-  - 15m
-  - 1h
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
@@ -2478,10 +2474,6 @@ risk:
   check_interval: 60
   emergency_stop_loss: 0.25
   favorite_lane_enabled: true
-  portfolio_halts:
-    enabled: true
-    session_loss_halt_pct: 6.0
-    hard_halt_pct: 12.0
 term_risk:
   caps:
     SHORT_TERM: 0.7

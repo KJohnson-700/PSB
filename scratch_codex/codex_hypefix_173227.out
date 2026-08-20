@@ -1,0 +1,812 @@
+Reading additional input from stdin...
+2026-08-12T00:32:27.858027Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 94 column 5
+OpenAI Codex v0.142.5
+--------
+workdir: /Users/mainfolder/Documents/psb-main 1
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019ff362-8747-73a0-b061-76c71142e258
+--------
+user
+Re-review ONE fix to a trading bot scanner for HYPE safety. Prior review NO-GO'd because a successful-but-empty HYPE-alt fetch overwrote a valid cache with [] and advanced the throttle timestamp, starving HYPE ~55s.
+
+THE FIX (src/market/scanner.py, in _sync_network_phase hype_alt block): now reuses the prior cache on ANY empty result (failure OR successful-empty) and only advances _hype_alt_cache_updated_at on a NON-EMPTY refresh:
+  if slug_cache_on and not fresh_hype and self._hype_alt_cache:
+      hype_alt_markets = list(self._hype_alt_cache)   # keep prior, don't advance clock
+  else:
+      hype_alt_markets = fresh_hype
+      if slug_cache_on:
+          self._hype_alt_cache = list(hype_alt_markets)
+          if hype_alt_markets:
+              self._hype_alt_cache_updated_at = datetime.now(...)
+
+Review `git diff HEAD -- src/market/scanner.py`. Confirm: (1) an empty successful HYPE fetch no longer wipes a valid cache nor advances the clock (so next cycle retries); (2) cold-start empty retries each cycle until non-empty (acceptable) rather than caching empty forever; (3) non-empty still replaces cache + advances clock; (4) no new starvation or overload path. Give a clear GO / NO-GO. Keep it focused and short.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll re-read the targeted diff and the surrounding scanner cache logic so the GO/NO-GO is based on actual control flow, not just the patch summary.
+exec
+/bin/zsh -lc 'git diff HEAD -- src/market/scanner.py' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+diff --git a/src/market/scanner.py b/src/market/scanner.py
+index 24fce3ea..afdd2dfd 100644
+--- a/src/market/scanner.py
++++ b/src/market/scanner.py
+@@ -451,6 +451,28 @@ class MarketScanner:
+         self._scan_call_count = 0
+         self._updown_1h_cache: List[Market] = []
+         self._updown_1h_cache_updated_at: Optional[datetime] = None
++        # 2026-08-11 WINDOW-BOUNDARY SLUG CACHE (5m/15m). The 5m/15m updown market
++        # LISTS are stable within a window (slugs are deterministic *-updown-{step}-{unix}
++        # timestamps; look-ahead already pre-loads upcoming windows), yet they were
++        # re-fetched from gamma EVERY ~60s cycle — the dominant non-analysis cost and the
++        # source of the slug-fetch timeouts. Cache the list per window bucket and re-fetch
++        # only when the bucket advances (a new window opens) or a max-age backstop trips.
++        # Prices stay live on the separate WS/midpoint path, so freshness is unaffected.
++        # Bucket advances only on a NON-EMPTY fetch so a transient empty/slow response
++        # never locks in an empty window. Fully guarded by scanner_slug_cache_enabled.
++        self._updown_15m_cache: List[Market] = []
++        self._updown_15m_cache_bucket: Optional[int] = None
++        self._updown_15m_cache_updated_at: Optional[datetime] = None
++        self._updown_5m_cache: List[Market] = []
++        self._updown_5m_cache_bucket: Optional[int] = None
++        self._updown_5m_cache_updated_at: Optional[datetime] = None
++        # 2026-08-11 HYPE-ALT FETCH DECOUPLE: HYPE's alt-slug path is the fragile one
++        # (slow Hyperliquid/gamma, 50%-empty legacy slugs). It has no throttle, so a faster
++        # main loop would hammer it proportionally. Give it its own time cadence + cache so
++        # HYPE fetches at ~its current pace no matter how fast the loop runs; reuse the cache
++        # on off-cadence cycles. Guarded by the same scanner_slug_cache_enabled flag.
++        self._hype_alt_cache: List[Market] = []
++        self._hype_alt_cache_updated_at: Optional[datetime] = None
+         # WSS price overlay (wired by main after ws_client exists). Hot-path read.
+         self.ws_client = None
+         # Tokens we last requested prices for -> the WS subscription want-set
+@@ -576,6 +598,31 @@ class MarketScanner:
+             (self.config.get("strategies") or {}).get("hype_macro", {}).get("enabled", False)
+         )
+ 
++    def _hype_alt_min_interval_sec(self) -> float:
++        """Min seconds between actual HYPE-alt fetches — keeps HYPE at ~its legacy cadence
++        even when the main loop is faster. 0 disables the throttle (fetch every cycle)."""
++        trading_cfg = (self.config.get("trading", {}) or {})
++        try:
++            return max(0.0, float(trading_cfg.get("hype_alt_fetch_min_interval_sec", 55.0)))
++        except (TypeError, ValueError):
++            return 55.0
++
++    def _hype_alt_fetch_due(self) -> bool:
++        """True => actually re-fetch HYPE-alt this cycle; False => reuse the cache.
++
++        With the slug cache disabled, or the throttle set to 0, always fetch (legacy).
++        Otherwise fetch only when the cache is cold or older than the min interval.
++        """
++        if not self._slug_cache_enabled():
++            return True
++        min_interval = self._hype_alt_min_interval_sec()
++        if min_interval <= 0.0:
++            return True
++        if self._hype_alt_cache_updated_at is None:
++            return True
++        age = (datetime.now(timezone.utc) - self._hype_alt_cache_updated_at).total_seconds()
++        return age >= min_interval
++
+     def _resolve_hourly_crypto_scan_every_n_cycles(self) -> int:
+         trading_cfg = (self.config.get("trading", {}) or {})
+         raw = trading_cfg.get("crypto_hourly_scan_every_n_cycles", 3)
+@@ -670,6 +717,53 @@ class MarketScanner:
+         call_n = max(1, int(scan_call_count or 1))
+         return ((call_n - 1) % every_n) == 0
+ 
++    def _slug_cache_enabled(self) -> bool:
++        """Feature flag for the window-boundary 5m/15m slug cache. Default ON.
++
++        Set trading.scanner_slug_cache_enabled: false for byte-identical legacy behavior
++        (every cycle re-fetches the 5m/15m lists live).
++        """
++        trading_cfg = (self.config.get("trading", {}) or {})
++        return bool(trading_cfg.get("scanner_slug_cache_enabled", True))
++
++    def _slug_cache_max_age_sec(self, step_minutes: int) -> float:
++        """Backstop max-age for the per-window cache. Set just above the window length so
++        the boundary crossing is the primary refresh trigger and this is only a safety net.
++        """
++        trading_cfg = (self.config.get("trading", {}) or {})
++        key = f"scanner_slug_cache_max_age_{step_minutes}m_sec"
++        default = float(step_minutes) * 60.0 + 60.0  # window + 60s buffer
++        try:
++            return max(0.0, float(trading_cfg.get(key, default)))
++        except (TypeError, ValueError):
++            return default
++
++    @staticmethod
++    def _window_bucket(step_minutes: int) -> int:
++        """The integer window index for now, so the value changes exactly at each
++        step-minute boundary (e.g. every 15 min for 15m, every 5 min for 5m)."""
++        return int(time.time()) // max(1, int(step_minutes) * 60)
++
++    def _should_refresh_updown_window(
++        self,
++        step_minutes: int,
++        last_bucket: Optional[int],
++        updated_at: Optional[datetime],
++    ) -> bool:
++        """True => re-fetch this window's slug list; False => reuse the cache.
++
++        Refresh when: the cache is disabled (always live), the cache is cold, the window
++        boundary has advanced since the last fetch, or the max-age backstop has elapsed.
++        """
++        if not self._slug_cache_enabled():
++            return True
++        if last_bucket is None or updated_at is None:
++            return True
++        if self._window_bucket(step_minutes) != last_bucket:
++            return True
++        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
++        return age >= self._slug_cache_max_age_sec(step_minutes)
++
+     def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+         List[Market],
+         List[Market],
+@@ -710,13 +804,34 @@ class MarketScanner:
+             self._cycle_empty_event_slugs = set()
+             self._slug_fetch_stats = {}
+         look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
+-        fetch_hype = self._should_fetch_hype_alt_markets()
++        hype_enabled = self._should_fetch_hype_alt_markets()
++        # Throttle HYPE-alt to its own cadence so a faster main loop doesn't hammer its
++        # fragile fetch path; reuse the cache on throttled cycles (below).
++        fetch_hype = hype_enabled and self._hype_alt_fetch_due()
++
++        # WINDOW-BOUNDARY SLUG CACHE: only re-fetch a window's list when its bucket advances
++        # (or the max-age backstop trips). Between boundaries the cached list is reused and the
++        # live fetch is skipped entirely — this is what removes the ~per-cycle gamma slug cost.
++        refresh_15m = self._should_refresh_updown_window(
++            15, self._updown_15m_cache_bucket, self._updown_15m_cache_updated_at
++        )
++        refresh_5m = self._should_refresh_updown_window(
++            5, self._updown_5m_cache_bucket, self._updown_5m_cache_updated_at
++        )
++        slug_cache_on = self._slug_cache_enabled()
++        # Capture the bucket at DECISION / slug-generation time (fetch start). Storing a
++        # post-fetch bucket would let a fetch that straddles a window boundary stamp
++        # old-window slugs as the new bucket, serving a full window of expired markets.
++        fetch_bucket_15m = self._window_bucket(15)
++        fetch_bucket_5m = self._window_bucket(5)
+ 
+         tasks = {
+             "gamma": lambda: self._fetch_markets_gamma(limit=200),
+-            "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
+-            "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
+         }
++        if refresh_15m:
++            tasks["updown"] = lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m)
++        if refresh_5m:
++            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+         if refresh_updown_1h:
+             tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+         if fetch_hype:
+@@ -750,14 +865,36 @@ class MarketScanner:
+                 future.cancel()
+                 results.setdefault(name, [])
+ 
+-        # fetch_updown_markets historically returned (15m, ~30m carry) — the 30m carry path
+-        # is dead (Polymarket discontinued the 30m crypto product family). Accept either
+-        # the legacy tuple form or a bare list, ignoring any second element.
+-        up_pair = results.get("updown", [])
+-        if isinstance(up_pair, tuple) and up_pair:
+-            updown_15m = up_pair[0] if isinstance(up_pair[0], list) else []
++        # 15m updown: window-boundary cache. fetch_updown_markets historically returned
++        # (15m, ~30m carry) — the 30m carry path is dead (Polymarket discontinued the 30m
++        # crypto product family). Accept either the legacy tuple form or a bare list.
++        # Refresh path parses + stores the list keyed by window bucket (advancing the bucket
++        # only on a NON-EMPTY result so a transient miss never locks in an empty window) and
++        # falls back to the cache on failure; skip path reuses the cache without any fetch.
++        updown_15m: List[Market]
++        if refresh_15m:
++            fifteen_failed = (
++                "updown" in failed_fetches or "updown" not in completed_fetches
++            )
++            up_pair = results.get("updown", [])
++            if isinstance(up_pair, tuple) and up_pair:
++                fresh_15m = up_pair[0] if isinstance(up_pair[0], list) else []
++            else:
++                fresh_15m = up_pair if isinstance(up_pair, list) else []
++            if slug_cache_on and fifteen_failed and not fresh_15m and self._updown_15m_cache:
++                logger.warning(
++                    "Scanner: reusing cached 15m updown markets after live fetch failure/timeout"
++                )
++                updown_15m = list(self._updown_15m_cache)
++            else:
++                updown_15m = fresh_15m
++                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
++                    self._updown_15m_cache = list(updown_15m)
++                    self._updown_15m_cache_updated_at = datetime.now(timezone.utc)
++                    if updown_15m:
++                        self._updown_15m_cache_bucket = fetch_bucket_15m
+         else:
+-            updown_15m = up_pair if isinstance(up_pair, list) else []
++            updown_15m = list(self._updown_15m_cache)
+ 
+         updown_1h_markets: List[Market]
+         if refresh_updown_1h:
+@@ -780,12 +917,65 @@ class MarketScanner:
+                     "Scanner: reusing cached hourly updown markets (skip cadence active)"
+                 )
+ 
++        # 5m updown: window-boundary cache (same shape as 15m above).
++        updown_5m_markets: List[Market]
++        if refresh_5m:
++            five_failed = (
++                "updown_5m" in failed_fetches or "updown_5m" not in completed_fetches
++            )
++            fresh_5m = results.get("updown_5m", []) or []
++            if slug_cache_on and five_failed and not fresh_5m and self._updown_5m_cache:
++                logger.warning(
++                    "Scanner: reusing cached 5m updown markets after live fetch failure/timeout"
++                )
++                updown_5m_markets = list(self._updown_5m_cache)
++            else:
++                updown_5m_markets = fresh_5m
++                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
++                    self._updown_5m_cache = list(updown_5m_markets)
++                    self._updown_5m_cache_updated_at = datetime.now(timezone.utc)
++                    if updown_5m_markets:
++                        self._updown_5m_cache_bucket = fetch_bucket_5m
++        else:
++            updown_5m_markets = list(self._updown_5m_cache)
++
++        # HYPE-alt: time-throttled fetch + cache so a faster loop can't hammer its fragile
++        # path. Fetch cycle => store cache (reuse prior on failure); throttled cycle => reuse
++        # cache so HYPE is never starved between fetches; disabled/not-enabled => empty.
++        hype_alt_markets: List[Market]
++        if fetch_hype:
++            hype_failed = (
++                "hype_alt" in failed_fetches or "hype_alt" not in completed_fetches
++            )
++            fresh_hype = results.get("hype_alt", []) or []
++            # Reuse the prior cache on ANY empty result — a fetch failure/timeout OR a
++            # "successful" empty response (common: HYPE's legacy slugs are ~50% empty). A blank
++            # response must not wipe a valid HYPE list and starve the lane for ~55s, and must not
++            # advance the clock (so the next cycle retries). Only a NON-EMPTY refresh replaces the
++            # cache + advances the timestamp. (Codex NO-GO fix.)
++            if slug_cache_on and not fresh_hype and self._hype_alt_cache:
++                logger.info(
++                    "Scanner: reusing cached HYPE-alt markets (%s; kept prior list)",
++                    "fetch failure/timeout" if hype_failed else "empty refresh",
++                )
++                hype_alt_markets = list(self._hype_alt_cache)
++            else:
++                hype_alt_markets = fresh_hype
++                if slug_cache_on:
++                    self._hype_alt_cache = list(hype_alt_markets)
++                    if hype_alt_markets:  # never let an empty refresh advance the throttle clock
++                        self._hype_alt_cache_updated_at = datetime.now(timezone.utc)
++        elif hype_enabled and slug_cache_on:
++            hype_alt_markets = list(self._hype_alt_cache)
++        else:
++            hype_alt_markets = []
++
+         return (
+             results.get("gamma", []),
+             updown_15m,
+-            results.get("updown_5m", []),
++            updown_5m_markets,
+             updown_1h_markets,
+-            results.get("hype_alt", []),
++            hype_alt_markets,
+             look_ahead_15m,
+             look_ahead_5m,
+             look_ahead_1h,
+
+exec
+/bin/zsh -lc 'rg -n "hype_alt|_hype_alt_cache|slug_cache_on|_sync_network_phase" src/market/scanner.py' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+474:        self._hype_alt_cache: List[Market] = []
+475:        self._hype_alt_cache_updated_at: Optional[datetime] = None
+589:    def _should_fetch_hype_alt_markets(self) -> bool:
+592:        Set polymarket.fetch_hype_alt_markets to true/false to override.
+595:        if "fetch_hype_alt_markets" in pm:
+596:            return bool(pm.get("fetch_hype_alt_markets"))
+601:    def _hype_alt_min_interval_sec(self) -> float:
+606:            return max(0.0, float(trading_cfg.get("hype_alt_fetch_min_interval_sec", 55.0)))
+610:    def _hype_alt_fetch_due(self) -> bool:
+618:        min_interval = self._hype_alt_min_interval_sec()
+621:        if self._hype_alt_cache_updated_at is None:
+623:        age = (datetime.now(timezone.utc) - self._hype_alt_cache_updated_at).total_seconds()
+639:        ENTIRE window all-or-nothing (hype_alt / 1h windows getting 0 markets under
+767:    def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+778:        sync_fn = self._sync_network_phase
+787:    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
+807:        hype_enabled = self._should_fetch_hype_alt_markets()
+810:        fetch_hype = hype_enabled and self._hype_alt_fetch_due()
+821:        slug_cache_on = self._slug_cache_enabled()
+838:            tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
+884:            if slug_cache_on and fifteen_failed and not fresh_15m and self._updown_15m_cache:
+891:                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
+927:            if slug_cache_on and five_failed and not fresh_5m and self._updown_5m_cache:
+934:                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
+945:        hype_alt_markets: List[Market]
+948:                "hype_alt" in failed_fetches or "hype_alt" not in completed_fetches
+950:            fresh_hype = results.get("hype_alt", []) or []
+956:            if slug_cache_on and not fresh_hype and self._hype_alt_cache:
+961:                hype_alt_markets = list(self._hype_alt_cache)
+963:                hype_alt_markets = fresh_hype
+964:                if slug_cache_on:
+965:                    self._hype_alt_cache = list(hype_alt_markets)
+966:                    if hype_alt_markets:  # never let an empty refresh advance the throttle clock
+967:                        self._hype_alt_cache_updated_at = datetime.now(timezone.utc)
+968:        elif hype_enabled and slug_cache_on:
+969:            hype_alt_markets = list(self._hype_alt_cache)
+971:            hype_alt_markets = []
+978:            hype_alt_markets,
+992:            "updown_hype_alt_count": 0,
+1004:            "updown_hype_alt": [],
+2253:    def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
+2282:            stats_key="updown_hype_alt",
+2312:                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
+2320:                hype_alt,
+2356:        hype_alt, _d = _drop_expired_markets(hype_alt, now=_exp_now); _exp_total += _d
+2420:        if hype_alt:
+2426:            hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
+2428:        if hype_alt:
+2429:            hype_alt = await self.update_market_prices(hype_alt)
+2430:            hype_alt = [m for m in hype_alt if is_tradably_priced(m)]  # never trade unpriced (0.5-default)
+2431:            opportunities["high_liquidity"].extend(hype_alt)
+2432:            opportunities["updown_hype_alt"] = hype_alt
+2434:            opportunities["updown_hype_alt"] = []
+2445:            "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
+
+codex
+The diff shows the HYPE fix exactly where expected. I’m checking the downstream use once, mainly to rule out a retry loop that would block other market fetches or reuse stale HYPE in an unexpected branch.
+exec
+/bin/zsh -lc "sed -n '787,980p' src/market/scanner.py" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        int,
+        int,
+        int,
+    ]:
+        """Blocking HTTP: Gamma list + 15m/5m/30m updown + optional HYPE alt. Runs in a thread.
+
+        Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
+        doesn't add to the wall-clock time of the other fetches.
+        """
+        self._scan_cycle_seq += 1  # 2026-07-27 ADAPTIVE: drives escape-hatch cadence
+        with self._slug_cache_lock:
+            self._cycle_empty_event_slugs = set()
+            self._slug_fetch_stats = {}
+        look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
+        hype_enabled = self._should_fetch_hype_alt_markets()
+        # Throttle HYPE-alt to its own cadence so a faster main loop doesn't hammer its
+        # fragile fetch path; reuse the cache on throttled cycles (below).
+        fetch_hype = hype_enabled and self._hype_alt_fetch_due()
+
+        # WINDOW-BOUNDARY SLUG CACHE: only re-fetch a window's list when its bucket advances
+        # (or the max-age backstop trips). Between boundaries the cached list is reused and the
+        # live fetch is skipped entirely — this is what removes the ~per-cycle gamma slug cost.
+        refresh_15m = self._should_refresh_updown_window(
+            15, self._updown_15m_cache_bucket, self._updown_15m_cache_updated_at
+        )
+        refresh_5m = self._should_refresh_updown_window(
+            5, self._updown_5m_cache_bucket, self._updown_5m_cache_updated_at
+        )
+        slug_cache_on = self._slug_cache_enabled()
+        # Capture the bucket at DECISION / slug-generation time (fetch start). Storing a
+        # post-fetch bucket would let a fetch that straddles a window boundary stamp
+        # old-window slugs as the new bucket, serving a full window of expired markets.
+        fetch_bucket_15m = self._window_bucket(15)
+        fetch_bucket_5m = self._window_bucket(5)
+
+        tasks = {
+            "gamma": lambda: self._fetch_markets_gamma(limit=200),
+        }
+        if refresh_15m:
+            tasks["updown"] = lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m)
+        if refresh_5m:
+            tasks["updown_5m"] = lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
+        if refresh_updown_1h:
+            tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
+        if fetch_hype:
+            tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
+
+        results: Dict[str, Any] = {}
+        failed_fetches: set[str] = set()
+        completed_fetches: set[str] = set()
+        futures = {self._sync_fetch_pool.submit(fn): name for name, fn in tasks.items()}
+        try:
+            for future in as_completed(futures, timeout=self._scanner_sync_timeout):
+                name = futures[future]
+                completed_fetches.add(name)
+                try:
+                    results[name] = future.result() or []
+                except Exception as e:
+                    logger.error(f"{name} fetch error: {e}")
+                    failed_fetches.add(name)
+                    results[name] = []
+        except FuturesTimeoutError:
+            unfinished = [name for future, name in futures.items() if not future.done()]
+            logger.warning(
+                "Scanner: partial sync timeout after %.1fs; returning completed sources only. unfinished=%s",
+                self._scanner_sync_timeout,
+                unfinished,
+            )
+        finally:
+            for future, name in futures.items():
+                if future.done():
+                    continue
+                future.cancel()
+                results.setdefault(name, [])
+
+        # 15m updown: window-boundary cache. fetch_updown_markets historically returned
+        # (15m, ~30m carry) — the 30m carry path is dead (Polymarket discontinued the 30m
+        # crypto product family). Accept either the legacy tuple form or a bare list.
+        # Refresh path parses + stores the list keyed by window bucket (advancing the bucket
+        # only on a NON-EMPTY result so a transient miss never locks in an empty window) and
+        # falls back to the cache on failure; skip path reuses the cache without any fetch.
+        updown_15m: List[Market]
+        if refresh_15m:
+            fifteen_failed = (
+                "updown" in failed_fetches or "updown" not in completed_fetches
+            )
+            up_pair = results.get("updown", [])
+            if isinstance(up_pair, tuple) and up_pair:
+                fresh_15m = up_pair[0] if isinstance(up_pair[0], list) else []
+            else:
+                fresh_15m = up_pair if isinstance(up_pair, list) else []
+            if slug_cache_on and fifteen_failed and not fresh_15m and self._updown_15m_cache:
+                logger.warning(
+                    "Scanner: reusing cached 15m updown markets after live fetch failure/timeout"
+                )
+                updown_15m = list(self._updown_15m_cache)
+            else:
+                updown_15m = fresh_15m
+                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
+                    self._updown_15m_cache = list(updown_15m)
+                    self._updown_15m_cache_updated_at = datetime.now(timezone.utc)
+                    if updown_15m:
+                        self._updown_15m_cache_bucket = fetch_bucket_15m
+        else:
+            updown_15m = list(self._updown_15m_cache)
+
+        updown_1h_markets: List[Market]
+        if refresh_updown_1h:
+            hourly_failed = (
+                "updown_1h" in failed_fetches or "updown_1h" not in completed_fetches
+            )
+            if hourly_failed and self._updown_1h_cache:
+                logger.warning(
+                    "Scanner: reusing cached hourly updown markets after live 1h fetch failure/timeout"
+                )
+                updown_1h_markets = list(self._updown_1h_cache)
+            else:
+                updown_1h_markets = results.get("updown_1h", []) or []
+                self._updown_1h_cache = list(updown_1h_markets)
+                self._updown_1h_cache_updated_at = datetime.now(timezone.utc)
+        else:
+            updown_1h_markets = list(self._updown_1h_cache)
+            if updown_1h_markets:
+                logger.info(
+                    "Scanner: reusing cached hourly updown markets (skip cadence active)"
+                )
+
+        # 5m updown: window-boundary cache (same shape as 15m above).
+        updown_5m_markets: List[Market]
+        if refresh_5m:
+            five_failed = (
+                "updown_5m" in failed_fetches or "updown_5m" not in completed_fetches
+            )
+            fresh_5m = results.get("updown_5m", []) or []
+            if slug_cache_on and five_failed and not fresh_5m and self._updown_5m_cache:
+                logger.warning(
+                    "Scanner: reusing cached 5m updown markets after live fetch failure/timeout"
+                )
+                updown_5m_markets = list(self._updown_5m_cache)
+            else:
+                updown_5m_markets = fresh_5m
+                if slug_cache_on:  # disabled => never read/write cache (byte-identical legacy)
+                    self._updown_5m_cache = list(updown_5m_markets)
+                    self._updown_5m_cache_updated_at = datetime.now(timezone.utc)
+                    if updown_5m_markets:
+                        self._updown_5m_cache_bucket = fetch_bucket_5m
+        else:
+            updown_5m_markets = list(self._updown_5m_cache)
+
+        # HYPE-alt: time-throttled fetch + cache so a faster loop can't hammer its fragile
+        # path. Fetch cycle => store cache (reuse prior on failure); throttled cycle => reuse
+        # cache so HYPE is never starved between fetches; disabled/not-enabled => empty.
+        hype_alt_markets: List[Market]
+        if fetch_hype:
+            hype_failed = (
+                "hype_alt" in failed_fetches or "hype_alt" not in completed_fetches
+            )
+            fresh_hype = results.get("hype_alt", []) or []
+            # Reuse the prior cache on ANY empty result — a fetch failure/timeout OR a
+            # "successful" empty response (common: HYPE's legacy slugs are ~50% empty). A blank
+            # response must not wipe a valid HYPE list and starve the lane for ~55s, and must not
+            # advance the clock (so the next cycle retries). Only a NON-EMPTY refresh replaces the
+            # cache + advances the timestamp. (Codex NO-GO fix.)
+            if slug_cache_on and not fresh_hype and self._hype_alt_cache:
+                logger.info(
+                    "Scanner: reusing cached HYPE-alt markets (%s; kept prior list)",
+                    "fetch failure/timeout" if hype_failed else "empty refresh",
+                )
+                hype_alt_markets = list(self._hype_alt_cache)
+            else:
+                hype_alt_markets = fresh_hype
+                if slug_cache_on:
+                    self._hype_alt_cache = list(hype_alt_markets)
+                    if hype_alt_markets:  # never let an empty refresh advance the throttle clock
+                        self._hype_alt_cache_updated_at = datetime.now(timezone.utc)
+        elif hype_enabled and slug_cache_on:
+            hype_alt_markets = list(self._hype_alt_cache)
+        else:
+            hype_alt_markets = []
+
+        return (
+            results.get("gamma", []),
+            updown_15m,
+            updown_5m_markets,
+            updown_1h_markets,
+            hype_alt_markets,
+            look_ahead_15m,
+            look_ahead_5m,
+
+exec
+/bin/zsh -lc "sed -n '2250,2440p' src/market/scanner.py" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+            )
+        return markets
+
+    def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
+        """Fetch the human-format HYPE Up/Down event slugs directly.
+
+        Polymarket lists HYPE only under the ``hype-`` prefix; the legacy
+        ``hyperliquid-`` alias is dead (verified 2026-06-24: every
+        ``hyperliquid-...`` slug returns zero markets from both Gamma /markets
+        and /events, across all window formats). Probing it was ~50% of this
+        path's ``empty_slug_responses`` for zero coverage gain, so only ``hype``
+        is queried here. The ``hype-up-or-down-...{hour}{ampm}-et`` human slug is
+        the sole source of the *hourly* HYPE market (id family distinct from the
+        ``hype-updown-15m/5m-{ts}`` timestamp markets the main path fetches).
+        """
+        look_ahead_15m, look_ahead_5m, _look_ahead_1h = self._resolve_updown_lookahead()
+        slugs = self._iter_named_event_slugs(
+            prefixes=("hype",),
+            step_minutes=15,
+            look_ahead=max(1, min(look_ahead_15m, 8)),
+        )
+        slugs.extend(
+            self._iter_named_event_slugs(
+                prefixes=("hype",),
+                step_minutes=5,
+                look_ahead=max(1, min(look_ahead_5m, 24)),
+            )
+        )
+        markets = self._fetch_event_slug_markets(
+            slugs,
+            timeout_sec=4,
+            limit=limit,
+            stats_key="updown_hype_alt",
+        )
+        if markets:
+            logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
+        return markets
+
+    async def scan_for_opportunities(self) -> Dict[str, Any]:
+        """Scan for different types of opportunities.
+
+        Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
+        timeout so the asyncio event loop is not blocked for minutes on slow APIs.
+        Price hydration for gamma, 15m / 5m / 1h updown batches runs in
+        parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
+        """
+        t_scan_start = time.perf_counter()
+        logger.info("Scanner: sync network phase (thread) starting")
+        active_phase = self._active_sync_phase
+        if active_phase is not None and not active_phase.done():
+            logger.warning(
+                "Scanner: previous sync phase still running; skipping new network phase to avoid overlap"
+            )
+            result = self._empty_scan_result(sync_timeout=True)
+            result["scanner_meta"]["sync_phase_overlap_skipped"] = True
+            return result
+        try:
+            loop = asyncio.get_running_loop()
+            self._scan_call_count += 1
+            refresh_updown_1h = self._should_refresh_updown_1h(self._scan_call_count)
+            sync_phase = loop.run_in_executor(
+                self._sync_driver_pool,
+                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
+            )
+            self._active_sync_phase = sync_phase
+            (
+                markets,
+                updown,
+                updown_5m,
+                updown_1h,
+                hype_alt,
+                look_ahead_15m,
+                look_ahead_5m,
+                look_ahead_1h,
+            ) = await asyncio.wait_for(
+                asyncio.shield(sync_phase),
+                timeout=self._scanner_sync_timeout + 2.0,
+            )
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.perf_counter() - t_scan_start) * 1000)
+            logger.error(
+                "Scanner: sync network phase timed out after %dms (limit=%.1fs) — empty scan",
+                elapsed_ms,
+                self._scanner_sync_timeout,
+            )
+            result = self._empty_scan_result(sync_timeout=True)
+            result["scanner_meta"]["sync_phase_elapsed_ms"] = elapsed_ms
+            return result
+        finally:
+            if self._active_sync_phase is not None and self._active_sync_phase.done():
+                self._active_sync_phase = None
+
+        sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
+        logger.info("Scanner: sync network phase finished in %dms", sync_ms)
+
+        # Drop already-expired markets BEFORE hydration/enrichment/strategy scan.
+        # Gamma still lists fast crypto up/down windows as active for a while after
+        # they resolve; scanning them wastes a price-fetch + full per-lane TA pass
+        # each cycle and is what balloons scanner_sync as the day's expired backlog
+        # grows. Expired = untradeable, so this is pure dead-weight removal.
+        _exp_now = datetime.now(timezone.utc)
+        _exp_total = 0
+        markets, _d = _drop_expired_markets(markets, now=_exp_now); _exp_total += _d
+        updown, _d = _drop_expired_markets(updown, now=_exp_now); _exp_total += _d
+        updown_5m, _d = _drop_expired_markets(updown_5m, now=_exp_now); _exp_total += _d
+        updown_1h, _d = _drop_expired_markets(updown_1h, now=_exp_now); _exp_total += _d
+        hype_alt, _d = _drop_expired_markets(hype_alt, now=_exp_now); _exp_total += _d
+        if _exp_total:
+            logger.info("Scanner: dropped %d expired markets before scan", _exp_total)
+
+        async def _hydrate(ms: List[Market]) -> List[Market]:
+            return await self.update_market_prices(ms) if ms else []
+
+        markets, updown, updown_5m, updown_1h = await asyncio.gather(
+            _hydrate(markets),
+            _hydrate(updown),
+            _hydrate(updown_5m),
+            _hydrate(updown_1h),
+        )
+
+        # Drop UNPRICED markets (price never loaded => yes/no are the 0.5 default).
+        # Trading these fabricates phantom edge (est_prob vs a fake 0.5) and was the
+        # cause of blind 0.5 entries (e.g. every HYPE trade at exactly 0.50). Never
+        # trade a market without a real quote. REST/WS fetch already happened above.
+        def _priced(ms: List[Market]) -> List[Market]:
+            return [m for m in ms if is_tradably_priced(m)]
+        _pre = (len(markets), len(updown), len(updown_5m), len(updown_1h))
+        markets = _priced(markets); updown = _priced(updown)
+        updown_5m = _priced(updown_5m); updown_1h = _priced(updown_1h)
+        _dropped = sum(_pre) - (len(markets) + len(updown) + len(updown_5m) + len(updown_1h))
+        if _dropped:
+            logger.info("Scanner: dropped %d UNPRICED markets (0.5-default, untradeable) before scan", _dropped)
+
+        # Optional microstructure enrichment (DEFAULT-OFF, fail-safe). Attaches
+        # order-book imbalance + trade-flow to up/down markets for signal hunting.
+        await self.enrich_microstructure([*updown, *updown_5m, *updown_1h])
+
+        opportunities: Dict[str, Any] = {
+            "high_liquidity": [],
+            "low_spread": [],
+            "near_expiration": [],
+        }
+
+        for market in markets:
+            if market.liquidity >= self.min_liquidity or market.volume >= self.min_liquidity:
+                opportunities["high_liquidity"].append(market)
+            if market.spread < 0.03:
+                opportunities["low_spread"].append(market)
+            hours = market.hours_to_expiration
+            if hours and hours < 48:
+                opportunities["near_expiration"].append(market)
+
+        if updown:
+            opportunities["high_liquidity"].extend(updown)
+            opportunities["updown"] = updown
+        else:
+            opportunities["updown"] = []
+
+        if updown_5m:
+            opportunities["high_liquidity"].extend(updown_5m)
+            opportunities["updown_5m"] = updown_5m
+        else:
+            opportunities["updown_5m"] = []
+
+        if updown_1h:
+            opportunities["high_liquidity"].extend(updown_1h)
+            opportunities["updown_1h"] = updown_1h
+        else:
+            opportunities["updown_1h"] = []
+
+        if hype_alt:
+            known_updown_ids = (
+                {m.id for m in opportunities.get("updown", [])}
+                | {m.id for m in opportunities.get("updown_5m", [])}
+                | {m.id for m in opportunities.get("updown_1h", [])}
+            )
+            hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
+
+        if hype_alt:
+            hype_alt = await self.update_market_prices(hype_alt)
+            hype_alt = [m for m in hype_alt if is_tradably_priced(m)]  # never trade unpriced (0.5-default)
+            opportunities["high_liquidity"].extend(hype_alt)
+            opportunities["updown_hype_alt"] = hype_alt
+        else:
+            opportunities["updown_hype_alt"] = []
+
+        opportunities["scanner_meta"] = {
+            "look_ahead_15m": look_ahead_15m,
+            "look_ahead_5m": look_ahead_5m,
+            "look_ahead_1h": look_ahead_1h,
+            "updown_1h_source": "live" if refresh_updown_1h else "cache",
+
+exec
+/bin/zsh -lc 'git diff --check HEAD -- src/market/scanner.py' in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+exec
+/bin/zsh -lc "nl -ba src/market/scanner.py | sed -n '945,970p'" in /Users/mainfolder/Documents/psb-main 1
+ succeeded in 0ms:
+   945	        hype_alt_markets: List[Market]
+   946	        if fetch_hype:
+   947	            hype_failed = (
+   948	                "hype_alt" in failed_fetches or "hype_alt" not in completed_fetches
+   949	            )
+   950	            fresh_hype = results.get("hype_alt", []) or []
+   951	            # Reuse the prior cache on ANY empty result — a fetch failure/timeout OR a
+   952	            # "successful" empty response (common: HYPE's legacy slugs are ~50% empty). A blank
+   953	            # response must not wipe a valid HYPE list and starve the lane for ~55s, and must not
+   954	            # advance the clock (so the next cycle retries). Only a NON-EMPTY refresh replaces the
+   955	            # cache + advances the timestamp. (Codex NO-GO fix.)
+   956	            if slug_cache_on and not fresh_hype and self._hype_alt_cache:
+   957	                logger.info(
+   958	                    "Scanner: reusing cached HYPE-alt markets (%s; kept prior list)",
+   959	                    "fetch failure/timeout" if hype_failed else "empty refresh",
+   960	                )
+   961	                hype_alt_markets = list(self._hype_alt_cache)
+   962	            else:
+   963	                hype_alt_markets = fresh_hype
+   964	                if slug_cache_on:
+   965	                    self._hype_alt_cache = list(hype_alt_markets)
+   966	                    if hype_alt_markets:  # never let an empty refresh advance the throttle clock
+   967	                        self._hype_alt_cache_updated_at = datetime.now(timezone.utc)
+   968	        elif hype_enabled and slug_cache_on:
+   969	            hype_alt_markets = list(self._hype_alt_cache)
+   970	        else:
+
+codex
+**GO.** No blocking findings in `git diff HEAD -- src/market/scanner.py`.
+
+Confirmed against [src/market/scanner.py](/Users/mainfolder/Documents/psb-main%201/src/market/scanner.py:956):
+
+1. Empty successful HYPE fetch with an existing cache now reuses `self._hype_alt_cache`, does not overwrite it, and does not advance `_hype_alt_cache_updated_at`.
+2. Cold-start empty still leaves cache empty and timestamp unset, so `_hype_alt_fetch_due()` stays true and retries next cycle.
+3. Non-empty fetch still replaces the cache and advances the throttle timestamp.
+4. No new overload path: repeated empty cold-starts can fetch every scan cycle, but that is the intended fail-open behavior until HYPE appears; once non-empty lands, the 55s throttle resumes. No new starvation path found.
+
+`git diff --check` also passed.
+tokens used
+35,061
+**GO.** No blocking findings in `git diff HEAD -- src/market/scanner.py`.
+
+Confirmed against [src/market/scanner.py](/Users/mainfolder/Documents/psb-main%201/src/market/scanner.py:956):
+
+1. Empty successful HYPE fetch with an existing cache now reuses `self._hype_alt_cache`, does not overwrite it, and does not advance `_hype_alt_cache_updated_at`.
+2. Cold-start empty still leaves cache empty and timestamp unset, so `_hype_alt_fetch_due()` stays true and retries next cycle.
+3. Non-empty fetch still replaces the cache and advances the throttle timestamp.
+4. No new overload path: repeated empty cold-starts can fetch every scan cycle, but that is the intended fail-open behavior until HYPE appears; once non-empty lands, the 55s throttle resumes. No new starvation path found.
+
+`git diff --check` also passed.

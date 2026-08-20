@@ -33,7 +33,7 @@ final_window_topup:
   sampler_window_mins: 1.5
 trading:
   persistent_session: false
-  cycle_interval_sec: 30
+  cycle_interval_sec: 60
   exit_check_interval_sec: 3
   ws_candle_feed:
     enabled: true
@@ -41,10 +41,6 @@ trading:
   entry_mode: hybrid
   entry_maker_wait_sec: 8
   entry_hybrid_windows:
-  - 15m
-  - 1h
-  exit_mode: hybrid
-  exit_hybrid_windows:
   - 15m
   - 1h
   microstructure_enrichment_enabled: false
@@ -73,7 +69,7 @@ trading:
     universe_subscribe_cap: 250
     rest_book_price_fallback: true
   default_position_size: 6
-  max_position_size: 80
+  max_position_size: 25
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
@@ -431,13 +427,13 @@ trading:
               updown_trail_gap_pct: 0.1
               updown_trail_arm_pct: 0.25
               updown_stop_loss_pct: 0.15
-    updown_flatten_before_resolution_sec: 210
+    updown_flatten_before_resolution_sec: 60
     updown_time_stop_respect_hold_lanes: []
     updown_time_stop_hold_severe_pct: 0.5
     updown_time_stop_hold_min_excursion: 0.04
     hold_all: true
     hold_5m_all: true
-    hold_catastrophic_stop_pct: 0.55
+    hold_catastrophic_stop_pct: 0.9
     hold_5m_loser_floor_pct: 0.4
     hold_lane_loser_floor_enabled: true
     tp_giveback_enabled: false
@@ -527,8 +523,7 @@ trading:
   exit_maker_wait_sec: 6
   flat_sizing_enabled: true
   flat_base_usd: 15.0
-  min_live_notional: 5.0
-  max_directional_exposure: 0.45
+  min_live_notional: 11.0
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -547,20 +542,9 @@ olympus:
     true_max_usd: 25
 lane_management:
   enabled: true
-  execution_enforcement_enabled: true
+  execution_enforcement_enabled: false
   default_state: paper
-  states:
-    xrp_macro|1h|up|favorite: paper
-    hype_macro|15m|up|favorite: paper
-    xrp_macro|5m|down: paused
-    bnb_macro|5m|up: paused
-    bnb_macro|5m|down: paused
-    bnb_macro|1h|up: paused
-    sol_macro|1h|down: paused
-    doge_macro|5m|up: paused
-    eth_macro|1h|up: paused
-    eth_macro|5m|down: paused
-    eth_macro|5m|up: paused
+  states: {}
   state_meta: {}
   recommendations:
     min_live_trades: 15
@@ -859,9 +843,6 @@ strategies:
       min_edge: 0.12
     use_true_kelly_sizing: true
   sol_macro:
-    alt_neutral_tape_backup: false
-    require_tape_direction: true
-    buy_no_tape_map_veto_up: true
     lane_max_notional_15m_down: 5
     fresh_cross_override: false
     tape_veto_60s_enabled: true
@@ -1356,9 +1337,6 @@ strategies:
       band: 0.01
       min_edge: 0.12
   hype_macro:
-    alt_neutral_tape_backup: false
-    require_tape_direction: true
-    buy_no_tape_map_veto_up: true
     fresh_cross_override: true
     tape_veto_60s_enabled: true
     tape_veto_60s_bps: 20
@@ -1566,7 +1544,7 @@ strategies:
     btc_spike_floor_pct_15m: 0.4
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: false
-    enforce_alt_1h_alignment: true
+    enforce_alt_1h_alignment: false
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
@@ -1602,9 +1580,6 @@ strategies:
       band: 0.01
       min_edge: 0.12
   xrp_macro:
-    alt_neutral_tape_backup: false
-    require_tape_direction: true
-    buy_no_tape_map_veto_up: true
     lane_max_notional_15m_down: 8
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -1849,9 +1824,6 @@ strategies:
       min_edge: 0.12
     disable_buy_yes_5m: true
   doge_macro:
-    alt_neutral_tape_backup: false
-    require_tape_direction: true
-    buy_no_tape_map_veto_up: true
     buy_no_min_no_price_5m: 0.49
     buy_yes_lane_repair:
       enabled: true
@@ -2077,9 +2049,6 @@ strategies:
     disable_buy_yes_15m_native: true
     disable_buy_yes_1h: true
   bnb_macro:
-    alt_neutral_tape_backup: false
-    require_tape_direction: true
-    buy_no_tape_map_veto_up: true
     lane_max_notional_15m_down: 10
     fresh_cross_override: true
     tape_veto_60s_enabled: true
@@ -2311,48 +2280,6 @@ updown_composite:
       1h: 0.0
   regime_action_gate_enabled: false
   regime_action_min_convergence: 0.55
-direction:
-  mode: claude
-  enforce: true
-  override_file: data/runtime/claude_direction_override.json
-  max_age_sec: 900
-  override_when_quant_neutral: true
-  min_conf: 0.0
-  side_policy: favorite
-  side_policy_price_band:
-  - 0.45
-  - 0.55
-  side_policy_flat_edge: 0.02
-  side_policy_deadband: 0.0
-  side_policy_resolver_lanes: []
-lane_tape_adapter:
-  mode: 'off'
-  admission_mode: live
-  window_closes: 6
-  min_samples: 3
-  green_arm_pct: 0.08
-  green_keep_rate: 0.5
-  loss_ref_dollars: 4.0
-  recency_ramp: 2.0
-  admission_tighten_max: 0.05
-  admission_loosen_max: 0.02
-favorite_lane:
-  enabled: true
-  floor: 0.85
-  price_max: 0.93
-  size_usd: 70.0
-  windows:
-  - 15m
-  - 1h
-  min_mins_left: 3.0
-  presettle_derisk_secs: 180
-  presettle_derisk_price: 0.55
-  hard_stop_price: 0.7
-  tape_sit_out_delta: 0.02
-  respect_ai_direction: false
-  early_stop_windows:
-  - 15m
-  - 1h
 ai:
   prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
@@ -2477,11 +2404,6 @@ risk:
   paper_max_trades_per_day: 2000
   check_interval: 60
   emergency_stop_loss: 0.25
-  favorite_lane_enabled: true
-  portfolio_halts:
-    enabled: true
-    session_loss_halt_pct: 6.0
-    hard_halt_pct: 12.0
 term_risk:
   caps:
     SHORT_TERM: 0.7
@@ -2519,7 +2441,7 @@ backtest:
   take_profit_pct: 0.2
   stop_loss_pct: 0.15
   resolution: 1m
-  initial_bankroll: 1000
+  initial_bankroll: 500
   lane_calibration:
     posteriors_path: data/calibration/lane_posteriors_backtest.json
     seed_from_live: false

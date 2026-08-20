@@ -1,0 +1,21 @@
+import json
+with open("/Users/mainfolder/Documents/psb-main 1/data/calibration/lane_posteriors.json") as f:
+    d = json.load(f)
+rows = []
+for k, v in d.get("lanes", {}).items():
+    if not k.startswith("hype_macro"):
+        continue
+    a = v.get("alpha_ewma")
+    n = v.get("n")
+    if a is None or n is None:
+        tag = "thin"
+    elif a < -0.5:
+        tag = "BLEED"
+    elif a > 0.5:
+        tag = "EDGE"
+    else:
+        tag = "neutral"
+    rows.append((tag, a, n, k))
+rows.sort(key=lambda r: (r[0], r[1] if r[1] is not None else 0))
+for tag, a, n, k in rows:
+    print(f"  {tag:<8}  a={a:+.2f}  n={n:>3}  {k}")

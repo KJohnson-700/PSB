@@ -1,0 +1,26 @@
+--- src/analysis/adaptive_lane_sizer.py.bak_pre_unprovencap_20260804_174458	2026-08-04 17:44:58
++++ src/analysis/adaptive_lane_sizer.py	2026-08-04 17:45:49
+@@ -50,6 +50,8 @@
+     "roi_scale": 0.35,         # ROI (avg_pnl/avg_cost) that maps to ~76% of the way to a bound
+     "sensitivity": 0.60,       # how aggressively ROI moves the multiplier
+     "ema_alpha": 0.30,         # new = alpha*target + (1-alpha)*prev
++    "unproven_lane_mult": 1.0, # 2026-08-04 lever-2: brand-new/very-low-n lane (n<min_n_down) rides
++                               # this reduced mult until it has data (default 1.0 = OFF, back-compat)
+ }
+ 
+ 
+@@ -142,6 +144,14 @@
+     """
+     if avg_cost <= 0:
+         return 1.0, "no_cost_basis"
++    # 2026-08-04 UNPROVEN-LANE CAP (operator GO — sizing-inversion fix). A brand-new / very-low-n
++    # lane (n < min_n_down) trades at a REDUCED mult until it has enough data to size properly —
++    # a fresh lane must never blow up at full base ($15) on n=3. AUDIT: the sizing-inversion big
++    # losers (xrp 5m BUY_NO, sol 15m BUY_YES) were exactly n=3 lanes stuck at mult 1.00 because they
++    # sat below min_n_down=4. Applies to WIN or LOSS (unknown => bet small). Default 1.0 = OFF.
++    _unproven = _num(c.get("unproven_lane_mult", 1.0), 1.0)
++    if _unproven < 1.0 and n < int(c["min_n_down"]):
++        return _unproven, "unproven_lowN(n=%d<%d,mult=%.2f)" % (n, int(c["min_n_down"]), _unproven)
+     roi = avg_pnl / avg_cost
+     # smooth signed signal in (-1, 1)
+     signal = math.tanh(roi / max(1e-6, float(c["roi_scale"])))
