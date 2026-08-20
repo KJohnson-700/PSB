@@ -131,6 +131,32 @@ def check_all():
     except OSError as _e:
         add("resolution_exit_telemetry", "WARN", f"unreadable: {_e}")
 
+    # --- maker simulation: is the bot ACTUALLY getting maker fills, or still 100% taker? ---
+    # 2026-08-19. Paper forced a taker fill regardless of entry_mode for the whole history:
+    # 2,301 trades, $1,403 of fees, entry_is_maker never once True, while the fee ran 8.2x the
+    # net edge of the best surviving cohort. Grades OUTPUT — the actual fill/miss log lines.
+    try:
+        _mk_fill = _mk_miss = 0
+        if log:
+            with open(log, errors="ignore") as _fh:
+                for _ln in _fh:
+                    if "PAPER MAKER FILL" in _ln:
+                        _mk_fill += 1
+                    elif "PAPER MAKER MISS" in _ln:
+                        _mk_miss += 1
+        _mk_tot = _mk_fill + _mk_miss
+        if not _cfg().get("trading", {}).get("paper_entry_maker_sim", False):
+            add("paper_maker_sim", "BROKEN", "paper_entry_maker_sim is OFF — 100% taker fills")
+        elif _mk_tot == 0:
+            add("paper_maker_sim", "WARN", "enabled but no maker attempt logged yet")
+        else:
+            add("paper_maker_sim",
+                "PROVEN" if _mk_fill > 0 else "BROKEN",
+                f"maker fill rate {_mk_fill}/{_mk_tot} ({_mk_fill/_mk_tot*100:.0f}%)"
+                + ("" if _mk_fill else " — every maker attempt MISSED"))
+    except OSError as _e:
+        add("paper_maker_sim", "WARN", f"unreadable: {_e}")
+
     # --- health invariants ---
     bot = _pgrep("src/main.py --paper")
     add("bot_alive", "PROVEN" if bot else "BROKEN", f"pid={bot or 'DEAD'}")

@@ -40,6 +40,14 @@ trading:
   execution_provider: clob
   entry_mode: hybrid
   entry_maker_wait_sec: 8
+  # 2026-08-19 PAPER MAKER SIM (operator order). Paper previously forced a TAKER fill
+  # regardless of entry_mode -- 2,301 trades, \$1,403 of fees, entry_is_maker never True.
+  # The fee ran 8.2x the net edge of the best cohort. This simulates the maker entry
+  # honestly: join the bid, wait entry_maker_wait_sec, fill ONLY if the market trades to us.
+  # cross_on_miss:true keeps frequency while we MEASURE the true maker fill rate; flip it
+  # false later for maker-only. REVERT = paper_entry_maker_sim:false (restart-class).
+  paper_entry_maker_sim: true
+  paper_maker_cross_on_miss: true
   entry_hybrid_windows:
   - 15m
   - 1h

@@ -201,6 +201,17 @@ class CLOBClient:
         self._root_config = config
         _trading_config = config.get("trading", {}) or {}
         _slippage_guard = _trading_config.get("slippage_guard", {}) or {}
+        # 2026-08-19 paper maker-sim knobs (see the maker block in place_order).
+        # Default OFF => zero behaviour change until explicitly enabled.
+        self._paper_entry_maker_sim = bool(
+            _trading_config.get("paper_entry_maker_sim", False)
+        )
+        self._paper_maker_wait_sec = float(
+            _trading_config.get("entry_maker_wait_sec", 8) or 8
+        )
+        self._paper_maker_cross_on_miss = bool(
+            _trading_config.get("paper_maker_cross_on_miss", False)
+        )
         self._paper_entry_fresh_fill = bool(
             _trading_config.get("paper_entry_fresh_fill", False)
         )
@@ -1530,7 +1541,93 @@ class CLOBClient:
                 except Exception as _obs_exc:
                     logger.debug("paper entry book-observe failed (fill unaffected): %s", _obs_exc)
                     _paper_fill_quality = None
-            if self._paper_entry_fresh_fill and str(side).upper() == "BUY":
+            # 2026-08-19 PAPER MAKER SIMULATION (operator order).
+            # The line above this block used to read "Paper: conservative taker fill regardless
+            # of mode (maker savings live-only)" — so entry_mode:hybrid and entry_maker_wait_sec
+            # were inert in paper and the bot booked a TAKER fee on 100% of trades, forever:
+            # 2,301 trades, $1,403 in fees, entry_is_maker never once True. That fee is larger
+            # than the edge it is measured against (survivor cohort: +$0.32/trade gross,
+            # +$0.07 net, fee $0.57 = 8.2x the net edge), so every strategy verdict in paper has
+            # been graded with a handicap a maker-routed live bot would not carry.
+            # This models a maker entry HONESTLY, including the miss: post at the near touch and
+            # only fill if the market actually trades to us inside the wait. No free lunch —
+            # a miss is a NO-FILL (or a taker cross when configured), and both are recorded.
+            if (
+                self._paper_entry_maker_sim
+                and mode in ("hybrid", "maker", "maker_only")
+                and str(side).upper() == "BUY"
+            ):
+                try:
+                    _mk_book = await self.fetch_order_book_snapshot(token_id)
+                    _mk_bid = _mk_ask = None
+                    if isinstance(_mk_book, dict):
+                        _bids = [
+                            float(lv["price"]) for lv in (_mk_book.get("bids") or [])
+                            if lv.get("price") is not None and float(lv.get("size") or 0) > 0
+                        ]
+                        _asks = [
+                            float(lv["price"]) for lv in (_mk_book.get("asks") or [])
+                            if lv.get("price") is not None and float(lv.get("size") or 0) > 0
+                        ]
+                        _mk_bid = max(_bids) if _bids else None
+                        _mk_ask = min(_asks) if _asks else None
+                    if _mk_bid is not None and _mk_ask is not None and _mk_ask > _mk_bid:
+                        # Join the bid — this is the order that pays zero fee if it fills.
+                        _mk_limit = round(_mk_bid, 4)
+                        _wait = max(0.0, min(float(self._paper_maker_wait_sec), 20.0))
+                        await asyncio.sleep(_wait)
+                        _mk_book2 = await self.fetch_order_book_snapshot(token_id)
+                        _ask2 = None
+                        if isinstance(_mk_book2, dict):
+                            _a2 = [
+                                float(lv["price"]) for lv in (_mk_book2.get("asks") or [])
+                                if lv.get("price") is not None and float(lv.get("size") or 0) > 0
+                            ]
+                            _ask2 = min(_a2) if _a2 else None
+                        # Filled as maker only if someone actually sold down to our resting bid.
+                        if _ask2 is not None and _ask2 <= _mk_limit:
+                            _eff_price = _mk_limit
+                            _paper_fill_quality = {
+                                "paper_fill_model": "maker_sim_filled",
+                                "sim_fill_price": _mk_limit,
+                                "sim_filled_size": round(float(size), 4),
+                                "sim_fill_ratio": 1.0,
+                                "entry_best_bid": _mk_bid,
+                                "entry_best_ask": _mk_ask,
+                                "entry_spread": round(_mk_ask - _mk_bid, 4),
+                                "maker_wait_sec": _wait,
+                                "is_maker": True,
+                                "fee_usdc": 0.0,   # makers pay zero (Polymarket fee schedule)
+                            }
+                            logger.info(
+                                "PAPER MAKER FILL: %s @%.4f (bid %.4f / ask %.4f -> %.4f after %.0fs) fee=0",
+                                token_id, _mk_limit, _mk_bid, _mk_ask, _ask2, _wait,
+                            )
+                        else:
+                            _paper_fill_quality = {
+                                "paper_fill_model": "maker_sim_missed",
+                                "requested_price": _mk_limit,
+                                "entry_best_bid": _mk_bid,
+                                "entry_best_ask": _mk_ask,
+                                "ask_after_wait": _ask2,
+                                "maker_wait_sec": _wait,
+                                "is_maker": False,
+                                "sim_fill_ratio": 0.0,
+                            }
+                            logger.info(
+                                "PAPER MAKER MISS: %s bid %.4f never taken (ask %.4f after %.0fs)%s",
+                                token_id, _mk_limit, _ask2 if _ask2 is not None else -1.0, _wait,
+                                " — crossing to taker" if self._paper_maker_cross_on_miss else " — NO FILL",
+                            )
+                            if not self._paper_maker_cross_on_miss:
+                                return None
+                            # fall through to the taker path below
+                except Exception as _mk_exc:
+                    logger.debug("paper maker-sim failed (falling back to taker): %s", _mk_exc)
+
+            if self._paper_entry_fresh_fill and str(side).upper() == "BUY" and (
+                _paper_fill_quality or {}
+            ).get("paper_fill_model") != "maker_sim_filled":
                 try:
                     _book = await self.fetch_order_book_snapshot(token_id)
                     if not isinstance(_book, dict):
