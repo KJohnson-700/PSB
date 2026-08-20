@@ -127,6 +127,12 @@ class OrderStatus(Enum):
 #   marketable          straight FAK taker (paper always takes this path)
 #   maker_zero_cross_fak / maker_post_failed_fak  rested and did NOT fill -> crossed as taker
 # Unknown/new paths map to None, never False — "unknown" must not read as "taker".
+# 2026-08-19 Cap for the per-token caches (tick size, fee rate). Up/down markets churn
+# token ids every 5-15 min across 7 assets, so these grow unbounded over a long session.
+# Same 5000-entry clear that _midpoint_cache already used; a clear is safe because both
+# values are cheap to re-fetch and immutable per token.
+_TOKEN_CACHE_MAX = 5000
+
 _MAKER_PATHS = {
     "maker_only": True,
     "maker_full": True,
@@ -2641,6 +2647,14 @@ class CLOBClient:
             loop = asyncio.get_event_loop()
             fee_bps = await loop.run_in_executor(None, lambda: pc.get_fee_rate_bps(tid))
             rate = max(0.0, float(fee_bps or 0) / 10_000.0)
+            # 2026-08-19 UNBOUNDED-CACHE FIX. Keyed by token_id, and crypto up/down markets
+            # mint fresh token ids every 5 and 15 minutes across 7 assets, so this grew for
+            # the life of the process and was never released — matching the observed RSS
+            # climb (1291 -> 1456MB over one session, reset only by restart). Mirrors the
+            # eviction _midpoint_cache already uses.
+            if len(self._fee_rate_cache) > _TOKEN_CACHE_MAX:
+                self._fee_rate_cache.clear()
+                logger.info("[cache] fee_rate cache cleared at %d entries", _TOKEN_CACHE_MAX)
             self._fee_rate_cache[tid] = rate
             return rate
         except Exception as e:
@@ -2661,6 +2675,10 @@ class CLOBClient:
             loop = asyncio.get_event_loop()
             tick = await loop.run_in_executor(None, lambda: pc.get_tick_size(tid))
             tick_s = str(tick)
+            # 2026-08-19 UNBOUNDED-CACHE FIX — same rationale as _fee_rate_cache above.
+            if len(self._tick_size_cache) > _TOKEN_CACHE_MAX:
+                self._tick_size_cache.clear()
+                logger.info("[cache] tick_size cache cleared at %d entries", _TOKEN_CACHE_MAX)
             self._tick_size_cache[tid] = tick_s
             return tick_s
         except Exception as e:

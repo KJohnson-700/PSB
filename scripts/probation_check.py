@@ -157,6 +157,24 @@ def check_all():
     except OSError as _e:
         add("paper_maker_sim", "WARN", f"unreadable: {_e}")
 
+    # --- RSS trend: the per-token caches used to grow unbounded (fixed 2026-08-19) ---
+    # _tick_size_cache / _fee_rate_cache are keyed by token_id and up/down markets mint new
+    # tokens every 5-15 min, so they grew for the life of the process. Observed climb was
+    # 1291 -> 1456MB across one session, reset only by restart. Grades OUTPUT: RSS should now
+    # plateau rather than ratchet. Guard pages at 1800.
+    try:
+        _b = _pgrep("src/main.py --paper")
+        if _b:
+            _rss = int(subprocess.run(["ps", "-o", "rss=", "-p", _b[0]],
+                                      capture_output=True, text=True).stdout) // 1024
+            _et = subprocess.run(["ps", "-o", "etime=", "-p", _b[0]],
+                                 capture_output=True, text=True).stdout.strip()
+            add("rss_no_ratchet",
+                "BROKEN" if _rss >= 1800 else ("WARN" if _rss >= 1600 else "PROVEN"),
+                f"{_rss}MB after {_et} uptime (guard 1800; pre-fix ran 1291->1456 in one session)")
+    except (OSError, ValueError) as _e:
+        add("rss_no_ratchet", "WARN", f"unreadable: {_e}")
+
     # --- health invariants ---
     bot = _pgrep("src/main.py --paper")
     add("bot_alive", "PROVEN" if bot else "BROKEN", f"pid={bot or 'DEAD'}")
