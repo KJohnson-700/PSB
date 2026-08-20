@@ -111,8 +111,11 @@ def check_all():
                     _t = json.loads(_ln)
                 except ValueError:
                     continue
-                if str(_t.get("ts", "")) < "2026-08-19T20:00":
-                    continue  # only grade exits written after the fix landed
+                if str(_t.get("ts", "")) < "2026-08-20T05:16":
+                    continue  # only grade exits written after c667e08 actually LOADED
+                    # (restart 2026-08-20T05:16Z / session test_20260819_221626). The earlier
+                    # 2026-08-19T20:00 cutoff wrongly counted pre-restart exits, which can never
+                    # carry telemetry, so the row could never flip to PROVEN.
                 if "RESOLVED" not in str(_t.get("exit_reason") or ""):
                     continue
                 _tot += 1
