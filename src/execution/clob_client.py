@@ -2974,7 +2974,85 @@ class RiskManager:
             )
             return False, 0.0, topic_reason
 
+        # 2026-08-19 CROSS-ASSET DIRECTIONAL CAP (operator GO).
+        # check_topic_exposure keys on "{asset}|{direction}", so it caps each asset SEPARATELY.
+        # Measured failure: 7 favorites across 6 assets, every one BUY_NO, each inside its own
+        # per-asset cap, collapsed together for -$281 in ~3 minutes. Crypto up/down contracts on
+        # 5-60m windows are near-perfectly correlated, so N same-side positions are ONE bet
+        # placed N times and the per-asset cap cannot see it. This sums same-direction notional
+        # across EVERY asset. Config: trading.max_directional_exposure (fraction of bankroll,
+        # 0 or missing => OFF, so behaviour is unchanged until it is set).
+        can_dir, dir_reason = self.check_directional_exposure(
+            bankroll=bankroll,
+            trade_size=final_size,
+            strategy=strategy,
+            action=action,
+            direction=direction,
+        )
+        if not can_dir:
+            logger.warning(
+                "RISK ALERT: cross-asset directional exposure blocked market=%s strategy=%s "
+                "action=%s reason=%s",
+                market_id,
+                strategy,
+                action,
+                dir_reason,
+            )
+            return False, 0.0, dir_reason
+
         return True, round(final_size, 2), "OK"
+
+    def _max_directional_exposure(self) -> float:
+        trading_config = self.config.get("trading", {}) or {}
+        return float(
+            trading_config.get(
+                "max_directional_exposure",
+                self.config.get("max_directional_exposure", 0.0),
+            )
+            or 0.0
+        )
+
+    def check_directional_exposure(
+        self,
+        *,
+        bankroll: float,
+        trade_size: float,
+        strategy: Optional[str],
+        action: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> tuple:
+        """Cap TOTAL same-direction notional across ALL assets.
+
+        The per-asset topic cap is blind to correlation: six assets on the same side each pass
+        their own limit while the book is one undiversified directional bet. This sums the
+        notional of every open position sharing the candidate's direction, regardless of asset.
+        Fail-open: 0 / missing config disables it entirely.
+        """
+        cap_pct = self._max_directional_exposure()
+        if cap_pct <= 0 or bankroll <= 0:
+            return True, "OK"
+
+        want_dir = self._topic_direction(action, direction)
+        if not want_dir:
+            return True, "OK"
+
+        current = 0.0
+        for p in self.active_positions.values():
+            try:
+                key = self.topic_key_for_position(p)
+                if key.split("|", 1)[-1] == want_dir:
+                    current += self.position_entry_notional(p)
+            except Exception:
+                continue
+
+        cap = bankroll * cap_pct
+        if (current + trade_size) > cap:
+            return (
+                False,
+                "directional_exposure_limit: "
+                f"{want_dir} {current + trade_size:.2f}/{cap:.2f}",
+            )
+        return True, "OK"
 
     def check_topic_exposure(
         self,
