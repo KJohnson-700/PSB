@@ -1,8 +1,14 @@
 # Secrets
+# NOTE: `*.env` only matches names ENDING in .env, so it never covered
+# `.env.bak_*` / `.env.local` style files — that gap is how a 68-line .env
+# backup (incl. POLYMARKET_PRIVATE_KEY) got swept into a commit by `git add -A`
+# on 2026-08-20. `.env.*` closes it. Do not remove without a replacement.
 .env
+.env.*
 config/secrets.env
 *.env
 !*.env.example
+!.env.example
 test_api_keys.py
 test_network.py
 tests/test_live_testing.py
