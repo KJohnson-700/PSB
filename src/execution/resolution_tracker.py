@@ -133,12 +133,35 @@ class ResolutionTracker:
                 f"PnL=${pnl:+.2f}"
             )
 
+            # 2026-08-19 DATA-LOOP FIX: this path settled positions with NO exit telemetry.
+            # Measured: 0 of 13 resolution exits carried mae_pct while 696 of 696 exits on
+            # every other path did — so any position that reached settlement was invisible to
+            # stop-tuning and to the exit calibration entirely. Derive the same fields the
+            # normal exit path writes, from the peak/trough the journal accumulates over the
+            # hold. Fail-open: telemetry must never block a settlement.
+            _tel = None
+            try:
+                _entry = float(entry_price or 0.0)
+                if _entry > 0:
+                    _peak = float(pos.get("peak_token_price", _entry) or _entry)
+                    _trough = float(pos.get("trough_token_price", _entry) or _entry)
+                    _tel = {
+                        "mae_pct": round((_trough - _entry) / _entry, 4),
+                        "mfe_pct": round((_peak - _entry) / _entry, 4),
+                        "pnl_pct_at_exit": round((exit_price - _entry) / _entry, 4),
+                        "effective_stop_loss_pct": None,
+                        "exit_path": "resolution_tracker",
+                    }
+            except (TypeError, ValueError, ZeroDivisionError):
+                _tel = None
+
             # Log exit in journal
             journal.log_exit(
                 trade_id=trade_id,
                 exit_price=exit_price,
                 bankroll=bankroll,
                 reason=reason,
+                exit_telemetry=_tel,
             )
 
             # Mark settled so we never process this trade_id again this session

@@ -98,6 +98,36 @@ def check_all():
     def add(name, status, detail):
         R.append((name, status, detail))
 
+    # --- data-loop invariant: resolution-path exits MUST carry exit telemetry ---
+    # 2026-08-19. The honest 0/1 settlement path shipped without telemetry: 0 of 13
+    # RESOLVED:* exits had mae_pct while 696 of 696 exits on every other path did. A
+    # position that settles blind cannot be graded, so no stop claim about it is checkable.
+    # Grades OUTPUT (the calibration rows), never a flag.
+    try:
+        _tot = _blind = 0
+        with open(os.path.join(_REPO, "data", "calibration", "trades.jsonl")) as _fh:
+            for _ln in _fh:
+                try:
+                    _t = json.loads(_ln)
+                except ValueError:
+                    continue
+                if str(_t.get("ts", "")) < "2026-08-19T20:00":
+                    continue  # only grade exits written after the fix landed
+                if "RESOLVED" not in str(_t.get("exit_reason") or ""):
+                    continue
+                _tot += 1
+                if _t.get("mae_pct") is None:
+                    _blind += 1
+        if _tot == 0:
+            add("resolution_exit_telemetry", "WARN", "no post-fix resolution exits yet")
+        else:
+            add("resolution_exit_telemetry",
+                "PROVEN" if _blind == 0 else "BROKEN",
+                f"{_tot - _blind}/{_tot} resolution exits carry mae_pct"
+                + (f" — {_blind} BLIND" if _blind else ""))
+    except OSError as _e:
+        add("resolution_exit_telemetry", "WARN", f"unreadable: {_e}")
+
     # --- health invariants ---
     bot = _pgrep("src/main.py --paper")
     add("bot_alive", "PROVEN" if bot else "BROKEN", f"pid={bot or 'DEAD'}")

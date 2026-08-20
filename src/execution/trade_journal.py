@@ -483,6 +483,17 @@ class TradeJournal:
         peak_token_price = float(pos.get("peak_token_price", pos["entry_price"]) or pos["entry_price"])
         if current_token_price > peak_token_price:
             pos["peak_token_price"] = current_token_price
+        # 2026-08-19 DATA-LOOP FIX: track the TROUGH too. Only the peak was carried, so a
+        # position settled by ResolutionTracker (the honest 0/1 path) had no way to report
+        # mae_pct and every such exit landed in the calibration log with null telemetry —
+        # 0/13 resolution exits had MAE vs 696/696 on every other path. Without MAE a stop
+        # cannot be graded at all, which is exactly the blind spot that made a -100% loser
+        # unexplainable. Mirror of the peak line above; costs one comparison per update.
+        trough_token_price = float(
+            pos.get("trough_token_price", pos["entry_price"]) or pos["entry_price"]
+        )
+        if current_token_price < trough_token_price:
+            pos["trough_token_price"] = current_token_price
 
         # Carry entry diagnostics forward — raw defaults (0 / "") made PRICE_UPDATE rows look like "empty" trades.
         _edge = float(pos.get("edge", 0.0) or 0.0)
